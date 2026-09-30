@@ -12,21 +12,17 @@ import java.util.List;
  * construct this learns is learned by all of them at once, and there is no second reader whose
  * answer could differ.
  *
+ * <p>What it reads is also held to the limits every implementation holds to
+ * ({@link PatternRead.Limit}), and a pattern past one is {@link PatternRead.Beyond}. The count and
+ * the depth are met while reading, and the first thing met in the text, left to right, is the
+ * answer. The states are counted once the whole pattern is read and its anchors are placed, so text
+ * that is no pattern anywhere in it is {@link PatternRead.Refused} rather than too large.
+ *
  * <p>Nothing here chooses a value. What one string of the language would be is a question for
  * whatever holds the language; a reader that answered it while parsing is the arrangement that lost
  * the second arm of every choice and the ceiling of every repetition.
  */
 public final class PatternParser {
-
-    /**
-     * How deep a pattern may be written.
-     *
-     * <p>A limit of this reader and not of the language. The reading is recursive, and so is every
-     * walk over what it reads — the machines built from it and what a caller lowers it to — so what
-     * bounds them is the stack. Past this the answer is {@link PatternRead.TooDeep} rather than a
-     * stack overflow somewhere later.
-     */
-    public static final int DEEPEST = 200;
 
     /** What {@link #peek()} answers past the last unit, outside every value a unit has. */
     private static final int END = -1;
@@ -44,7 +40,7 @@ public final class PatternParser {
         this.construct = 0;
     }
 
-    /** What {@code regex} means, or what makes it no pattern, or that it is deeper than this reads. */
+    /** What {@code regex} means, or what makes it no pattern, or which limit it is past. */
     public static PatternRead read(String regex) {
         if (regex == null) {
             throw new IllegalArgumentException("a pattern is some string");
@@ -66,13 +62,38 @@ public final class PatternParser {
                 return new PatternRead.Refused(PatternRead.Refusal.AN_ANCHOR_THIS_CANNOT_PLACE, 0,
                         regex);
             }
+            // Counted on what was written, where an anchor is one state whatever it came to, so
+            // the count is never below the states of the machine the meaning builds.
+            if (PatternStates.of(written) > PatternRead.Limit.MACHINE_STATES.most()) {
+                return new PatternRead.Beyond(PatternRead.Limit.MACHINE_STATES, 0, regex);
+            }
             return new PatternRead.Read(meaning);
         } catch (Refused refused) {
             int to = Math.min(regex.length(), Math.max(refused.to, refused.from));
             return new PatternRead.Refused(refused.why, refused.from,
                     regex.substring(refused.from, to));
-        } catch (TooDeep _) {
-            return new PatternRead.TooDeep(DEEPEST);
+        } catch (Beyond beyond) {
+            return new PatternRead.Beyond(beyond.limit, beyond.from,
+                    regex.substring(beyond.from, Math.min(regex.length(), beyond.to)));
+        }
+    }
+
+    /**
+     * The pattern {@code regex} as it is written, before its anchors are placed, for a check
+     * holding what is counted from the text against what is built.
+     *
+     * @throws IllegalArgumentException where the text is no pattern or is past a count or a depth
+     */
+    static WrittenPattern writtenOf(String regex) {
+        PatternParser reader = new PatternParser(regex);
+        try {
+            WrittenPattern written = reader.alternation();
+            if (!reader.done()) {
+                throw new IllegalArgumentException("a bracket closes nothing: " + regex);
+            }
+            return written;
+        } catch (Refused | Beyond e) {
+            throw new IllegalArgumentException("not read: " + regex);
         }
     }
 
@@ -398,28 +419,37 @@ public final class PatternParser {
         return symbol(written);
     }
 
-    /** A repetition's count, which is a whole number this can hold. */
+    /**
+     * A repetition's count.
+     *
+     * <p>Every digit is read before the count is held to {@link PatternRead.Limit#REPETITION_COUNT},
+     * so what is quoted is the count as written. Past the limit the value is held at one more than
+     * it, which is all that is asked of it.
+     */
     private int count() {
-        int value = 0;
+        int from = at;
+        long most = PatternRead.Limit.REPETITION_COUNT.most();
+        long value = 0;
         int digits = 0;
         while (!done() && peek() >= '0' && peek() <= '9') {
-            value = value * 10 + (take() - '0');
+            value = Math.min(most + 1, value * 10 + (take() - '0'));
             digits++;
-            if (value > Integer.MAX_VALUE / 16) {
-                throw refused(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ);
-            }
         }
         if (digits == 0) {
             throw refused(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ);
         }
-        return value;
+        if (value > most) {
+            throw new Beyond(PatternRead.Limit.REPETITION_COUNT, from, at);
+        }
+        return (int) value;
     }
 
     // --- walking -----------------------------------------------------------------------------------
 
     private void deeper() {
-        if (++depth > DEEPEST) {
-            throw new TooDeep();
+        if (++depth > PatternRead.Limit.NESTING_DEPTH.most()) {
+            // The group that went past it, from its bracket to where its reading stopped.
+            throw new Beyond(PatternRead.Limit.NESTING_DEPTH, construct, at);
         }
     }
 
@@ -482,13 +512,20 @@ public final class PatternParser {
         }
     }
 
-    /** What a pattern written past {@link #DEEPEST} raises. */
-    private static final class TooDeep extends RuntimeException {
+    /** What a pattern past one of the limits raises, carried to the one place that answers. */
+    private static final class Beyond extends RuntimeException {
 
         private static final long serialVersionUID = 1L;
 
-        TooDeep() {
+        private final transient PatternRead.Limit limit;
+        private final int from;
+        private final int to;
+
+        Beyond(PatternRead.Limit limit, int from, int to) {
             super(null, null, false, false);
+            this.limit = limit;
+            this.from = from;
+            this.to = to;
         }
     }
 }

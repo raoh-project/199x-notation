@@ -38,10 +38,19 @@ Anything that knows about decoders, issues, paths, or a Souther value. An implem
 text and answers a question about it. It depends on neither Raoh nor Souther, so that Souther's
 runtime can use it without depending on a decoder library.
 
-What a caller asks about the patterns it holds, and how much it is willing to spend on an answer,
-is the caller's. The operations on machines take their limits as an argument; the only limits
-stated here are those of the machine a pattern is run as. Souther's compiler keeps its own analysis
-of patterns and its budgets for it.
+A pattern is held to three limits, the same numbers in every implementation and each decided from
+the text: a repetition count of at most 134,217,727, groups nested at most 200 deep, and at most
+250,000 states once its repetitions are written out, counted from what is written without building
+anything. They are the specifications' limits on an admissible pattern, and a pattern past one is
+told apart from text that is no pattern. Every pattern within them has a machine, so no limit of
+how a machine is built or carried decides which patterns a caller takes. A caller that runs a
+pattern where it reads it takes the matcher; one that carries the machine elsewhere, as a compiler
+writing it into a class does, takes it written out as an image, and only the image has a size of
+its own.
+
+What a caller asks about the patterns it holds beyond that, and how much it is willing to spend on
+an answer, is the caller's. The operations on machines take their limits as an argument. Souther's
+compiler keeps its own analysis of patterns and its budgets for it.
 
 Every rule is stated of text that is a sequence of Unicode scalar values. Where a language's string
 can hold something else, as a Java `String` can hold half of a surrogate pair, the implementation

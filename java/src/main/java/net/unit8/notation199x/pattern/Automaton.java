@@ -1452,8 +1452,18 @@ public final class Automaton {
          * <p>Written out rather than held as a count. What a machine walks is states, and a
          * repetition of a thing is that thing however many times — so the states are the cost of the
          * language, and the bound a caller passes is what says whether that cost is worth paying.
+         * Every copy makes a state, so the copies made are never more than the states: what building
+         * a machine costs is its states ({@link PatternStates}).
          */
         int repeated(PatternMeaning.Repeated it, int from) {
+            // A body that makes no state is the empty string however many times it is taken, and
+            // is built as that: one state to end in. Copied a count at a time, it would cost the
+            // count and make nothing — a count as large as the reader reads, for one state.
+            if (buildsNoState(it.what())) {
+                int out = state();
+                freely(from, out);
+                return out;
+            }
             int at = from;
             for (int i = 0; i < it.least(); i++) {
                 at = build(it.what(), at);
@@ -1473,7 +1483,17 @@ public final class Automaton {
             return out;
         }
 
-        List<List<Step>> frozenSteps() {
+        /** Whether building {@code meaning} makes no state, which is only ever the empty string. */
+        private static boolean buildsNoState(PatternMeaning meaning) {
+            return switch (meaning) {
+                case PatternMeaning.Nothing _ -> true;
+                case PatternMeaning.InTurn it -> it.parts().stream().allMatch(Building::buildsNoState);
+                case PatternMeaning.Never _, PatternMeaning.Symbols _, PatternMeaning.EitherOf _,
+                     PatternMeaning.Repeated _ -> false;
+            };
+        }
+
+                List<List<Step>> frozenSteps() {
             List<List<Step>> out = new ArrayList<>(steps.size());
             steps.forEach(each -> out.add(List.copyOf(each)));
             return List.copyOf(out);
