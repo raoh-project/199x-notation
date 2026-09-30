@@ -11,8 +11,9 @@ the same way everywhere.
 
 ## Status
 
-Nothing is implemented here yet. The Java code exists today inside Souther's runtime and compiler,
-and parts of it inside raoh-java; moving it here is the first piece of work. See the issues.
+The Java implementation is here, moved from Souther's runtime and compiler. Souther and raoh-java
+do not depend on it yet. The Rust, Go and PHP implementations and `suite/` are not here yet. See the
+issues.
 
 ## What belongs here
 
@@ -21,9 +22,10 @@ and parts of it inside raoh-java; moving it here is the first piece of work. See
 - Unicode 18.0.0 normalization: NFC, NFD, NFKC and NFKD.
 - The `White_Space` set, as of Unicode 18.0.0.
 - Order and length of text counted in Unicode scalar values.
-- The lexical grammar of dates, times and instants.
+- The lexical grammar of dates, times, date-times, date-times with an offset, and instants.
 - The pattern language: reading a pattern, refusing what is not one, and matching in time linear in
-  the input.
+  the input. With it, the machine a pattern means and the operations on such machines, which is
+  what a match is built from.
 
 The normative definitions are in the
 [Raoh Specification](https://github.com/raoh-project/raoh-specification) and the
@@ -36,6 +38,16 @@ Anything that knows about decoders, issues, paths, or a Souther value. An implem
 text and answers a question about it. It depends on neither Raoh nor Souther, so that Souther's
 runtime can use it without depending on a decoder library.
 
+What a caller asks about the patterns it holds, and how much it is willing to spend on an answer,
+is the caller's. The operations on machines take their limits as an argument; the only limits
+stated here are those of the machine a pattern is run as. Souther's compiler keeps its own analysis
+of patterns and its budgets for it.
+
+Every rule is stated of text that is a sequence of Unicode scalar values. Where a language's string
+can hold something else, as a Java `String` can hold half of a surrogate pair, the implementation
+has the question a caller asks before it takes text in, and a reader of untrusted text refuses it
+rather than failing.
+
 ## Layout
 
 One directory per language, beside the data they are all generated from and checked against:
@@ -43,14 +55,29 @@ One directory per language, beside the data they are all generated from and chec
 | Directory | Contents |
 | --- | --- |
 | `ucd/` | The Unicode Character Database files of the pinned version, with their checksums |
+| `gen/` | The programs that generate the tables from `ucd/` |
 | `suite/` | Test vectors every implementation runs |
-| `java/` | Maven artifact `199x-notation`, package `notation199x` |
+| `java/` | Maven artifact `net.unit8.notation199x:199x-notation`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
 | `go/` | Package `notation199x` |
 | `php/` | Package `notation199x` |
 
 Tables are generated from `ucd/` and checked in. Generation is run by hand and never during a
 build: taking a later Unicode version is a change to the specifications, not a dependency update.
+
+```sh
+java gen/GenerateCaseTables.java ucd/18.0.0
+java gen/GenerateNormalizationTables.java ucd/18.0.0
+```
+
+The Java tests read `ucd/`, so they run in `java/`:
+
+```sh
+cd java && mvn test
+```
+
+CI checks the files in `ucd/` against their checksums, runs the generators and fails if the
+checked-in tables differ, and runs the tests.
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
 `notation199x`.

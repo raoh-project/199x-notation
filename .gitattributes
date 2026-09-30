@@ -1,0 +1,5 @@
+# The checksums in ucd/ are of these bytes, and the generated tables are compared byte for byte.
+ucd/** -text
+java/src/main/java/net/unit8/notation199x/CaseTables.java -text
+java/src/main/java/net/unit8/notation199x/NormalizationTables.java -text
+java/src/main/resources/** -text
