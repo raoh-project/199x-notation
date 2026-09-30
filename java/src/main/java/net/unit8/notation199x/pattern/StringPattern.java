@@ -159,35 +159,46 @@ public final class StringPattern implements Predicate<String> {
         return matches(value);
     }
 
-    /** The pattern {@code image} writes. */
+    /**
+     * The pattern {@code image} writes.
+     *
+     * <p>An image is held to writing a machine before there is a pattern: a state to start in, sets
+     * that are runs of scalar values in order, steps over sets it has to states it has, and in a
+     * deterministic machine no symbol leading two ways. An image is text and may come from
+     * anywhere, so what it says is checked here, once, and a pattern that was read answers every
+     * text it is asked about. Anything else is an {@link IllegalArgumentException}.
+     */
     public static StringPattern of(List<String> image) {
         Ints in = new Ints(String.join("", image));
-        boolean deterministic = in.next() == 1;
-        int[][] sets = new int[in.next()][];
+        boolean deterministic = in.flag("which kind of machine it is");
+        int[][] sets = new int[in.count()][];
         for (int i = 0; i < sets.length; i++) {
-            int[] ranges = new int[in.next() * 2];
+            int[] ranges = new int[in.count() * 2];
             for (int at = 0; at < ranges.length; at++) {
                 ranges[at] = in.next();
             }
-            sets[i] = ranges;
+            sets[i] = aSet(ranges);
         }
-        int states = in.next();
+        int states = in.count();
+        if (states == 0) {
+            throw new IllegalArgumentException("a machine has a state to start in");
+        }
         boolean[] accepting = new boolean[states];
         int[][][] over = new int[states][][];
         int[][] target = new int[states][];
         int[][] free = new int[states][];
         for (int state = 0; state < states; state++) {
-            accepting[state] = in.next() == 1;
-            int steps = in.next();
+            accepting[state] = in.flag("whether a walk stops at a state");
+            int steps = in.count();
             over[state] = new int[steps][];
             target[state] = new int[steps];
             for (int step = 0; step < steps; step++) {
-                over[state][step] = sets[in.next()];
-                target[state][step] = in.next();
+                over[state][step] = sets[in.below(sets.length, "set")];
+                target[state][step] = in.below(states, "state");
             }
-            free[state] = new int[in.next()];
+            free[state] = new int[in.count()];
             for (int at = 0; at < free[state].length; at++) {
-                free[state][at] = in.next();
+                free[state][at] = in.below(states, "state");
             }
             if (deterministic && free[state].length > 0) {
                 throw new IllegalArgumentException(
@@ -199,6 +210,23 @@ public final class StringPattern implements Predicate<String> {
         }
         int[][] runs = deterministic ? runs(over, target) : new int[0][];
         return new StringPattern(deterministic, accepting, runs, over, target, free);
+    }
+
+    /** {@code ranges} as a set an image may write: {@code from, to} pairs of scalar values, each
+     *  after the one before it. */
+    private static int[] aSet(int[] ranges) {
+        int last = -1;
+        for (int at = 0; at < ranges.length; at += 2) {
+            int from = ranges[at];
+            int to = ranges[at + 1];
+            if (from <= last || to < from || to > Character.MAX_CODE_POINT
+                    || (from <= Character.MAX_SURROGATE && to >= Character.MIN_SURROGATE)) {
+                throw new IllegalArgumentException("a set is runs of scalar values in order, which "
+                        + from + ".." + to + " after " + last + " is not");
+            }
+            last = to;
+        }
+        return ranges;
     }
 
     /** A deterministic machine's steps as sorted runs, so a character is one search. */
@@ -215,6 +243,10 @@ public final class StringPattern implements Predicate<String> {
             each.sort((one, other) -> Integer.compare(one[0], other[0]));
             int[] flat = new int[each.size() * 3];
             for (int i = 0; i < each.size(); i++) {
+                if (i > 0 && each.get(i)[0] <= each.get(i - 1)[1]) {
+                    throw new IllegalArgumentException("a deterministic machine steps one way for a"
+                            + " character, and state " + state + " steps two ways for " + each.get(i)[0]);
+                }
                 System.arraycopy(each.get(i), 0, flat, i * 3, 3);
             }
             out[state] = flat;
@@ -453,6 +485,7 @@ public final class StringPattern implements Predicate<String> {
             if (ranges.length % 2 != 0) {
                 throw new IllegalArgumentException("a set is written as pairs");
             }
+            aSet(ranges);
             StringBuilder out = new StringBuilder();
             out.append(ranges.length / 2);
             for (int each : ranges) {
@@ -482,6 +515,12 @@ public final class StringPattern implements Predicate<String> {
 
         /** A step from {@code from} over the set numbered {@code set}, to {@code to}. */
         public void step(int from, int set, int to) {
+            if (set < 0 || set >= sets.size()) {
+                throw new IllegalArgumentException("a step is over a set this has been given");
+            }
+            if (to < 0) {
+                throw new IllegalArgumentException("a step leads to a state");
+            }
             List<int[]> out = steps.get(from);
             out.add(new int[] {set, to});
             characters += written(set) + written(to) + grown(out.size());
@@ -498,6 +537,9 @@ public final class StringPattern implements Predicate<String> {
                 throw new IllegalArgumentException(
                         "a deterministic machine steps nowhere for no character");
             }
+            if (to < 0) {
+                throw new IllegalArgumentException("a step leads to a state");
+            }
             List<Integer> out = free.get(from);
             out.add(to);
             characters += written(to) + grown(out.size());
@@ -508,6 +550,20 @@ public final class StringPattern implements Predicate<String> {
         public List<String> image() {
             if (!holds()) {
                 throw new IllegalStateException("an image past its limit is not written out");
+            }
+            // A state may be stepped to before it is made, so where the steps lead is asked once
+            // every state is: an image this writes is one {@link StringPattern#of} reads.
+            int states = accepting.size();
+            if (states == 0) {
+                throw new IllegalStateException("a machine has a state to start in");
+            }
+            for (int state = 0; state < states; state++) {
+                for (int[] step : steps.get(state)) {
+                    leadsToAState(step[1], states);
+                }
+                for (int to : free.get(state)) {
+                    leadsToAState(to, states);
+                }
             }
             StringBuilder out = new StringBuilder();
             out.append(deterministic ? 1 : 0).append(',').append(sets.size());
@@ -531,6 +587,13 @@ public final class StringPattern implements Predicate<String> {
                 chunks.add(out.substring(at, Math.min(out.length(), at + CHUNK)));
             }
             return List.copyOf(chunks);
+        }
+    }
+
+    private static void leadsToAState(int to, int states) {
+        if (to >= states) {
+            throw new IllegalStateException("a step leads to a state the machine has, and there is"
+                    + " none numbered " + to + " among " + states);
         }
     }
 
@@ -561,6 +624,35 @@ public final class StringPattern implements Predicate<String> {
                 throw new IllegalArgumentException("an image writes no empty number");
             }
             at++;
+            return value;
+        }
+
+        /** The next number, which says how many of something follow. Each of them takes at least a
+         *  character, so a count past what is left of the image is one nothing follows. */
+        int count() {
+            int value = next();
+            if (value > text.length() - Math.min(at, text.length())) {
+                throw new IllegalArgumentException("an image ends before its machine does");
+            }
+            return value;
+        }
+
+        /** The next number, which is 1 or 0 for whether {@code what} holds. */
+        boolean flag(String what) {
+            int value = next();
+            if (value > 1) {
+                throw new IllegalArgumentException(what + " is written as 0 or 1, and not as " + value);
+            }
+            return value == 1;
+        }
+
+        /** The next number, which names one of {@code many} things numbered from nought. */
+        int below(int many, String what) {
+            int value = next();
+            if (value >= many) {
+                throw new IllegalArgumentException(
+                        "an image names a " + what + " it has, and there is none numbered " + value);
+            }
             return value;
         }
 

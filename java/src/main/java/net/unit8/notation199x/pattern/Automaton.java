@@ -26,6 +26,13 @@ import java.util.Set;
  * <p>Nothing here is about how a pattern was written. Two patterns that accept the same strings may
  * come to different automata, and that is the point of the next questions being asked of this rather
  * than of the syntax: what a language holds is not what its author typed.
+ *
+ * <p>A value, and one that does not change. A machine is what a caller outside this package builds
+ * its own questions on, so what it holds is its own from the moment it is made: nothing handed to
+ * {@link #madeOf} is kept, nothing handed back can be written to, and every operation answers with
+ * another machine. The machines made here are ones every operation can walk — each step is over
+ * some set and leads to a state there is — and one written out by a caller is held to the same
+ * before it is a machine at all.
  */
 public final class Automaton {
 
@@ -57,13 +64,35 @@ public final class Automaton {
      */
     private final int[][] runs;
 
-    /** One step, and what it costs to take. */
-    public record Step(CodePoints over, int to) {}
+    /** One step, and what it costs to take: the symbols it is over, and the state it leads to. */
+    public record Step(CodePoints over, int to) {
 
+        public Step {
+            if (over == null) {
+                throw new IllegalArgumentException("a step is over some set of symbols");
+            }
+            if (to < 0) {
+                throw new IllegalArgumentException("a step leads to a state, and none is numbered " + to);
+            }
+        }
+    }
+
+    /**
+     * The one way a machine comes to be. What is handed in is copied, so whoever built it may go on
+     * writing to what they hold and the machine is as it was; the rows are ones nothing writes to,
+     * so {@link #stepsFrom} hands them out as they are.
+     *
+     * <p>The free steps and the runs are arrays, which nothing freezes. Every one of them is made
+     * by the construction that calls this and let go of, and none leaves the machine uncopied.
+     */
     private Automaton(List<List<Step>> steps, List<int[]> free, BitSet accepting, int[][] runs) {
-        this.steps = steps;
-        this.free = free;
-        this.accepting = accepting;
+        List<List<Step>> rows = new ArrayList<>(steps.size());
+        for (List<Step> row : steps) {
+            rows.add(List.copyOf(row));
+        }
+        this.steps = List.copyOf(rows);
+        this.free = List.copyOf(free);
+        this.accepting = (BitSet) accepting.clone();
         this.runs = runs;
     }
 
@@ -83,22 +112,50 @@ public final class Automaton {
      *
      * <p>No free steps: a builder writing its own states writes what each one leads to, so a step
      * costing no symbol is a state it did not need. One that wants them builds through {@link #of}.
+     *
+     * <p>What is written is held to being a machine: it has a state to start in, every step leads
+     * to a state it has, and every state a walk may stop at is one of them. Anything else is an
+     * {@link IllegalArgumentException} here, and not a walk that fails later.
+     *
+     * @param steps     for each state, the steps out of it; the first is {@link #START}
+     * @param accepting the states a walk may stop at
      */
     public static Automaton madeOf(List<List<Step>> steps, BitSet accepting) {
-        List<int[]> free = new ArrayList<>();
-        for (int at = 0; at < steps.size(); at++) {
+        int states = steps.size();
+        if (states == 0) {
+            throw new IllegalArgumentException("a machine has a state to start in");
+        }
+        if (accepting.length() > states) {
+            throw new IllegalArgumentException("a walk stops at a state the machine has, and there is"
+                    + " none numbered " + (accepting.length() - 1) + " among " + states);
+        }
+        // What is asked about is the copy that is kept, and not what the caller still holds.
+        List<List<Step>> rows = new ArrayList<>(states);
+        List<int[]> free = new ArrayList<>(states);
+        for (List<Step> row : steps) {
+            List<Step> kept = List.copyOf(row);
+            for (Step each : kept) {
+                if (each.to() >= states) {
+                    throw new IllegalArgumentException("a step leads to a state the machine has, and"
+                            + " there is none numbered " + each.to() + " among " + states);
+                }
+            }
+            rows.add(kept);
             free.add(new int[0]);
         }
-        return new Automaton(steps, free, accepting, null);
+        if (rows.size() != states) {
+            throw new IllegalArgumentException("the states were added to while they were read");
+        }
+        return new Automaton(rows, free, accepting, null);
     }
 
     /**
-     * The steps out of one state, for a reader in this package walking a canonical machine.
+     * The steps out of one state, which cannot be written to.
      *
-     * <p>Only ever asked of one that is canonical, where a walk is the whole of what there is to do:
-     * the machine is deterministic and complete, so every symbol leads somewhere and where it leads
-     * is a fact about the symbol. Asked of a machine that is not, a reader would be walking one of
-     * the ways the pattern happened to be written.
+     * <p>For a reader writing the machine out, or walking one that is canonical. There a walk is
+     * the whole of what there is to do: the machine is deterministic and complete, so every symbol
+     * leads somewhere and where it leads is a fact about the symbol. Walked over a machine that is
+     * not, the steps are one of the ways the pattern happened to be written.
      */
     public List<Step> stepsFrom(int state) {
         return steps.get(state);
@@ -107,7 +164,7 @@ public final class Automaton {
     /**
      * The states a walk at {@code state} is also in without spending a symbol.
      *
-     * <p>For a reader in this package writing the machine out as it is, steps for nothing included:
+     * <p>A copy. For a reader writing the machine out as it is, steps for nothing included:
      * a run walks those as they are, and removing them would copy each step after one into every
      * state before it.
      */
