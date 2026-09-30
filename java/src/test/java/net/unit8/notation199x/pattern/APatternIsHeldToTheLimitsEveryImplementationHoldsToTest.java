@@ -111,10 +111,66 @@ class APatternIsHeldToTheLimitsEveryImplementationHoldsToTest {
                 PatternParser.read("a{0,99999999999}"));
     }
 
-    /** Text that is no pattern is refused as that, even where it is also large. */
+    /**
+     * A limit is about a pattern, so text that is no pattern is refused as that whatever limit it
+     * also went past, and wherever in the text the two are: the reading goes on past a count or a
+     * depth to the end, and places the anchors, before it says a limit was the answer.
+     */
     @Test
-    void textThatIsNoPatternIsRefusedBeforeItIsCounted() {
-        assertInstanceOf(PatternRead.Refused.class, PatternParser.read("a{249999}\\p{L}"));
+    void textThatIsNoPatternIsRefusedWhateverLimitItWentPast() {
+        assertEquals(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ, refusal("a{249999}\\q"));
+        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refusal("a{134217728x}"));
+        assertEquals(PatternRead.Refusal.A_CHARACTER_PROPERTY, refusal("a{134217728}\\p{L}"));
+        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refusal("a{134217728}("));
+        int past = PatternRead.Limit.NESTING_DEPTH.most() + 1;
+        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refusal("(?:".repeat(past) + "a"));
+        assertEquals(PatternRead.Refusal.AN_ANCHOR_THIS_CANNOT_PLACE,
+                refusal("(?:".repeat(past) + "(a|)^b" + ")".repeat(past)));
+        assertEquals(PatternRead.Refusal.A_GROUP_THE_GRAMMAR_DOES_NOT_HAVE,
+                refusal("(?:".repeat(past) + "(?=a)" + ")".repeat(past)));
+    }
+
+    /** A floor and a ceiling are compared as written, even where both are past the limit. */
+    @Test
+    void aCeilingBelowItsFloorIsRefusedHoweverLargeTheyAre() {
+        assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ, refusal("a{200000000,150000000}"));
+        assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ,
+                refusal("a{99999999999999999999,99999999999999999998}"));
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.REPETITION_COUNT, 2, "000134217728"),
+                PatternParser.read("a{000134217728}"));
+        assertInstanceOf(PatternRead.Read.class, PatternParser.read("a{0003,0005}"));
+    }
+
+    /** Of two limits met, the first in the text is the answer. */
+    @Test
+    void theFirstLimitInTheTextIsTheAnswer() {
+        int past = PatternRead.Limit.NESTING_DEPTH.most() + 1;
+        String deep = "(?:".repeat(past) + "a" + ")".repeat(past);
+        assertEquals(PatternRead.Limit.REPETITION_COUNT,
+                ((PatternRead.Beyond) PatternParser.read("a{134217728}" + deep)).limit());
+        assertEquals(PatternRead.Limit.NESTING_DEPTH,
+                ((PatternRead.Beyond) PatternParser.read(deep + "a{134217728}")).limit());
+    }
+
+    /**
+     * Text nested as deeply as it is long is read to its end, and never runs the stack out: the
+     * reading and the placing of anchors keep stacks of their own.
+     */
+    @Test
+    void textNestedAMillionDeepIsReadToItsEnd() {
+        int deep = 1_000_000;
+        assertTimeoutPreemptively(Duration.ofSeconds(30), () -> {
+            assertEquals(PatternRead.Limit.NESTING_DEPTH, ((PatternRead.Beyond) PatternParser.read(
+                    "(?:".repeat(deep) + "a" + ")".repeat(deep))).limit());
+            assertEquals(PatternRead.Refusal.AN_ANCHOR_THIS_CANNOT_PLACE, refusal(
+                    "(?:".repeat(deep) + "a*^b" + ")".repeat(deep)));
+            assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refusal(
+                    "(?:".repeat(deep) + "a" + ")".repeat(deep - 1)));
+        });
+    }
+
+    private static PatternRead.Refusal refusal(String regex) {
+        return assertInstanceOf(PatternRead.Refused.class, PatternParser.read(regex), regex).why();
     }
 
     /**

@@ -52,6 +52,9 @@ public sealed interface PatternRead {
      * <p>Not a refusal: the language has no count, depth or size past which a pattern stops being
      * one. What is past a limit is what no implementation is asked to run.
      *
+     * <p>Answered only of text read to its end and found to be a pattern, its anchors placed. Text
+     * that is no pattern is {@link Refused}, whatever limit it also went past.
+     *
      * @param limit     which limit it is past
      * @param from      where in the text the construct that is past it begins, in chars; nought for
      *                  {@link Limit#MACHINE_STATES}, which is a fact about the whole pattern
