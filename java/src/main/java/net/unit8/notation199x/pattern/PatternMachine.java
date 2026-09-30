@@ -101,12 +101,12 @@ public final class PatternMachine {
      */
     public PatternImage image() {
         if (deterministic != null) {
-            PatternImage one = PatternImage.of(deterministic, true);
+            PatternImage one = PatternImages.of(deterministic, true);
             if (one instanceof PatternImage.Written) {
                 return one;
             }
         }
-        return PatternImage.of(shaped, false);
+        return PatternImages.of(shaped, false);
     }
 
     /** The machine the shape builds, for a check holding it against the deterministic one. */

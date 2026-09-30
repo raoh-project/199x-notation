@@ -481,6 +481,10 @@ public final class StringPattern implements Predicate<String> {
      * <p>Here beside the reader, so the one format has one owner: a writer elsewhere and a reader
      * here would be two accounts of it, and nothing would hold them to each other.
      *
+     * <p>Private to this package. Whether the machine is deterministic is said to the writer rather
+     * than worked out by it, so only a writer handed its machine by the code that built it
+     * ({@link PatternImages}) knows the answer it gives is true.
+     *
      * <p>A set is written once however many steps are over it. The machine a pattern's shape builds
      * writes a repetition out as copies, and each copy steps over the same set, so a class written
      * large is not written again for every copy.
@@ -491,7 +495,7 @@ public final class StringPattern implements Predicate<String> {
      * large. Counted exactly, but for the two counts at the front, which are taken at their widest:
      * a limit counted loosely would refuse machines the image holds.
      */
-    public static final class Writer {
+    static final class Writer {
 
         private final boolean deterministic;
         private final long mostCharacters;
