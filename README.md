@@ -11,8 +11,9 @@ the same way everywhere.
 
 ## Status
 
-Nothing is implemented here yet. The Java code exists today inside Souther's runtime and compiler,
-and parts of it inside raoh-java; moving it here is the first piece of work. See the issues.
+The Java implementation is here, moved from Souther's runtime and compiler. Souther and raoh-java
+do not depend on it yet. The Rust, Go and PHP implementations and `suite/` are not here yet. See the
+issues.
 
 ## What belongs here
 
@@ -43,14 +44,26 @@ One directory per language, beside the data they are all generated from and chec
 | Directory | Contents |
 | --- | --- |
 | `ucd/` | The Unicode Character Database files of the pinned version, with their checksums |
+| `gen/` | The programs that generate the tables from `ucd/` |
 | `suite/` | Test vectors every implementation runs |
-| `java/` | Maven artifact `199x-notation`, package `notation199x` |
+| `java/` | Maven artifact `net.unit8.notation199x:199x-notation`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
 | `go/` | Package `notation199x` |
 | `php/` | Package `notation199x` |
 
 Tables are generated from `ucd/` and checked in. Generation is run by hand and never during a
 build: taking a later Unicode version is a change to the specifications, not a dependency update.
+
+```sh
+java gen/GenerateCaseTables.java ucd/18.0.0
+java gen/GenerateNormalizationTables.java ucd/18.0.0
+```
+
+The Java tests read `ucd/`, so they run in `java/`:
+
+```sh
+cd java && mvn test
+```
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
 `notation199x`.
