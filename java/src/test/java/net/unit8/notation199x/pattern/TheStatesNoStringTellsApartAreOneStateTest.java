@@ -122,8 +122,7 @@ class TheStatesNoStringTellsApartAreOneStateTest {
     @Test
     void itHoldsTheWordsAndNothingBeside() {
         Meter meter = roomy();
-        Language held = Language.ofWords(words(), meter);
-        assertNotNull(held);
+        Held held = Held.words(words(), meter);
 
         assertTrue(held.has("a".repeat(LETTERS)), "a word of the right letters and the right length");
         assertTrue(held.has("abababab"), "and another");

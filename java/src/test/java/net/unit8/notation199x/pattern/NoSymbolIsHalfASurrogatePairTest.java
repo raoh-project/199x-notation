@@ -85,16 +85,13 @@ class NoSymbolIsHalfASurrogatePairTest {
         String high = String.valueOf((char) 0xD800);
         String low = String.valueOf((char) 0xDC00);
         for (String pattern : List.of(".", "[\\s\\S]*", "[^a]*", ".{1,2}")) {
-            Language language = PatternPlan.of(assertInstanceOf(PatternRead.Read.class,
-                    PatternParser.read(pattern)).meaning())
-                    .compile(PatternPlan.Budget.OF_ADMITTED_VALUES.meter());
+            Held language = Held.by(pattern);
             for (String text : List.of(high, low, low + high, "a" + high)) {
                 assertFalse(language.has(text), pattern);
             }
-            assertFalse(language.not(PatternPlan.Budget.OF_ADMITTED_VALUES.meter()).has(high),
+            assertFalse(language.not().has(high),
                     "nor does what " + pattern + " leaves out");
         }
-        assertFalse(Language.EVERY_STRING.has(high));
     }
 
     /**

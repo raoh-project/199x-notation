@@ -45,4 +45,19 @@ class TextIsComparedByScalarValueTest {
             }
         }
     }
+
+    @Test
+    void halfAPairIsFoundWhereItStands() {
+        String high = String.valueOf((char) 0xD800);
+        String low = String.valueOf((char) 0xDC00);
+        assertEquals(-1, ScalarValues.halfAPairAt(""));
+        assertEquals(-1, ScalarValues.halfAPairAt("a" + high + low + "b"));
+        assertEquals(0, ScalarValues.halfAPairAt(high));
+        assertEquals(0, ScalarValues.halfAPairAt(low));
+        assertEquals(0, ScalarValues.halfAPairAt(low + high));
+        assertEquals(1, ScalarValues.halfAPairAt("a" + high));
+        assertEquals(0, ScalarValues.halfAPairAt(high + "a"));
+        assertEquals(2, ScalarValues.halfAPairAt(high + low + high));
+        assertEquals(0, ScalarValues.halfAPairAt(high + high + low));
+    }
 }

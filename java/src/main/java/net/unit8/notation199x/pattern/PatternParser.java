@@ -6,9 +6,9 @@ import java.util.List;
 /**
  * The reader of the pattern language, and the only one.
  *
- * <p>What this reads is a pattern and what it refuses is not one. The checker asks this whether a
- * {@code String.matches} pattern is one, and what it hands on is the {@link PatternMeaning}; the
- * analysis, the compiler's folds and every output lower that. None of them reads the text, so a
+ * <p>What this reads is a pattern and what it refuses is not one. A caller asks this whether text
+ * is a pattern, and what it hands on is the {@link PatternMeaning}; everything that works the
+ * pattern out afterwards lowers that. None of them reads the text, so a
  * construct this learns is learned by all of them at once, and there is no second reader whose
  * answer could differ.
  *
@@ -21,10 +21,10 @@ public final class PatternParser {
     /**
      * How deep a pattern may be written.
      *
-     * <p>A limit of this compiler and not of the language. The reading is recursive, and so is every
-     * walk over what it reads — the machines built from it and what an output lowers it to — so what
+     * <p>A limit of this reader and not of the language. The reading is recursive, and so is every
+     * walk over what it reads — the machines built from it and what a caller lowers it to — so what
      * bounds them is the stack. Past this the answer is {@link PatternRead.TooDeep} rather than a
-     * stack overflow somewhere later in a compile.
+     * stack overflow somewhere later.
      */
     public static final int DEEPEST = 200;
 
@@ -342,18 +342,30 @@ public final class PatternParser {
      *
      * <p>A {@code \\u} pair is the one character it encodes: read as two symbols,
      * {@code \\uD800\\uDC00} would name the two halves and not U+10000, a different set of strings
-     * under the same spelling. A surrogate on its own is no symbol, since no {@code String} holds
-     * one, and is refused.
+     * under the same spelling.
      */
     private int spelled(PatternEscapes.Spelled escape) {
         if (escape == null) {
             throw refused(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ);
         }
         at = escape.end();
-        if (CodePoints.isSurrogate(escape.symbol())) {
+        return symbol(escape.symbol());
+    }
+
+    /**
+     * {@code codePoint} as a symbol, the reading already moved past what wrote it.
+     *
+     * <p>Every character a pattern names comes through here, however it was written: as itself, in
+     * a class, at either end of a run, after a backslash, or by its number. A surrogate on its own
+     * is no symbol, since no text holds one, and is refused. The text of a pattern is a
+     * {@code java.lang.String}, which can hold half a pair, so a character written as itself is
+     * asked the same as one written by its number.
+     */
+    private int symbol(int codePoint) {
+        if (CodePoints.isSurrogate(codePoint)) {
             throw refused(PatternRead.Refusal.A_CHARACTER_NO_STRING_HOLDS);
         }
-        return escape.symbol();
+        return codePoint;
     }
 
     /** `\0n`, `\0nn` or `\0mnn` — up to three octal digits after the zero. */
@@ -374,16 +386,16 @@ public final class PatternParser {
      * The symbol written here, which is a whole code point where the source holds a pair.
      *
      * <p>A pattern written with a character past the basic plane holds it as two units, and a reader
-     * taking one unit at a time would build a language of halves. The pattern is a {@code String},
-     * so it holds no half of a pair on its own.
+     * taking one unit at a time would build a language of halves. Half a pair with no other half
+     * beside it is no character ({@link #symbol}).
      */
     private int literal() {
         if (done()) {
             throw refused(PatternRead.Refusal.SOMETHING_UNCLOSED);
         }
-        int symbol = regex.codePointAt(at);
-        at += Character.charCount(symbol);
-        return symbol;
+        int written = regex.codePointAt(at);
+        at += Character.charCount(written);
+        return symbol(written);
     }
 
     /** A repetition's count, which is a whole number this can hold. */

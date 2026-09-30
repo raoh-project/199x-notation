@@ -1,10 +1,13 @@
 package net.unit8.notation199x.pattern;
 
 /**
- * What this compiler is allowed to build while working one answer out, counted as it is built.
+ * What a caller allows to be built while one answer is worked out, counted as it is built.
+ *
+ * <p>How much that is, is the caller's to say, for each question it asks: nothing here holds a
+ * number.
  *
  * <p>Before the state is made and not after it. A machine put together and then measured is a
- * machine this compiler already paid for — the memory was taken, the loops were run — and saying it
+ * machine already paid for — the memory was taken, the loops were run — and saying it
  * was too big at that point is a report rather than a limit. So every place a state is made asks
  * here first, and a construction refused is one that stopped where it was.
  *
@@ -120,7 +123,7 @@ public final class Meter {
      * position's whole allowance and several things are made out of it. Without this, a build that
      * came back with nothing would be answered with the reason of a build that finished long ago.
      */
-    void starting() {
+    public void starting() {
         stopped = null;
     }
 
@@ -132,7 +135,7 @@ public final class Meter {
     }
 
     /** One machine about to be made, counting its own states as well as this meter's. */
-    Making making() {
+    public Making making() {
         return new Making();
     }
 
@@ -144,13 +147,13 @@ public final class Meter {
      * take. A machine is abandoned by its builder returning nothing, and what it spent stays spent
      * — the states were made.
      */
-    final class Making {
+    public final class Making {
 
         private int mine;
         private long looked;
 
         /** Whether one more state may be made, and it is counted where the answer is yes. */
-        boolean state() {
+        public boolean state() {
             return states(1);
         }
 
@@ -161,7 +164,7 @@ public final class Meter {
          * <p>Asked before the looking, as a state is asked for before it is made. Attributed the
          * way states are: past what one machine may take, whatever else is true, is this machine.
          */
-        boolean work(long much) {
+        public boolean work(long much) {
             if (much < 0) {
                 throw new IllegalArgumentException("no construction looks at less than nothing");
             }
@@ -186,7 +189,7 @@ public final class Meter {
          * be reached — and allocating that many to find out they were too many is the thing this
          * exists to stop.
          */
-        boolean states(long many) {
+        public boolean states(long many) {
             if (many < 0) {
                 throw new IllegalArgumentException("a machine is made of no fewer than no states");
             }

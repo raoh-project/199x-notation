@@ -25,7 +25,7 @@ final class PatternEscapes {
      * character the two encode. Null where there are not four hex digits.
      *
      * <p>{@code \\uD800\\uDC00} is U+10000 and neither half on its own. A high escape with no low one
-     * after it spells the high surrogate, which no {@code String} holds and the reader refuses.
+     * after it spells the high surrogate, which no text holds and the reader refuses.
      */
     static Spelled unicode(String regex, int at) {
         int first = fixedHex(regex, at, 4);

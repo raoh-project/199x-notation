@@ -2,13 +2,7 @@ package net.unit8.notation199x.pattern;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -33,35 +27,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
 
-    /** The budgets that bound what a class runs rather than what a reading answers. */
-    private static final Set<String> OF_A_RUN = Set.of("OF_A_RUN", "OF_A_DETERMINISTIC_RUN");
-
-    /**
-     * Every budget a reading of the rules is given stops short of the machine a class runs.
-     *
-     * <p>A reading past its budget leaves the question unanswered and the program standing, and a
-     * program that stands has to be one a class can run; so between the two there has to be room
-     * for a pattern the reading gave up on. Asked of every budget declared, so one added later is
-     * held to it without being listed here.
-     */
-    @Test
-    void whatAReadingGivesUpOnIsStillSomethingAClassRuns() throws IllegalAccessException {
-        List<String> reaching = new ArrayList<>();
-        int readings = 0;
-        for (Field field : PatternPlan.Budget.class.getFields()) {
-            if (!Modifier.isStatic(field.getModifiers()) || field.getType() != PatternPlan.Budget.class
-                    || OF_A_RUN.contains(field.getName())) {
-                continue;
-            }
-            readings++;
-            PatternPlan.Budget reading = (PatternPlan.Budget) field.get(null);
-            if (reading.mostStates() >= PatternPlan.Budget.OF_A_RUN.mostStates()) {
-                reaching.add(field.getName());
-            }
-        }
-        assertEquals(List.of(), reaching);
-        assertTrue(readings > 1, "the walk found the readings' budgets: " + readings);
-    }
 
     /**
      * And the characters a class is given for one image never refuse a machine the state limit let
@@ -69,7 +34,7 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
      */
     @Test
     void theLongestRepetitionAClassRunsFitsTheImageItIsGiven() {
-        int most = PatternPlan.Budget.OF_A_RUN.mostStates();
+        int most = PatternImage.MOST_STATES;
         PatternMeaning meaning = meaning("a{" + (most - 10) + "}");
         PatternImage.Written image =
                 assertInstanceOf(PatternImage.Written.class, PatternImage.of(meaning));
@@ -86,11 +51,11 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
     @Test
     void aWideClassRepeatedIsRefusedOnTheWorkItsRowsTake() {
         PatternMeaning meaning = meaning(wideClass(3000) + "{2000}");
-        Meter meter = PatternPlan.Budget.OF_ADMITTED_VALUES.meter();
+        Meter meter = Held.roomy();
         assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
-                assertNull(PatternPlan.of(meaning).compile(meter)));
+                assertNull(Held.canonical(meaning, meter)));
         assertEquals(Meter.Stopped.ONE_MACHINE, meter.stoppedBy());
-        assertTrue(Automaton.of(meaning, PatternPlan.Budget.OF_ADMITTED_VALUES.meter()) != null,
+        assertTrue(Automaton.of(meaning, Held.roomy()) != null,
                 "its shape is within the state limit, so what refused it is the work");
     }
 
@@ -101,8 +66,7 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
     @Test
     void aLongChainIsMadeSmallestInTimeItsLengthSets() {
         assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
-                assertTrue(PatternPlan.of(meaning("a{49000}"))
-                        .compile(PatternPlan.Budget.OF_ADMITTED_VALUES.meter()) != null));
+                assertTrue(Held.canonical(meaning("a{49000}"), Held.roomy()) != null));
     }
 
     /** A class is read in time its length sets, and not the square of it. */
@@ -113,18 +77,15 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
     }
 
     /**
-     * A fold walks a subject in every state the machine may be in at once, and a long subject over
-     * a wide machine is refused rather than walked: the match is left to the run time, where it is
-     * linear in the subject.
+     * A walk over the shape's machine is in every state the machine may be in at once, and a long
+     * subject over a wide machine is refused rather than walked: that match is for the machine that
+     * is run, where it is linear in the subject.
      */
     @Test
-    void aFoldOverALongSubjectIsLeftToTheRunTime() {
-        Recognizer machine = Recognizer.of(meaning("(a?){10000}"),
-                PatternPlan.Budget.OF_A_FOLD.meter());
-        assertEquals(Optional.empty(),
-                machine.accepts("a".repeat(200_000), PatternPlan.Budget.OF_A_FOLD.meter()));
-        assertEquals(Optional.of(true), machine.accepts("a".repeat(10),
-                PatternPlan.Budget.OF_A_FOLD.meter()));
+    void aWalkOfTheShapeOverALongSubjectIsRefusedRatherThanWalked() {
+        Automaton machine = Automaton.of(meaning("(a?){10000}"), Held.roomy());
+        assertNull(machine.accepts("a".repeat(200_000), Held.roomy()));
+        assertEquals(true, machine.accepts("a".repeat(10), Held.roomy()));
     }
 
     /** A writer says it is past its limit as it goes, and writes nothing out once it is. */

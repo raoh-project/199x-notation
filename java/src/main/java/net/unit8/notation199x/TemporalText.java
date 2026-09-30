@@ -1,13 +1,11 @@
 package net.unit8.notation199x;
 
-import java.time.Instant;
-import java.time.Year;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Which text names a date, a time, a date-time or an instant.
+ * Which text names a date, a time, a date-time, a date-time with an offset or an instant.
  *
  * <p>Each form is a regular expression over ASCII, and that expression alone decides whether a text
  * is in the form. Whether the fields then name a day and a moment that exist is arithmetic on the
@@ -16,11 +14,20 @@ import java.util.regex.Pattern;
  * built on them would read a different language from one release to the next. A value is built by
  * whoever holds the text once it is admitted, and what it builds is what this said exists.
  *
- * <p>Each temporal is admitted in its own domain. A date and a date-time hold the
- * years {@link Year} does, and an instant holds the moments {@link Instant} does, which
- * reach a year further on either side of them and are counted in epoch seconds after the offset and
- * an hour 24 have been applied. Borrowing one domain's range for another puts the end of a range
- * where a value can be written that an encoder then cannot write back.
+ * <p>Each temporal is admitted in its own domain. A date, a date-time and a date-time with an
+ * offset hold the years from {@link #YEAR_MIN} to {@link #YEAR_MAX} in the fields they are written
+ * in, whatever the offset. An instant holds the moments from {@link #INSTANT_MIN} to
+ * {@link #INSTANT_MAX}, which reach a year further on either side and are counted in epoch seconds
+ * after the offset and an hour 24 have been applied. Borrowing one domain's range for another puts
+ * the end of a range where a value can be written that an encoder then cannot write back. The
+ * ranges are those of {@code java.time}'s {@code LocalDate} and {@code Instant}, written here as
+ * numbers because they are the rule's in every language and not one platform's.
+ *
+ * <p>A date-time with an offset and an instant are two forms and not one. The first is a local
+ * date-time beside a displacement: its seconds may be left out, its hour is one a clock shows, and
+ * it is admitted by the fields it writes. The second is a moment: its seconds are written,
+ * {@code 24:00:00} with nothing after it is the start of the next day, and it is admitted by the
+ * moment it names.
  *
  * <p>A time and a date-time may carry a fraction of a second, as an instant may. A caller whose
  * type is held to the second refuses the fraction itself: the forms are ASCII, so a text that was
@@ -32,8 +39,17 @@ import java.util.regex.Pattern;
  */
 public final class TemporalText {
 
-    /** The four temporals that have a text form. */
-    public enum Kind { DATE, TIME, DATETIME, INSTANT }
+    /** The temporals that have a text form. */
+    public enum Kind { DATE, TIME, DATETIME, OFFSET_DATETIME, INSTANT }
+
+    /** The least and the greatest year of a date. */
+    public static final long YEAR_MIN = -999_999_999L;
+    public static final long YEAR_MAX = 999_999_999L;
+
+    /** The least and the greatest moment of an instant, in seconds from 1970-01-01T00:00:00Z:
+     *  the first second of year -1000000000 and the last of year 1000000000. */
+    public static final long INSTANT_MIN = -31_557_014_167_219_200L;
+    public static final long INSTANT_MAX = 31_556_889_864_403_199L;
 
     /** Why a text is not one. */
     public enum Refusal {
@@ -58,6 +74,7 @@ public final class TemporalText {
     private static final Pattern DATE_FORM = Pattern.compile(DATE);
     private static final Pattern TIME_FORM = Pattern.compile(TIME);
     private static final Pattern DATETIME_FORM = Pattern.compile(DATE + "T" + TIME);
+    private static final Pattern OFFSET_DATETIME_FORM = Pattern.compile(DATE + "T" + TIME + OFFSET);
     // An instant requires its seconds.
     private static final Pattern INSTANT_FORM =
             Pattern.compile(DATE + "T" + HOUR_MINUTE + SECOND + OFFSET);
@@ -79,6 +96,11 @@ public final class TemporalText {
             }
             case TIME -> local(TIME_FORM.matcher(text), false);
             case DATETIME -> local(DATETIME_FORM.matcher(text), true);
+            case OFFSET_DATETIME -> {
+                Matcher m = OFFSET_DATETIME_FORM.matcher(text);
+                yield m.matches() && dateExists(m) && timeExists(m) && offsetExists(m)
+                        ? none() : malformed();
+            }
             case INSTANT -> instant(INSTANT_FORM.matcher(text));
         };
     }
@@ -100,11 +122,10 @@ public final class TemporalText {
         return momentExists(m, second) ? none() : malformed();
     }
 
-    /** Whether the date is one a {@code LocalDate} holds: a year within {@link Year}'s, and a day
-     *  the month has. */
+    /** Whether the date is one there is: a year within the range, and a day the month has. */
     private static boolean dateExists(Matcher m) {
         long year = Long.parseLong(m.group("year"));
-        return year >= Year.MIN_VALUE && year <= Year.MAX_VALUE && dayExists(m, year);
+        return year >= YEAR_MIN && year <= YEAR_MAX && dayExists(m, year);
     }
 
     private static boolean dayExists(Matcher m, long year) {
@@ -115,13 +136,18 @@ public final class TemporalText {
 
     private static int lengthOfMonth(long year, int month) {
         return switch (month) {
-            case 2 -> Year.isLeap(year) ? 29 : 28;
+            case 2 -> isLeap(year) ? 29 : 28;
             case 4, 6, 9, 11 -> 30;
             default -> 31;
         };
     }
 
-    /** Whether the time of day is one a {@code LocalTime} holds. Hour 24 is not, whatever follows. */
+    /** Whether {@code year} of the proleptic Gregorian calendar has a 29 February. */
+    private static boolean isLeap(long year) {
+        return (year & 3) == 0 && (year % 100 != 0 || year % 400 == 0);
+    }
+
+    /** Whether the time of day is one a clock shows. Hour 24 is not, whatever follows. */
     private static boolean timeExists(Matcher m) {
         String second = m.group("second");
         return Integer.parseInt(m.group("hour")) <= 23
@@ -130,8 +156,8 @@ public final class TemporalText {
     }
 
     /**
-     * Whether the moment the text names is one an {@code Instant} holds, with {@code second} as its
-     * second.
+     * Whether the moment the text names is within the range of an instant, with {@code second} as
+     * its second.
      *
      * <p>Counted in epoch seconds after the offset is taken off, so a year at either end of the
      * range and an hour 24 that carries into the next day or an offset that carries into the last
@@ -152,7 +178,7 @@ public final class TemporalText {
         long epochSecond = epochDay(year, Integer.parseInt(m.group("month")),
                 Integer.parseInt(m.group("day"))) * SECONDS_PER_DAY
                 + hour * 3600L + minute * 60L + second - offsetSeconds(m);
-        return epochSecond >= Instant.MIN.getEpochSecond() && epochSecond <= Instant.MAX.getEpochSecond();
+        return epochSecond >= INSTANT_MIN && epochSecond <= INSTANT_MAX;
     }
 
     /** Days from 1970-01-01 to a day of the proleptic Gregorian calendar, which the caller has

@@ -27,7 +27,7 @@ import java.util.Set;
  * come to different automata, and that is the point of the next questions being asked of this rather
  * than of the syntax: what a language holds is not what its author typed.
  */
-final class Automaton {
+public final class Automaton {
 
     /**
      * Where a walk begins.
@@ -35,7 +35,7 @@ final class Automaton {
      * <p>Always zero, and the construction depends on it: a machine is built by adding states to the
      * end, so the first one made is the one everything else hangs from.
      */
-    static final int START = 0;
+    public static final int START = 0;
 
     /** For each state, the steps that cost a symbol. */
     private final List<List<Step>> steps;
@@ -58,7 +58,7 @@ final class Automaton {
     private final int[][] runs;
 
     /** One step, and what it costs to take. */
-    record Step(CodePoints over, int to) {}
+    public record Step(CodePoints over, int to) {}
 
     private Automaton(List<List<Step>> steps, List<int[]> free, BitSet accepting, int[][] runs) {
         this.steps = steps;
@@ -68,23 +68,23 @@ final class Automaton {
     }
 
     /** How many states it has, which is what a caller bounding its work counts. */
-    int size() {
+    public int size() {
         return steps.size();
     }
 
     /**
-     * A machine written out state by state, for a builder in this package that has one to write.
+     * A machine written out state by state, for a builder that has one to write.
      *
      * <p>Beside {@link #of} and not instead of it. That one is handed a pattern and works out the
      * states; a builder here holds a machine whose states follow from something that is not a
-     * pattern — where a string sits against another on the runtime's order, which no pattern says —
+     * pattern — where a string sits against another in the order of text, which no pattern says —
      * and has nothing to be read from. Both end in the same three tables, which is what keeps a
      * machine made this way answerable to everything below.
      *
      * <p>No free steps: a builder writing its own states writes what each one leads to, so a step
      * costing no symbol is a state it did not need. One that wants them builds through {@link #of}.
      */
-    static Automaton madeOf(List<List<Step>> steps, BitSet accepting) {
+    public static Automaton madeOf(List<List<Step>> steps, BitSet accepting) {
         List<int[]> free = new ArrayList<>();
         for (int at = 0; at < steps.size(); at++) {
             free.add(new int[0]);
@@ -100,7 +100,7 @@ final class Automaton {
      * is a fact about the symbol. Asked of a machine that is not, a reader would be walking one of
      * the ways the pattern happened to be written.
      */
-    List<Step> stepsFrom(int state) {
+    public List<Step> stepsFrom(int state) {
         return steps.get(state);
     }
 
@@ -111,12 +111,12 @@ final class Automaton {
      * a run walks those as they are, and removing them would copy each step after one into every
      * state before it.
      */
-    int[] freeFrom(int state) {
+    public int[] freeFrom(int state) {
         return free.get(state).clone();
     }
 
     /** Whether a walk may stop at {@code state}. */
-    boolean stopsAt(int state) {
+    public boolean stopsAt(int state) {
         return accepting.get(state);
     }
 
@@ -128,7 +128,7 @@ final class Automaton {
      * anything is stopped at past it, and so is whether a shape the machine has is one a string
      * ever reaches. Worked out by each of them, the two would be one walk written twice.
      */
-    boolean[] reachingSomewhereItStops() {
+    public boolean[] reachingSomewhereItStops() {
         List<List<Integer>> back = new ArrayList<>();
         for (int at = 0; at < steps.size(); at++) {
             back.add(new ArrayList<>());
@@ -161,14 +161,14 @@ final class Automaton {
      *
      * <p>Null rather than a smaller machine. A repetition written large is a language with a great
      * many strings in it and no smaller machine accepts the same ones — so what a caller is told is
-     * that this was not built, which is a fact about this compiler, and never that the pattern
+     * that this was not built, which is a fact about what was allowed, and never that the pattern
      * accepts less than it does.
      *
      * <p>What to do about it is the caller's. Which is why the bound is an argument: whether a
      * pattern is worth this many states is a question about the answer being built, and nothing here
      * knows what that answer is for.
      */
-    static Automaton of(PatternMeaning meaning, Meter meter) {
+    public static Automaton of(PatternMeaning meaning, Meter meter) {
         Building building = new Building(meter.making());
         try {
             int start = building.state();
@@ -187,14 +187,14 @@ final class Automaton {
      *
      * <p>Walked a symbol at a time, where a symbol is a scalar value — a pair of units is one. Read
      * a unit at a time, a pattern naming a character past the basic plane would want two steps for
-     * what the pattern takes in one. Text holding half a pair is no {@code String} and is accepted by
+     * what the pattern takes in one. Text holding half a pair is no text and is accepted by
      * nothing: no step is over a surrogate.
      *
      * <p>Every state the machine may be in is walked at once, so a symbol costs the steps out of all
      * of them, and a long value over a wide machine is their product. That is charged a symbol at a
      * time, before the steps are looked at.
      */
-    Boolean accepts(String value, Meter meter) {
+    public Boolean accepts(String value, Meter meter) {
         Meter.Making making = meter.making();
         BitSet here = closure(only(START));
         int at = 0;
@@ -231,7 +231,7 @@ final class Automaton {
      * and a symbol found among the state's runs by a search. A symbol no run holds is half a
      * surrogate pair, which is in no language.
      */
-    boolean walks(String value) {
+    public boolean walks(String value) {
         if (runs == null) {
             throw new IllegalStateException("a walk one state at a time is over a machine made"
                     + " deterministic");
@@ -291,8 +291,11 @@ final class Automaton {
      * each — so a caller holding a handful of values has an answer without going back for anything,
      * and a language met with them is the cheap operation rather than the one that has to be
      * counted.
+     *
+     * <p>Of words that are sequences of scalar values, which is the caller's to have asked: half a
+     * surrogate pair is no symbol, and a word holding one is an {@link IllegalArgumentException}.
      */
-    static Automaton ofWords(java.util.Collection<String> words, Meter meter) {
+    public static Automaton ofWords(java.util.Collection<String> words, Meter meter) {
         Meter.Making making = meter.making();
         List<List<Step>> steps = new ArrayList<>();
         List<int[]> free = new ArrayList<>();
@@ -330,7 +333,7 @@ final class Automaton {
      * <p>A new beginning that steps freely into both. Cheap: the states are the two machines'
      * together and one more, and nothing is copied.
      */
-    Automaton or(Automaton other, Meter meter) {
+    public Automaton or(Automaton other, Meter meter) {
         int mine = size();
         // What it will be: a beginning, and the two machines beside it. Asked before any of it is
         // made, since knowing the size and allocating it anyway is the thing a limit is for.
@@ -370,7 +373,7 @@ final class Automaton {
      * multiplied is what a product could come to and hardly ever what it comes to, so a caller
      * refused on that number is refused an answer it could have afforded.
      */
-    Automaton and(Automaton other, Meter meter) {
+    public Automaton and(Automaton other, Meter meter) {
         try {
             Meter.Making making = meter.making();
             Pairs pairs = new Pairs(other.size(), making);
@@ -512,7 +515,7 @@ final class Automaton {
      * holding nothing and holding everything, both of which are read off the one state a canonical
      * machine has.
      */
-    Automaton not(Meter meter) {
+    public Automaton not(Meter meter) {
         if (everySymbolLeadsOneWay()) {
             return turnedOver();
         }
@@ -614,7 +617,7 @@ final class Automaton {
      * subsets were cut over is the labels the pattern happened to carry, and two ways of writing one
      * language cut it differently — gathered by where they lead, the runs are the language's own.
      */
-    Automaton canonical(Meter meter) {
+    public Automaton canonical(Meter meter) {
         try {
             Subsets subsets = new Subsets(meter.making());
             List<CodePoints> alphabet = subsets.alphabet();
@@ -839,7 +842,7 @@ final class Automaton {
      * <p>A walk over two tables of the same shape and nothing more, which is what {@link #canonical}
      * is for. Asked of machines that are not canonical it is a question about how they were written.
      */
-    boolean sameAs(Automaton other) {
+    public boolean sameAs(Automaton other) {
         if (size() != other.size() || !accepting.equals(other.accepting)) {
             return false;
         }
@@ -858,12 +861,12 @@ final class Automaton {
      * stops on and the other does not, and neither of these two has one — so the smallest machine
      * for each is a single state that every symbol leads back to, accepting or not.
      */
-    boolean holdsNothing() {
+    public boolean holdsNothing() {
         return size() == 1 && !accepting.get(START);
     }
 
     /** The other of the two — see {@link #holdsNothing}. */
-    boolean holdsEverything() {
+    public boolean holdsEverything() {
         return size() == 1 && accepting.get(START);
     }
 
@@ -877,7 +880,7 @@ final class Automaton {
      * different tables may hash alike, and an order that broke its ties on the hash would put the
      * same pair in either order on different runs.
      */
-    void writtenInto(StringBuilder out) {
+    public void writtenInto(StringBuilder out) {
         out.append(steps.size());
         for (int at = 0; at < steps.size(); at++) {
             out.append(accepting.get(at) ? "!" : ".");
@@ -893,7 +896,7 @@ final class Automaton {
     }
 
     /** A number that agrees with {@link #sameAs}, read off the same table. */
-    int shape() {
+    public int shape() {
         int out = accepting.hashCode();
         for (List<Step> each : steps) {
             out = out * 31 + each.hashCode();
@@ -918,7 +921,7 @@ final class Automaton {
      * <p>Deterministic under both: the symbol taken out of a set is the least of it, and the states
      * are walked in the order they were made. Two runs over one model produce one value.
      */
-    String shortest() {
+    public String shortest() {
         String any = shortest(CodePoints.EVERYTHING, -1);
         if (any == null) {
             return null;
@@ -940,7 +943,7 @@ final class Automaton {
      * caller writing a value into a model, where a string nobody can paste is not an answer at all.
      * A pattern admitting only control characters has a shortest string and no value to offer.
      */
-    String shortestWritten() {
+    public String shortestWritten() {
         return shortest(WRITABLE, -1);
     }
 

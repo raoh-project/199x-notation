@@ -7,16 +7,15 @@ import java.util.List;
  * A set of the characters a string is made of: Unicode scalar values, every code point but the
  * surrogates.
  *
- * <p>The universe is what a {@code String} can hold (spec §string-code-points), and not what a Java
- * matcher could be handed. A matcher reads half of a surrogate pair as a symbol of its own, but no
- * {@code String} holds one — text is let in only once it is a sequence of scalar values — so a
- * surrogate is no symbol here, and nothing made of these can name one: a range is never allowed to
- * hold one, and the complement is taken within the scalar values. That is what lets every sequence
- * of symbols a machine here reads be a string.
+ * <p>The universe is what text can hold, and not what a Java matcher could be handed. A matcher
+ * reads half of a surrogate pair as a symbol of its own, but no text holds one — text is a sequence
+ * of scalar values — so a surrogate is no symbol here, and nothing made of these can name one: a
+ * range is never allowed to hold one, and the complement is taken within the scalar values. That is
+ * what lets every sequence of symbols a machine here reads be a string.
  *
  * <p>Held as ranges, sorted and disjoint and never touching. Two spellings of one set would make
- * equal sets unequal, and what is written out of a reading has to come out the same on two compiles
- * of one model — so the constructor normalises rather than trusting whoever built it.
+ * equal sets unequal, and what is written out of a reading has to come out the same each time it is
+ * made — so the constructor normalises rather than trusting whoever built it.
  *
  * <p>The operations are the whole of what a character class is. A literal is one code point, a class
  * is a union of ranges, a negated class is the universe less that union, and {@code .} is the
@@ -74,8 +73,7 @@ public record CodePoints(List<Range> ranges) {
     }
 
     /**
-     * What the five line terminators are, which is what a pattern's {@code .} leaves out
-     * (spec §string-patterns).
+     * What the five line terminators are, which is what a pattern's {@code .} leaves out.
      *
      * <p>Longer than the two a reader expects: a line feed, a carriage return, the next-line
      * character, and the two separators. {@code .} is the universe less these — and a negated class
@@ -95,8 +93,7 @@ public record CodePoints(List<Range> ranges) {
      * What a pattern's {@code \s} holds: a space, a tab, a line feed, a vertical tab, a form feed
      * and a carriage return.
      *
-     * <p>Not String whitespace (spec §string-whitespace), which is what {@code trim} and
-     * {@code words} read. The two are separate sets the specification states separately, and a
+     * <p>Not the {@code White_Space} set, which is what trimming reads. The two are separate sets the specification states separately, and a
      * pattern's shorthand is this one.
      */
     public static final CodePoints SPACES = of(' ').or(between('\t', '\r'));

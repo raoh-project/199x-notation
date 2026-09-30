@@ -7,10 +7,10 @@ import java.util.List;
  * scalar values.
  *
  * <p>The one form a pattern takes past its reader. {@link PatternParser} is the only thing that
- * reads a pattern's text, and what it hands on is this; the analysis, the compiler's own folds and
- * every output lower this and never read the text again. A second reader of the text would be a
- * second answer to which strings a pattern accepts, and the outputs would agree with each other only
- * as far as their readers happened to.
+ * reads a pattern's text, and what it hands on is this; whatever works a pattern out afterwards —
+ * the machine that is run, a caller's own analysis — lowers this and never reads the text again. A
+ * second reader of the text would be a second answer to which strings a pattern accepts, and the
+ * two would agree with each other only as far as their readers happened to.
  *
  * <p>What is kept is what the language depends on and nothing else. A reading that dropped an arm of
  * a choice, an upper bound of a repetition, or the far end of a class would be a tree that answers
@@ -120,6 +120,10 @@ public sealed interface PatternMeaning {
      * it is everywhere else in this package. Written as a sequence of one-symbol sets, which is
      * what a literal is ({@link Symbols}) — there is no node for a run of characters, and inventing
      * one would be a second spelling of a thing that is compared.
+     *
+     * <p>Of text that is a sequence of scalar values, which is the caller's to have asked
+     * ({@code ScalarValues.halfAPairAt}): half a surrogate pair is no symbol, and handing one over
+     * is an {@link IllegalArgumentException}.
      */
     static PatternMeaning text(String written) {
         List<PatternMeaning> symbols = written.codePoints()

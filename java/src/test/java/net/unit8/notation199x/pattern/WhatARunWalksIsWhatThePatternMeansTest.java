@@ -97,13 +97,13 @@ class WhatARunWalksIsWhatThePatternMeansTest {
             if (!(PatternParser.read(regex) instanceof PatternRead.Read read)) {
                 continue;
             }
-            Recognizer meant = Recognizer.of(read.meaning(), plenty());
+            Automaton meant = Automaton.of(read.meaning(), plenty());
             StringPattern deterministic =
                     StringPattern.of(PatternImage.deterministic(read.meaning(), plenty()));
             StringPattern shaped = StringPattern.of(PatternImage.shaped(read.meaning(), plenty()));
             asked++;
             for (String value : STRINGS) {
-                boolean mine = meant.accepts(value, plenty()).orElseThrow();
+                boolean mine = meant.accepts(value, plenty());
                 if (deterministic.matches(value) != mine) {
                     apart.add(regex + " over " + shown(value) + ": the meaning says " + mine
                             + ", the deterministic machine does not");
@@ -128,7 +128,7 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         String half = String.valueOf((char) 0xD800);
         PatternMeaning any = ((PatternRead.Read) PatternParser.read("[\\x{0}-\\x{10FFFF}]*"))
                 .meaning();
-        assertFalse(Recognizer.of(any, plenty()).accepts(half, plenty()).orElseThrow());
+        assertFalse(Automaton.of(any, plenty()).accepts(half, plenty()));
         assertFalse(StringPattern.of(PatternImage.deterministic(any, plenty())).matches(half));
         assertFalse(StringPattern.of(PatternImage.shaped(any, plenty())).matches(half));
     }
@@ -143,11 +143,10 @@ class WhatARunWalksIsWhatThePatternMeansTest {
     @Test
     void aPatternTooLargeToMakeDeterministicIsRunAsItsShape() {
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(".*a.{20}")).meaning();
-        assertEquals(null, PatternImage.deterministic(meaning,
-                PatternPlan.Budget.OF_A_DETERMINISTIC_RUN.meter()));
+        assertEquals(null, PatternImage.deterministic(meaning, PatternImage.deterministicRun()));
         PatternImage.Written image = assertInstanceOf(PatternImage.Written.class,
                 PatternImage.of(meaning));
-        assertEquals(image.strings(), PatternImage.shaped(meaning, PatternPlan.Budget.OF_A_RUN.meter()));
+        assertEquals(image.strings(), PatternImage.shaped(meaning, PatternImage.run()));
 
         StringPattern run = StringPattern.of(image.strings());
         assertTrue(run.matches("xa" + "b".repeat(20)));
@@ -186,7 +185,7 @@ class WhatARunWalksIsWhatThePatternMeansTest {
     @Test
     void aPatternWhoseShapeIsLargerThanAClassRunsHasNoImage() {
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read("(a{1000}){1000}")).meaning();
-        assertEquals(new PatternImage.MoreStates(PatternPlan.Budget.OF_A_RUN.mostStates()),
+        assertEquals(new PatternImage.MoreStates(PatternImage.MOST_STATES),
                 PatternImage.of(meaning));
     }
 

@@ -5,13 +5,11 @@ import java.util.Set;
 /**
  * The characters a backslash before which the pattern language keeps for an escape: the letters and
  * the decimal digits, General_Category {@code L} and {@code Nd}, against the Unicode version the
- * data names (spec §string-patterns).
+ * data names.
  *
- * <p>What a pattern is is part of what a compiled module promises, since a published helper's body
- * travels as source and is read again by the importing compiler. Asked of the running JDK, the
- * answer would move with whatever Unicode version that JDK carries, and a body one compiler read
- * another would refuse. The version is the one the language fixes for what a {@code String} holds,
- * because the characters of a pattern are the scalar values of a {@code String}.
+ * <p>Asked of the running JDK, the answer would move with whatever Unicode version that JDK
+ * carries, and a pattern one reader read another would refuse. The version is the one every rule
+ * here is pinned to, because the characters of a pattern are the scalar values of text.
  */
 final class PatternAlphabet {
 

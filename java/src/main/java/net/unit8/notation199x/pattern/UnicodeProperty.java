@@ -16,9 +16,9 @@ import java.util.Set;
  * the data names.
  *
  * <p>The language owns every character property it is defined by rather than asking the running
- * JDK. {@code Character.isLetter} and its kin answer against whatever Unicode version the JDK a
- * compile happens to run on carries, so a rule written with them moves when the JDK does, and a
- * body one compiler admitted another refuses. What is read here is the database's own text, an
+ * JDK. {@code Character.isLetter} and its kin answer against whatever Unicode version the running
+ * JDK carries, so a rule written with them moves when the JDK does, and a pattern one reader
+ * admitted another refuses. What is read here is the database's own text, an
  * excerpt of one of its property files carried as a resource: the lines of the values the language
  * needs, under the file's own header, whose first line names the version ({@code #
  * DerivedGeneralCategory-18.0.0.txt}). Moving to a later version is replacing that excerpt, which
@@ -27,7 +27,7 @@ import java.util.Set;
  * <p>The format is the one the database's derived property files share: a code point or a range
  * {@code 0041..005A}, a semicolon, the value, and a comment.
  */
-public final class UnicodeProperty {
+final class UnicodeProperty {
 
     /** The first 128 code points, answered without a search: most text is ASCII. */
     private static final int ASCII = 128;
@@ -54,7 +54,7 @@ public final class UnicodeProperty {
      *                holding more than it was cut to hold is found where it is read
      * @param taken   the values whose code points make this set
      */
-    public static UnicodeProperty read(Class<?> owner, String resource, String file,
+    static UnicodeProperty read(Class<?> owner, String resource, String file,
                                        Set<String> written, Set<String> taken) {
         if (!written.containsAll(taken)) {
             throw new IllegalArgumentException("a value is taken that the excerpt does not hold: "
@@ -104,17 +104,17 @@ public final class UnicodeProperty {
 
     /** The Unicode version the set is read against, taken from the excerpt's own first line so
      *  that the data and the version it is called cannot come apart. */
-    public String unicodeVersion() {
+    String unicodeVersion() {
         return unicodeVersion;
     }
 
     /** Whether {@code codePoint} is in the set. */
-    public boolean has(int codePoint) {
+    boolean has(int codePoint) {
         return (codePoint >= 0 && codePoint < ASCII) ? ascii[codePoint] : search(codePoint);
     }
 
     /** The set as sorted, non-overlapping {@code [from, to]} pairs, flattened. */
-    public int[] ranges() {
+    int[] ranges() {
         return ranges.clone();
     }
 

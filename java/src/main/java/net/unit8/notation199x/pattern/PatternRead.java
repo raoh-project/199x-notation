@@ -5,8 +5,8 @@ package net.unit8.notation199x.pattern;
  *
  * <p>Three answers, and they are about three different things. {@link Read} is a pattern of the
  * language, as what it means. {@link Refused} is text that is no pattern of the language, and says
- * what in it is not. {@link TooDeep} is a pattern the language has and this compiler does not read,
- * which is a limit of the compiler: an author told that their pattern is not in the language would
+ * what in it is not. {@link TooDeep} is a pattern the language has and this reader does not read,
+ * which is a limit of the reader: an author told that their pattern is not in the language would
  * go looking for a construct when every construct in it is one the language has.
  *
  * <p>A pattern read in part is not an answer: a tree of the constructs that were understood accepts
@@ -43,11 +43,11 @@ public sealed interface PatternRead {
     }
 
     /**
-     * A pattern written more deeply than this compiler reads.
+     * A pattern written more deeply than this reader reads.
      *
      * <p>Not a refusal: the language has no depth past which a pattern stops being one. Every part
-     * that works a pattern out — the reader, the machines built from it, what an output lowers it to —
-     * walks it by its depth, and this is where the compiler says how deep it will go.
+     * that works a pattern out — the reader, the machines built from it, what a caller lowers it to —
+     * walks it by its depth, and this is where the reader says how deep it will go.
      *
      * @param deepest how deep a pattern may be written
      */
@@ -58,8 +58,8 @@ public sealed interface PatternRead {
      *
      * <p>Told apart by what an author wrote. The first group is text that is no pattern at all —
      * something left open, a count or an escape with no meaning. The rest is text that would be a
-     * pattern in some other language and is not one in this, each for a reason of its own (spec
-     * §string-patterns): a back reference can denote a set no regular language is, a possessive
+     * pattern in some other language and is not one in this, each for a reason of its own: a back
+     * reference can denote a set no regular language is, a possessive
      * count's strings follow from how a matcher walks, a flag would change what a class means for
      * the rest of the pattern, and the others have no spelling in the grammar. Not "denotes no set
      * of strings": a lookahead often denotes one, and a regular one at that.
@@ -78,11 +78,11 @@ public sealed interface PatternRead {
         AN_ESCAPE_THIS_DOES_NOT_READ,
 
         /**
-         * An escape writing half of a surrogate pair — {@code \\uD800} on its own,
-         * {@code \x{DC00}}.
+         * Half of a surrogate pair — written by its number, {@code \\uD800} on its own or
+         * {@code \x{DC00}}, or held as itself by the text of the pattern.
          *
-         * <p>No {@code String} holds such a character, so a pattern naming one says something about
-         * text that never arrives.
+         * <p>No text holds such a character, so a pattern naming one says something about text that
+         * never arrives.
          */
         A_CHARACTER_NO_STRING_HOLDS,
 

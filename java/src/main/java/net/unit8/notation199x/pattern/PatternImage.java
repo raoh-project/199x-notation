@@ -5,41 +5,70 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The machine a class runs for a pattern, as the image a class holds, or why there is none.
+ * The machine that is run for a pattern, as the image a {@link StringPattern} is read from, or why
+ * there is none.
  *
- * <p>The one place a pattern becomes what a run executes. Every backend consumer — a
- * {@code String.matches} call, a decoder's format constraint — asks here, so which machine a class
- * runs and how it is written are decided once.
+ * <p>The one place a pattern becomes what a run executes, so which machine is run and how it is
+ * written are decided once.
  *
- * <p>The deterministic machine where making it stays within
- * {@link PatternPlan.Budget#OF_A_DETERMINISTIC_RUN} — its states and the work of making them — and
- * its image within {@link #MOST_CHARACTERS}; otherwise the machine the pattern's shape builds,
- * steps for nothing and all. Both accept the same strings, so which one a class holds decides how
- * fast a run is and nothing about its answer. Only the shape's machine can refuse a pattern: past
- * {@link PatternPlan.Budget#OF_A_RUN}, or past the characters a class is given for one image, there
- * is no machine this backend writes.
+ * <p>The deterministic machine where making it stays within {@link #deterministicRun} — its states
+ * and the work of making them — and its image within {@link #MOST_CHARACTERS}; otherwise the
+ * machine the pattern's shape builds, steps for nothing and all. Both accept the same strings, so
+ * which one is held decides how fast a run is and nothing about its answer. Only the shape's
+ * machine can refuse a pattern: past {@link #run}, or past the characters one image is given,
+ * there is no machine written.
+ *
+ * <p>The limits here are of what is run and of nothing else. What a caller is willing to spend
+ * answering questions about patterns before any text arrives is the caller's, and is a
+ * {@link Meter} of its own.
  */
 public sealed interface PatternImage {
+
+    /** The most states the machine a pattern is run as may have. */
+    int MOST_STATES = 250_000;
+
+    /**
+     * What the machine that is run for a pattern may be, built from the pattern's shape.
+     *
+     * <p>Past it the pattern is refused as larger than is written. One machine and nothing thrown
+     * away, so what it may have and what may be built are the same number.
+     */
+    static Meter run() {
+        return new Meter(MOST_STATES, MOST_STATES, 50_000_000);
+    }
+
+    /**
+     * What making the machine that is run deterministic is allowed to cost.
+     *
+     * <p>Apart from {@link #run}, because running out of it refuses nothing: the machine the shape
+     * built is run instead, which answers the same and walks more states a character. So this is
+     * what a faster run is worth, and a pattern whose deterministic machine is large is not larger
+     * for it than one whose machine is small.
+     */
+    static Meter deterministicRun() {
+        return new Meter(10_000, 20_000, 5_000_000);
+    }
 
     /**
      * The most characters one pattern's image may take.
      *
-     * <p>What a class is given for it, and not a limit of the class file's: the image is cut into
-     * strings each a class holds ({@link StringPattern#CHUNK}), and this keeps the number of those
-     * small beside the constants the rest of the class refers to.
-     *
-     * <p>Above what the largest machine {@link PatternPlan.Budget#OF_A_RUN} lets the shape build
-     * takes where its steps are over sets a pattern writes once — a repetition written out, which is
-     * what makes a shape large. So what this refuses is a pattern whose sets are themselves large,
-     * and never one the state limit already let through for its size alone.
+     * <p>Above what the largest machine {@link #run} lets the shape build takes where its steps are
+     * over sets a pattern writes once — a repetition written out, which is what makes a shape
+     * large. So what this refuses is a pattern whose sets are themselves large, and never one the
+     * state limit already let through for its size alone.
      */
     int MOST_CHARACTERS = 1 << 23;
 
-    /** The image, as the strings the class holds it in. */
+    /** The image, as the strings it is cut into ({@link StringPattern#CHUNK}). */
     record Written(List<String> strings) implements PatternImage {
 
         public Written {
             strings = List.copyOf(strings);
+        }
+
+        /** The pattern the image writes, as what text is matched against. */
+        public StringPattern pattern() {
+            return StringPattern.of(strings);
         }
     }
 
@@ -49,16 +78,16 @@ public sealed interface PatternImage {
     /** The machine the shape builds is written in more characters than {@code most}. */
     record MoreCharacters(int most) implements PatternImage {}
 
-    /** What a class runs for {@code meaning}. */
+    /** What is run for {@code meaning}. */
     static PatternImage of(PatternMeaning meaning) {
-        Automaton shaped = Automaton.of(meaning, PatternPlan.Budget.OF_A_RUN.meter());
+        Automaton shaped = Automaton.of(meaning, run());
         if (shaped == null) {
-            return new MoreStates(PatternPlan.Budget.OF_A_RUN.mostStates());
+            return new MoreStates(MOST_STATES);
         }
         // Trying costs what the meter counts — the rows, as wide as the symbols the shape tells
         // apart and as deep as the subsets they are worked out from — and stops where that runs
         // out, so a shape nothing deterministic is worth making is given up on early.
-        Automaton one = shaped.canonical(PatternPlan.Budget.OF_A_DETERMINISTIC_RUN.meter());
+        Automaton one = shaped.canonical(deterministicRun());
         List<String> image = one == null ? null : written(one, true);
         if (image == null) {
             image = written(shaped, false);

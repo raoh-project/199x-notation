@@ -22,9 +22,10 @@ issues.
 - Unicode 18.0.0 normalization: NFC, NFD, NFKC and NFKD.
 - The `White_Space` set, as of Unicode 18.0.0.
 - Order and length of text counted in Unicode scalar values.
-- The lexical grammar of dates, times and instants.
+- The lexical grammar of dates, times, date-times, date-times with an offset, and instants.
 - The pattern language: reading a pattern, refusing what is not one, and matching in time linear in
-  the input.
+  the input. With it, the machine a pattern means and the operations on such machines, which is
+  what a match is built from.
 
 The normative definitions are in the
 [Raoh Specification](https://github.com/raoh-project/raoh-specification) and the
@@ -36,6 +37,16 @@ This repository implements them and defines nothing of its own.
 Anything that knows about decoders, issues, paths, or a Souther value. An implementation here takes
 text and answers a question about it. It depends on neither Raoh nor Souther, so that Souther's
 runtime can use it without depending on a decoder library.
+
+What a caller asks about the patterns it holds, and how much it is willing to spend on an answer,
+is the caller's. The operations on machines take their limits as an argument; the only limits
+stated here are those of the machine a pattern is run as. Souther's compiler keeps its own analysis
+of patterns and its budgets for it.
+
+Every rule is stated of text that is a sequence of Unicode scalar values. Where a language's string
+can hold something else, as a Java `String` can hold half of a surrogate pair, the implementation
+has the question a caller asks before it takes text in, and a reader of untrusted text refuses it
+rather than failing.
 
 ## Layout
 
@@ -64,6 +75,9 @@ The Java tests read `ucd/`, so they run in `java/`:
 ```sh
 cd java && mvn test
 ```
+
+CI checks the files in `ucd/` against their checksums, runs the generators and fails if the
+checked-in tables differ, and runs the tests.
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
 `notation199x`.

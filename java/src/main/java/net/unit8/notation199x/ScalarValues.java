@@ -7,11 +7,29 @@ package net.unit8.notation199x;
  * would be counting UTF-16 code units, which is what a JVM string holds and not what the text is
  * made of.
  *
- * <p>Of text that is a sequence of scalar values; nothing here asks whether it is.
+ * <p>Every rule in this library is stated of text that is a sequence of scalar values. A
+ * {@code java.lang.String} can hold half of a surrogate pair, which is not one, and
+ * {@link #halfAPairAt} is how a caller asks before it takes text in. {@link #count} and
+ * {@link #compare} do not ask.
  */
 public final class ScalarValues {
 
     private ScalarValues() {}
+
+    /** Where {@code text} holds a surrogate that is not one half of a pair beside the other, or -1
+     *  where it holds none and so is a sequence of scalar values. */
+    public static int halfAPairAt(String text) {
+        for (int at = 0; at < text.length(); at++) {
+            char unit = text.charAt(at);
+            if (Character.isHighSurrogate(unit) && at + 1 < text.length()
+                    && Character.isLowSurrogate(text.charAt(at + 1))) {
+                at++;
+            } else if (Character.isSurrogate(unit)) {
+                return at;
+            }
+        }
+        return -1;
+    }
 
     /** How many scalar values {@code text} is made of. */
     public static long count(String text) {

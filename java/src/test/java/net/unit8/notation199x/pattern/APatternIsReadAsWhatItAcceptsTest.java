@@ -26,8 +26,8 @@ class APatternIsReadAsWhatItAcceptsTest {
     }
 
     /** The strings {@code regex} accepts, which is where an anchor's answer shows. */
-    private static Language accepted(String regex) {
-        return PatternPlan.of(read(regex)).compile(PatternPlan.Budget.OF_ADMITTED_VALUES.meter());
+    private static Held accepted(String regex) {
+        return Held.by(regex);
     }
 
     private static PatternRead.Refused refusal(String regex) {

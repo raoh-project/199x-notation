@@ -43,7 +43,7 @@ final class Anchors {
                 // anything that must take a symbol before it leaves no string at all. A {@code $}
                 // with something after it that must take a symbol is refused rather than read the
                 // same way: the language keeps the set of patterns it reads, and that set has no
-                // pattern of this shape (spec §string-patterns).
+                // pattern of this shape.
                 case NO -> it.end() ? null : new PatternMeaning.Never();
                 case UNSETTLED -> null;
             };

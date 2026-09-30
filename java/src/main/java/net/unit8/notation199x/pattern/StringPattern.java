@@ -2,7 +2,6 @@ package net.unit8.notation199x.pattern;
 
 import org.jspecify.annotations.Nullable;
 
-import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -10,22 +9,22 @@ import java.util.Map;
 import java.util.function.Predicate;
 
 /**
- * The strings a pattern of the language accepts, as a machine a run walks. Backs
- * {@code String.matches} and a decoder's format constraint.
+ * The strings a pattern of the language accepts, as a machine a run walks: what text is matched
+ * against.
  *
- * <p>No pattern text is here and none is read. The compiler reads a pattern, builds the machine it
- * means, and writes the machine into the class as an image ({@link Writer}); what a class loads is
- * that image, through {@link #read}. So nothing at run time decides what a pattern means, and no
- * engine's way of finding a match is involved in the answer.
+ * <p>No pattern text is here and none is read. {@link PatternParser} reads a pattern,
+ * {@link PatternImage} builds the machine it means and writes it as an image ({@link Writer}), and
+ * what is run is read from that image ({@link #of}). So nothing in a match decides what a pattern
+ * means, and no engine's way of finding a match is involved in the answer.
  *
  * <p>A walk reads each character of the subject once, holds no stack and never goes back. Where the
  * machine is deterministic a character is one lookup; where it is not, a character moves each state
- * the walk is in, and a state is in the walk at most once. Which of the two an image holds is the
- * compiler's choice and changes no answer: a pattern whose deterministic machine is too large to
+ * the walk is in, and a state is in the walk at most once. Which of the two an image holds is
+ * {@link PatternImage}'s choice and changes no answer: a pattern whose deterministic machine is too large to
  * write is written as the machine its shape builds, which is never larger than the pattern's
  * repetitions written out.
  *
- * <p>A symbol is a scalar value. Text holding half a surrogate pair is no {@code String}, and no set
+ * <p>A symbol is a scalar value. Text holding half a surrogate pair is no text, and no set
  * in an image holds a surrogate, so such text is accepted by nothing.
  */
 public final class StringPattern implements Predicate<String> {
@@ -33,9 +32,10 @@ public final class StringPattern implements Predicate<String> {
     /**
      * The most characters one string of an image holds.
      *
-     * <p>A string of an image is a constant of the class it is written into, and a class file holds a
-     * constant string in at most this many bytes (JVMS 4.4.7). An image is written in ASCII, which
-     * is one byte a character.
+     * <p>An image is cut so that each string of it can be a constant of a class file, which holds a
+     * constant string in at most this many bytes (JVMS 4.4.7): a caller that writes an image into a
+     * class it generates writes each string as it is. An image is written in ASCII, which is one
+     * byte a character.
      */
     public static final int CHUNK = 65_535;
 
@@ -68,8 +68,8 @@ public final class StringPattern implements Predicate<String> {
      * The most entries an {@link Ascii} table holds. A deterministic machine whose table would be
      * larger walks every character by its runs.
      *
-     * <p>The table is held for as long as the class holding the pattern, beside the image it was
-     * read from. The machines an invariant writes take a few hundred entries.
+     * <p>The table is held for as long as the pattern is. The machines of the formats people write
+     * take a few hundred entries.
      */
     private static final int MOST_ASCII_ENTRIES = 1 << 16;
 
@@ -157,17 +157,6 @@ public final class StringPattern implements Predicate<String> {
     @Override
     public boolean test(String value) {
         return matches(value);
-    }
-
-    /**
-     * The pattern an image writes, for a class loading the constant it was written as.
-     *
-     * <p>The bootstrap of that constant. The class holds the image as the strings it was cut into,
-     * and the JVM resolves the constant once and answers from its pool afterwards.
-     */
-    public static StringPattern read(MethodHandles.Lookup lookup, String name, Class<?> type,
-                                     String... image) {
-        return of(List.of(image));
     }
 
     /** The pattern {@code image} writes. */
@@ -405,10 +394,10 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * An image being written, by a compiler holding a machine.
+     * An image being written, by whoever holds a machine.
      *
-     * <p>Here beside the reader, so the one format has one owner: a writer in the compiler and a
-     * reader here would be two accounts of it, and nothing would hold them to each other.
+     * <p>Here beside the reader, so the one format has one owner: a writer elsewhere and a reader
+     * here would be two accounts of it, and nothing would hold them to each other.
      *
      * <p>A set is written once however many steps are over it. The machine a pattern's shape builds
      * writes a repetition out as copies, and each copy steps over the same set, so a class written
@@ -514,7 +503,7 @@ public final class StringPattern implements Predicate<String> {
             characters += written(to) + grown(out.size());
         }
 
-        /** The image, cut into strings a class can hold ({@link #CHUNK}). Asked of a writer that
+        /** The image, cut into strings of at most {@link #CHUNK} characters. Asked of a writer that
          *  {@link #holds}. */
         public List<String> image() {
             if (!holds()) {
