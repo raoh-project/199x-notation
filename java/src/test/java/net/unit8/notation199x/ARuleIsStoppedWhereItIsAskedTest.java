@@ -1,0 +1,227 @@
+package net.unit8.notation199x;
+
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import net.unit8.notation199x.Normalization.Form;
+
+/**
+ * A normalization and a case conversion run with a {@link Checkpoint} answer what they answer
+ * without one, and stop wherever the checkpoint says to, with an answer that says so.
+ *
+ * <p>The texts that matter are the ones where one code point of the text makes the rule look at as
+ * many others as the text has: a combining run held until the starter after it, and the marks after
+ * a sigma that decide whether it is final. Asking once a code point read would let either run as
+ * long as the text without asking, so these hold that the rule asks while it looks, too.
+ */
+class ARuleIsStoppedWhereItIsAskedTest {
+
+    /** A checkpoint that counts the asks and says not to go on at the {@code stopAt}th. */
+    private static final class Counting implements Checkpoint {
+
+        private final long stopAt;
+        long asked;
+
+        Counting(long stopAt) {
+            this.stopAt = stopAt;
+        }
+
+        static Counting never() {
+            return new Counting(Long.MAX_VALUE);
+        }
+
+        @Override
+        public boolean proceed() {
+            return ++asked < stopAt;
+        }
+    }
+
+    private static final int MANY = 100_000;
+
+    /** A starter, a long run of marks of two classes, and the starter that ends the run. */
+    private static final String LONG_RUN = "a" + "̖́".repeat(MANY / 2) + "b";
+
+    /** A final-looking sigma, followed by as many {@code Case_Ignorable} marks as there are before
+     *  the cased letter that decides it is not final. */
+    private static final String LONG_LOOK = "AΣ" + "́".repeat(MANY) + "A";
+
+    @Test
+    void aNormalizationAsksWhileItSettlesARunAndNotOnlyAsItReads() {
+        for (Form form : Form.values()) {
+            Counting all = Counting.never();
+            Outcome<String> whole = Normalization.normalizeWithin(form, LONG_RUN, Long.MAX_VALUE, all);
+            assertEquals(new Outcome.Answered<>(Normalization.normalize(form, LONG_RUN)), whole);
+            long read = LONG_RUN.codePointCount(0, LONG_RUN.length());
+            assertTrue(all.asked >= read + MANY,
+                    form + " asked " + all.asked + " times over " + read + " code points");
+            // The last code point is asked about before it is read, and the run is settled after.
+            for (long at : new long[] {1, read / 2, read, read + 1, all.asked}) {
+                assertInstanceOf(Outcome.Stopped.class,
+                        Normalization.normalizeWithin(form, LONG_RUN, Long.MAX_VALUE, new Counting(at)),
+                        form + " stopped at ask " + at);
+            }
+        }
+    }
+
+    @Test
+    void aLowercaseAsksWhileItLooksPastASigma() {
+        Counting all = Counting.never();
+        Outcome<String> whole = CaseConversion.lowercaseWithin(LONG_LOOK, Long.MAX_VALUE, all);
+        assertEquals(new Outcome.Answered<>(CaseConversion.lowercase(LONG_LOOK)), whole);
+        long read = LONG_LOOK.codePointCount(0, LONG_LOOK.length());
+        assertTrue(all.asked >= read + MANY, "asked " + all.asked + " times over " + read + " code points");
+        for (long at : new long[] {1, 3, MANY / 2, all.asked}) {
+            assertInstanceOf(Outcome.Stopped.class,
+                    CaseConversion.lowercaseWithin(LONG_LOOK, Long.MAX_VALUE, new Counting(at)),
+                    "stopped at ask " + at);
+        }
+    }
+
+    @Test
+    void anUppercaseIsStoppedPartOfTheWayThroughALongText() {
+        String text = "straße".repeat(MANY);
+        Counting all = Counting.never();
+        assertEquals(new Outcome.Answered<>(CaseConversion.uppercase(text)),
+                CaseConversion.uppercaseWithin(text, Long.MAX_VALUE, all));
+        assertEquals(text.length() + 1, all.asked, "once a code point, and before the answer is made a string");
+        assertInstanceOf(Outcome.Stopped.class,
+                CaseConversion.uppercaseWithin(text, Long.MAX_VALUE, new Counting(all.asked / 2)));
+    }
+
+    /**
+     * A rule stopped at its first ask has made nothing as long as the text: room for the answer is
+     * made as the answer is written, and not all at once from the length of what was handed in.
+     */
+    @Test
+    void aStopAtTheFirstAskHasMadeNothingAsLongAsTheText() {
+        String text = "a".repeat(10_000_000);
+        for (Form form : Form.values()) {
+            long made = allocatedBy(() -> assertInstanceOf(Outcome.Stopped.class,
+                    Normalization.normalizeWithin(form, text, Long.MAX_VALUE, new Counting(1))));
+            assertTrue(made < 1_000_000, form + " made " + made + " bytes");
+        }
+        long lower = allocatedBy(() -> assertInstanceOf(Outcome.Stopped.class,
+                CaseConversion.lowercaseWithin(text, Long.MAX_VALUE, new Counting(1))));
+        assertTrue(lower < 1_000_000, "lowercase made " + lower + " bytes");
+        long upper = allocatedBy(() -> assertInstanceOf(Outcome.Stopped.class,
+                CaseConversion.uppercaseWithin(text, Long.MAX_VALUE, new Counting(1))));
+        assertTrue(upper < 1_000_000, "uppercase made " + upper + " bytes");
+    }
+
+    /** The bytes the current thread allocates while {@code work} runs. */
+    static long allocatedBy(Runnable work) {
+        com.sun.management.ThreadMXBean threads =
+                (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
+        long before = threads.getCurrentThreadAllocatedBytes();
+        work.run();
+        return threads.getCurrentThreadAllocatedBytes() - before;
+    }
+
+    /** An answer past the bound is an answer, and is not what a stop answers. */
+    @Test
+    void anAnswerPastTheBoundIsNotAStop() {
+        assertEquals(new Outcome.Answered<String>(null),
+                Normalization.normalizeWithin(Form.NFD, "é", 1, Counting.never()));
+        assertEquals(new Outcome.Answered<String>(null),
+                CaseConversion.uppercaseWithin("ß", 1, Counting.never()));
+        assertEquals(new Outcome.Answered<String>(null),
+                CaseConversion.lowercaseWithin("", -1, Counting.never()));
+        // A text past the bound is found to be before the end of it, and asked no further.
+        Counting some = Counting.never();
+        assertEquals(new Outcome.Answered<String>(null),
+                CaseConversion.uppercaseWithin("ß".repeat(MANY), 10, some));
+        assertEquals(6, some.asked);
+    }
+
+    @Test
+    void whatACheckpointThrowsComesOutAsItIs() {
+        RuntimeException thrown = new IllegalStateException("the caller's");
+        Checkpoint throwing = () -> {
+            throw thrown;
+        };
+        assertSame(thrown, assertThrows(IllegalStateException.class,
+                () -> Normalization.normalizeWithin(Form.NFC, "abc", 10, throwing)));
+        assertSame(thrown, assertThrows(IllegalStateException.class,
+                () -> CaseConversion.lowercaseWithin("abc", 10, throwing)));
+    }
+
+    /** A rule run inside another's checkpoint, and stopped, stops only itself. */
+    @Test
+    void aRuleStoppedInsideAnothersCheckpointStopsOnlyItself() {
+        Checkpoint asking = () -> {
+            assertInstanceOf(Outcome.Stopped.class,
+                    CaseConversion.lowercaseWithin("ABC", 10, new Counting(1)));
+            return true;
+        };
+        assertEquals(new Outcome.Answered<>("abc"), CaseConversion.lowercaseWithin("ABC", 10, asking));
+    }
+
+    /** Every line of the conformance test, each form of each column, answers as it does without a
+     *  checkpoint. */
+    @Test
+    void aNormalizationThatGoesOnAnswersAsWithoutACheckpoint() throws IOException {
+        List<String> failed = new ArrayList<>();
+        int checked = 0;
+        for (String line : Files.readAllLines(Ucd.file("NormalizationTest.txt"), StandardCharsets.UTF_8)) {
+            String data = line.replaceFirst("#.*", "").trim();
+            if (data.isEmpty() || data.startsWith("@")) {
+                continue;
+            }
+            String[] columns = data.split(";", -1);
+            for (int i = 0; i < 5; i++) {
+                String text = decode(columns[i]);
+                for (Form form : Form.values()) {
+                    for (long longest : new long[] {Long.MAX_VALUE, 1}) {
+                        checked++;
+                        Outcome<String> answered = Normalization.normalizeWithin(form, text, longest, Counting.never());
+                        Outcome<String> expected = new Outcome.Answered<>(Normalization.normalizeWithin(form, text, longest));
+                        if (!expected.equals(answered)) {
+                            failed.add(form + " " + columns[i] + " within " + longest);
+                        }
+                    }
+                }
+            }
+        }
+        assertTrue(checked > 100_000, "the file's data lines were read: " + checked);
+        assertEquals(List.of(), failed.subList(0, Math.min(20, failed.size())));
+    }
+
+    /** Every code point alone, and texts whose mapping turns on what is around it, answer as they do
+     *  without a checkpoint. */
+    @Test
+    void aCaseConversionThatGoesOnAnswersAsWithoutACheckpoint() {
+        List<String> texts = new ArrayList<>(List.of(
+                "", "abc", "straße", "İstanbul", "ΟΣ ΟΣΑ Ο'Σ", "ΟΣ'Α", "ﬃ", "𐐀𐐨", "ŉ", "ΐ", "Σ",
+                "\uD800", "Σ\uDC00", "A\uD800Σ"));
+        for (int cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
+            texts.add(Character.toString(cp));
+        }
+        for (String text : texts) {
+            for (long longest : new long[] {Long.MAX_VALUE, 2}) {
+                assertEquals(new Outcome.Answered<>(CaseConversion.lowercaseWithin(text, longest)),
+                        CaseConversion.lowercaseWithin(text, longest, Counting.never()), text);
+                assertEquals(new Outcome.Answered<>(CaseConversion.uppercaseWithin(text, longest)),
+                        CaseConversion.uppercaseWithin(text, longest, Counting.never()), text);
+            }
+        }
+    }
+
+    private static String decode(String column) {
+        StringBuilder out = new StringBuilder();
+        for (String hex : column.trim().split(" +")) {
+            out.appendCodePoint(Integer.parseInt(hex, 16));
+        }
+        return out.toString();
+    }
+}
