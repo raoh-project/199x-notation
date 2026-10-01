@@ -80,7 +80,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             int ascii = random.nextInt(120);
             sets.add(new int[] {ascii, ascii + random.nextInt(8)});
         }
-        SymbolClasses classes = SymbolClasses.of(sets, new Meter(1, 1, 5_000_000).making());
+        SymbolClasses classes = classes(sets, new Meter(1, 1, 5_000_000).making());
         for (int trial = 0; trial < 500; trial++) {
             List<Integer> chosen = new ArrayList<>();
             for (int each = 0; each < 1 + random.nextInt(8); each++) {
@@ -114,6 +114,10 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         String subject = "abcあいう😀😀xyz".repeat(20) + ",123";
         int characters = subject.codePointCount(0, subject.length());
         for (StringPattern run : everyWay(deterministic, true)) {
+            if (run.way() == StringPattern.Way.SETS_KEPT || run.way() == StringPattern.Way.EVERY_STATE) {
+                // Walked as sets of states, which asks as such a walk does.
+                continue;
+            }
             long[] asked = {0};
             assertEquals(new net.unit8.notation199x.Outcome.Answered<>(true),
                     run.matches(subject, () -> ++asked[0] > 0), run.way().toString());
@@ -130,10 +134,10 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> given.keeping(StringPattern.Budget.MOST_SUBSETS + 1));
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
-                () -> new StringPattern.Budget(-1, 0, 0, 0, 0));
+                () -> new StringPattern.Budget(-1, 0, 0, 0, 0, 0));
         assertEquals(StringPattern.Way.EVERY_STATE, StringPattern.of(Automaton.of(
                 ((PatternRead.Read) PatternParser.read("a*")).meaning(), Held.roomy()), false,
-                new StringPattern.Budget(0, 0, 0, 0, 0)).way());
+                new StringPattern.Budget(0, 0, 0, 0, 0, 0)).way());
     }
 
     /** {@code machine} run each way a walk may go over it, as budgets that run out where each does
@@ -144,19 +148,26 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         if (deterministic) {
             out.add(way(StringPattern.Way.TABLE, machine, true, given));
             StringPattern.Budget noTable = new StringPattern.Budget(given.classWork(), 0,
-                    given.asciiEntries(), given.subsets(), given.remembered());
+                    given.asciiEntries(), given.runs(), given.subsets(), given.remembered());
             out.add(way(StringPattern.Way.ASCII_AND_RUNS, machine, true, noTable));
             out.add(way(StringPattern.Way.RUNS, machine, true, new StringPattern.Budget(
-                    given.classWork(), 0, 0, given.subsets(), given.remembered())));
+                    given.classWork(), 0, 0, given.runs(), given.subsets(), given.remembered())));
             out.add(way(StringPattern.Way.ASCII_AND_RUNS, machine, true, new StringPattern.Budget(
-                    0, given.tableEntries(), given.asciiEntries(), given.subsets(), given.remembered())));
+                    0, given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(),
+                    given.remembered())));
+            // Neither a table nor runs: walked as sets of states, and deterministic still.
+            out.add(way(StringPattern.Way.SETS_KEPT, machine, true, new StringPattern.Budget(
+                    given.classWork(), 0, given.asciiEntries(), 0, given.subsets(), given.remembered())));
+            out.add(way(StringPattern.Way.EVERY_STATE, machine, true, new StringPattern.Budget(
+                    0, given.tableEntries(), given.asciiEntries(), 0, given.subsets(), given.remembered())));
         } else {
             out.add(way(StringPattern.Way.SETS_KEPT, machine, false, given));
             out.add(way(StringPattern.Way.SETS_KEPT, machine, false, given.keeping(1)));
             out.add(way(StringPattern.Way.SETS_KEPT, machine, false, given.keeping(3)));
             out.add(way(StringPattern.Way.EVERY_STATE, machine, false, given.keeping(0)));
             out.add(way(StringPattern.Way.EVERY_STATE, machine, false, new StringPattern.Budget(
-                    0, given.tableEntries(), given.asciiEntries(), given.subsets(), given.remembered())));
+                    0, given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(),
+                    given.remembered())));
         }
         return out;
     }
@@ -178,7 +189,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
                 .shaped();
         StringPattern.Budget given = StringPattern.Budget.DEFAULT;
         StringPattern run = StringPattern.of(shaped, false, new StringPattern.Budget(given.classWork(),
-                given.tableEntries(), given.asciiEntries(), given.subsets(), 10));
+                given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(), 10));
         assertEquals(StringPattern.Way.EVERY_STATE, run.way());
         assertTrue(run.matches("a".repeat(50) + "b"));
         assertFalse(run.matches("a".repeat(51) + "b"));
@@ -202,8 +213,8 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             regex.append(String.format("[\\x{%X}-\\x{%X}]", from, to));
             text.append((char) (0x4E00 + sets));
         }
-        assertEquals(null, SymbolClasses.of(nested, new Meter(1, 1, 5_000_000).making()));
-        assertTrue(SymbolClasses.of(nested.subList(0, 100), new Meter(1, 1, 5_000_000).making()) != null);
+        assertEquals(null, SymbolPartition.of(nested, new Meter(1, 1, 5_000_000).making()));
+        assertTrue(classes(nested.subList(0, 100), new Meter(1, 1, 5_000_000).making()) != null);
 
         Automaton shaped = Automaton.of(((PatternRead.Read) PatternParser.read(regex.toString())).meaning(),
                 Held.roomy());
@@ -273,13 +284,22 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             }
             sets.add(pairs);
         }
-        SymbolClasses classes = SymbolClasses.of(sets, new Meter(1, 1, 5_000_000).making());
+        SymbolClasses classes = classes(sets, new Meter(1, 1, 5_000_000).making());
         for (int symbol = 0; symbol <= Character.MAX_CODE_POINT; symbol++) {
+            if (CodePoints.isSurrogate(symbol)) {
+                assertEquals(-1, classes.of(symbol), "U+" + Integer.toHexString(symbol));
+                continue;
+            }
             int some = classes.some(classes.of(symbol));
             for (int[] set : sets) {
                 assertEquals(holds(set, some), holds(set, symbol), "U+" + Integer.toHexString(symbol));
             }
         }
+    }
+
+    private static SymbolClasses classes(List<int[]> sets, Meter.Making making) {
+        SymbolPartition partition = SymbolPartition.of(sets, making);
+        return partition == null ? null : SymbolClasses.of(partition, making);
     }
 
     private static boolean holds(int[] pairs, int symbol) {

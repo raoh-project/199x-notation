@@ -30,12 +30,16 @@ import java.lang.invoke.VarHandle;
  *
  * <p>A walk reads each character of the subject once, holds no stack and never goes back. The
  * symbols are put into the classes the machine's steps tell apart ({@link SymbolClasses}), and a
- * character is looked up as its class. Where the machine is deterministic, a character is then one
- * more lookup, of where its class leads. Where it is not, the walk is in a set of states, and where
- * a class leads from a set is worked out the first time a walk needs it, by moving each state of
- * the set, a state being put in the set at most once; it is kept with the set, so a walk that comes
- * to it again looks it up as over a deterministic machine. The sets kept are bounded, and a walk
- * that would need one more goes on moving each state it is in for every character. Which machine is
+ * character is looked up as its class. Where the machine is deterministic and its table is within
+ * what a pattern may spend ({@link Budget}), a character is then one more lookup, of where its
+ * class leads; without the table, a search of the state's runs. Otherwise the walk is in a set of
+ * states, and where a class leads from a set is worked out the first time a walk needs it, by moving
+ * each state of the set, a state being put in the set at most once; it is kept with the set, so a
+ * walk that comes to it again looks it up as over a table. The sets kept are bounded, and a walk
+ * that would need one more goes on moving each state it is in for every character. Whether a
+ * machine is deterministic is the machine's, and is held to it whatever the budget; how it is
+ * walked is the budget's, and a deterministic machine past both its table and its runs is walked as
+ * sets of states as any other is. Which machine is
  * run is {@link PatternMachine}'s choice and changes no answer: a pattern whose deterministic machine
  * is too costly to make is run as the machine its shape builds, which has the states
  * {@link PatternStates} counts and no more.
@@ -70,6 +74,8 @@ public final class StringPattern implements Predicate<String> {
      */
     public static final int CHUNK = 65_535;
 
+    /** Whether a walk is only ever in one state: the machine was said to be, and was held to it
+     *  ({@link #oneWay}). How it is walked is the {@link Budget}'s, and this is not. */
     private final boolean deterministic;
 
     /** For each state, whether the walk may stop there. */
@@ -80,13 +86,18 @@ public final class StringPattern implements Predicate<String> {
     private final boolean[] live;
 
     /**
-     * For each state of a deterministic machine, its steps as runs sorted by where they begin:
-     * {@code from, to, target} for each. For a machine that is not deterministic, empty.
+     * For each state of a deterministic machine with no {@link #table}, its steps as runs sorted by
+     * where they begin: {@code from, to, target} for each. Null for any other, and where they would
+     * be more than the {@link Budget} allows.
+     *
+     * <p>As many as the runs of the sets each state steps over, every state over again: a set many
+     * states step over is held once in {@link #over} and once a state here. So they are made only
+     * where a walk goes this way, and counted before they are.
      */
-    private final int[][] runs;
+    private final int @Nullable [][] runs;
 
-    /** For each state of a machine that is not deterministic, the sets its steps are over, as
-     *  {@code from, to} pairs. */
+    /** For each state, the sets its steps are over, as {@code from, to} pairs: what a walk as sets
+     *  of states searches, and what every other way of walking is made from. */
     private final int[][][] over;
 
     /** Where each of those steps leads. */
@@ -108,12 +119,16 @@ public final class StringPattern implements Predicate<String> {
      *                     its states times its classes
      * @param asciiEntries the most entries a deterministic machine's {@link Ascii} table holds, as
      *                     many as its states times the kinds of ASCII character it tells apart
+     * @param runs         the most {@link #runs} a deterministic machine with no table holds, as many
+     *                     as the runs of the sets each of its states steps over; past them it is
+     *                     walked as sets of states, as a machine that is not deterministic is
      * @param subsets      the most sets of states a pattern keeps for its walks ({@link #remember})
      * @param remembered   the most states and steps those sets hold between them, each set's states
      *                     and one step for each class; each is an {@code int} or a reference, about
      *                     four bytes
      */
-    record Budget(long classWork, int tableEntries, int asciiEntries, int subsets, long remembered) {
+    record Budget(long classWork, int tableEntries, int asciiEntries, int runs, int subsets,
+                  long remembered) {
 
         /** The most sets a budget may keep: the places they are looked up in are four times as
          *  many, and are made with the pattern. */
@@ -121,7 +136,8 @@ public final class StringPattern implements Predicate<String> {
 
         /** Holds every part to being none or some, and the sets kept to what can be looked up. */
         Budget {
-            if (classWork < 0 || tableEntries < 0 || asciiEntries < 0 || subsets < 0 || remembered < 0) {
+            if (classWork < 0 || tableEntries < 0 || asciiEntries < 0 || runs < 0 || subsets < 0
+                    || remembered < 0) {
                 throw new IllegalArgumentException("a budget allows nothing or something of each part");
             }
             if (subsets > MOST_SUBSETS) {
@@ -131,14 +147,14 @@ public final class StringPattern implements Predicate<String> {
 
         /**
          * What a pattern is given. The tables are held for as long as the pattern is: the machines
-         * of the formats people write take a few hundred entries, and the sets kept come to at most
-         * about four megabytes.
+         * of the formats people write take a few hundred entries, the runs at most about twelve
+         * megabytes, and the sets kept at most about four.
          */
-        static final Budget DEFAULT = new Budget(5_000_000, 1 << 18, 1 << 16, 2048, 1 << 20);
+        static final Budget DEFAULT = new Budget(5_000_000, 1 << 18, 1 << 16, 1 << 20, 2048, 1 << 20);
 
         /** This, keeping at most {@code subsets} sets of states. */
         Budget keeping(int subsets) {
-            return new Budget(classWork, tableEntries, asciiEntries, subsets, remembered);
+            return new Budget(classWork, tableEntries, asciiEntries, runs, subsets, remembered);
         }
     }
 
@@ -164,8 +180,8 @@ public final class StringPattern implements Predicate<String> {
      * For each state of a deterministic machine and each class, at {@code state * classes + class},
      * where it leads, written as that state times the classes so that the next lookup needs no
      * multiplying, or -1 where it leads nowhere or to a state from which no walk is accepted. Null
-     * for a machine that is not deterministic, that has no {@link #classes}, or whose table is past
-     * the {@link Budget}.
+     * for a machine that is not deterministic, for one with no {@link #classes}, and for one whose
+     * table is past the {@link Budget}.
      */
     private final @Nullable Table table;
 
@@ -215,26 +231,43 @@ public final class StringPattern implements Predicate<String> {
      */
     private record Ascii(byte[] kind, int kinds, int[] steps) {}
 
-    /** The sets of states a walk over a machine that is not deterministic has been found to be in,
-     *  or null where the machine is deterministic, has no {@link #classes}, or its first set is past
-     *  the {@link Budget}. */
+    /** The sets of states a walk has been found to be in, for a machine walked as sets of states:
+     *  one that is not deterministic, or one that is and has neither a {@link #table} nor
+     *  {@link #runs}. Null for any other, where there are no {@link #classes}, or where the first set
+     *  is past the {@link Budget}. */
     private final @Nullable Subsets subsets;
 
-    private StringPattern(boolean deterministic, boolean[] accepting, int[][] runs,
-                          int[][][] over, int[][] target, int[][] free, Budget budget) {
-        this.deterministic = deterministic;
+    private StringPattern(boolean deterministic, boolean[] accepting, int[][][] over, int[][] target,
+                          int[][] free, Budget budget) {
         this.accepting = accepting;
-        this.runs = runs;
         this.over = over;
         this.target = target;
         this.free = free;
         this.live = live(accepting, target, free);
-        this.classes = budget.classWork() > 0
-                ? SymbolClasses.of(distinct(over), new Meter(1, 1, budget.classWork()).making())
-                : null;
-        this.table = deterministic && classes != null ? table(runs, live, classes, budget) : null;
-        this.ascii = deterministic && table == null ? ascii(runs, live, budget) : null;
-        this.subsets = !deterministic && classes != null && budget.subsets() > 0
+        // Worked out from this machine's own sets, so a machine has the same classes however it was
+        // come to.
+        List<int[]> sets = distinct(over);
+        SymbolPartition partition = null;
+        SymbolClasses classes = null;
+        if (budget.classWork() > 0) {
+            Meter.Making making = new Meter(1, 1, budget.classWork()).making();
+            partition = SymbolPartition.of(sets, making);
+            classes = partition == null ? null : SymbolClasses.of(partition, making);
+        }
+        // Held to what it says it is before anything is made of it, and whatever the budget: the
+        // budget decides how a machine is walked, and a deterministic machine with neither a table
+        // nor runs within it is walked as the sets of states its steps lead to.
+        if (deterministic) {
+            oneWay(over, sets);
+        }
+        this.deterministic = deterministic;
+        this.classes = classes;
+        this.table = deterministic && partition != null && classes != null
+                ? table(over, target, live, sets, partition, classes, budget) : null;
+        this.runs = deterministic && table == null && runs(over) <= budget.runs()
+                ? runs(over, target) : null;
+        this.ascii = runs != null ? ascii(runs, live, budget) : null;
+        this.subsets = table == null && runs == null && classes != null && budget.subsets() > 0
                 ? subsets(classes, budget) : null;
     }
 
@@ -243,7 +276,7 @@ public final class StringPattern implements Predicate<String> {
         if (table != null) {
             return Way.TABLE;
         }
-        if (deterministic) {
+        if (runs != null) {
             return ascii != null ? Way.ASCII_AND_RUNS : Way.RUNS;
         }
         return subsets != null ? Way.SETS_KEPT : Way.EVERY_STATE;
@@ -263,23 +296,159 @@ public final class StringPattern implements Predicate<String> {
         return out;
     }
 
-    /** The {@link #table} of a deterministic machine, or null where it would hold more than the
-     *  {@link Budget} allows. */
-    private static @Nullable Table table(int[][] runs, boolean[] live, SymbolClasses classes,
-                                         Budget budget) {
+    /**
+     * The {@link #table} of a deterministic machine, or null where it would hold more than the
+     * {@link Budget} allows.
+     *
+     * <p>Each step fills the classes its set holds, so a set is looked at as its classes and not as
+     * its runs, and a state's row is filled once each: the machine was held to stepping one way
+     * before this ({@link #oneWay}).
+     */
+    private static @Nullable Table table(int[][][] over, int[][] target, boolean[] live,
+                                         List<int[]> sets, SymbolPartition partition,
+                                         SymbolClasses classes, Budget budget) {
         int width = classes.count();
-        if ((long) runs.length * width > budget.tableEntries()) {
+        if ((long) over.length * width > budget.tableEntries()) {
             return null;
         }
-        // Each class is asked by one symbol of it, which every run holds as it holds the rest.
-        int[] steps = new int[runs.length * width];
-        for (int state = 0; state < runs.length; state++) {
-            for (int each = 0; each < width; each++) {
-                int to = next(runs[state], classes.some(each));
-                steps[state * width + each] = (to >= 0 && live[to]) ? to * width : -1;
+        Map<int[], Integer> index = new IdentityHashMap<>();
+        for (int at = 0; at < sets.size(); at++) {
+            index.put(sets.get(at), at);
+        }
+        int[] steps = new int[over.length * width];
+        Arrays.fill(steps, -1);
+        for (int state = 0; state < over.length; state++) {
+            for (int step = 0; step < over[state].length; step++) {
+                int to = target[state][step];
+                if (live[to]) {
+                    for (int each : partition.classesOf(indexOf(index, over[state][step]))) {
+                        steps[state * width + each] = to * width;
+                    }
+                }
             }
         }
-        return new Table(classes, steps, new SymbolClasses.Stay[runs.length]);
+        return new Table(classes, steps, new SymbolClasses.Stay[over.length]);
+    }
+
+    private static int indexOf(Map<int[], Integer> index, int[] set) {
+        Integer at = index.get(set);
+        if (at == null) {
+            throw new IllegalStateException("every set a step is over is one of the machine's sets");
+        }
+        return at;
+    }
+
+    /**
+     * Holds a machine said to be deterministic to stepping one way for each character out of every
+     * state, or throws {@link IllegalArgumentException} naming a state that steps two ways.
+     *
+     * <p>Asked of the sets alone, and not of any table a walk is given, so whether a machine is the
+     * one it says it is never turns on a {@link Budget}. A state stepping over fewer than two sets
+     * steps one way. Of the rest, states that step over the same sets are asked about once: a
+     * machine whose every state steps over one wide class and the rest is asked once. And the sets
+     * of a state are held against each other without going over the widest of them: each run of the
+     * others is looked for in it by a search. So what this looks at is, once for each different
+     * group of sets a state steps over, the runs of all but the widest of them.
+     *
+     * <p>That is not bounded by the image. A set is written once however many states step over it,
+     * and holding sets against one another in groups no two of which are alike is, in the worst
+     * case, more than the image is long; an image of a deterministic machine has always been held to
+     * this, and every image an earlier release wrote has to be read.
+     */
+    private static void oneWay(int[][][] over, List<int[]> sets) {
+        Map<int[], Integer> index = new IdentityHashMap<>();
+        for (int at = 0; at < sets.size(); at++) {
+            index.put(sets.get(at), at);
+        }
+        java.util.Set<Group> asked = new java.util.HashSet<>();
+        for (int state = 0; state < over.length; state++) {
+            int[][] mine = over[state];
+            if (mine.length < 2) {
+                continue;
+            }
+            int[] group = new int[mine.length];
+            for (int step = 0; step < mine.length; step++) {
+                group[step] = indexOf(index, mine[step]);
+            }
+            Arrays.sort(group);
+            if (!asked.add(new Group(group))) {
+                continue;
+            }
+            int widest = 0;
+            for (int at = 1; at < group.length; at++) {
+                if (group[at] == group[at - 1] && sets.get(group[at]).length > 0) {
+                    throw twoWays(state, sets.get(group[at])[0]);
+                }
+                if (sets.get(group[at]).length > sets.get(group[widest]).length) {
+                    widest = at;
+                }
+            }
+            // The runs of the others in order, which overlap where one begins before the one before
+            // it ends; and each looked for in the widest.
+            int[] wide = sets.get(group[widest]);
+            List<int[]> others = new ArrayList<>();
+            for (int at = 0; at < group.length; at++) {
+                int[] set = sets.get(group[at]);
+                if (at != widest) {
+                    for (int run = 0; run < set.length; run += 2) {
+                        others.add(new int[] {set[run], set[run + 1]});
+                    }
+                }
+            }
+            others.sort((one, other) -> Integer.compare(one[0], other[0]));
+            for (int at = 0; at < others.size(); at++) {
+                int[] run = others.get(at);
+                if (at > 0 && run[0] <= others.get(at - 1)[1]) {
+                    throw twoWays(state, run[0]);
+                }
+                int met = firstEndingFrom(wide, run[0]);
+                if (met >= 0 && wide[met] <= run[1]) {
+                    throw twoWays(state, Math.max(run[0], wide[met]));
+                }
+            }
+        }
+    }
+
+    /** The sets a state steps over, by where each is among the machine's sets, in order. */
+    private record Group(int[] sets) {
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Group it && Arrays.equals(sets, it.sets);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(sets);
+        }
+
+        @Override
+        public String toString() {
+            return Arrays.toString(sets);
+        }
+    }
+
+    /** Where in {@code ranges}, as {@code from, to} pairs, the first run ending at or after
+     *  {@code symbol} begins, or -1 where none does. */
+    private static int firstEndingFrom(int[] ranges, int symbol) {
+        int low = 0;
+        int high = ranges.length / 2;
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (ranges[mid * 2 + 1] < symbol) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low < ranges.length / 2 ? low * 2 : -1;
+    }
+
+    /** That a machine said to be deterministic steps two ways for {@code symbol} out of
+     *  {@code state}. */
+    private static IllegalArgumentException twoWays(int state, int symbol) {
+        return new IllegalArgumentException("a deterministic machine steps one way for a character,"
+                + " and state " + state + " steps two ways for " + symbol);
     }
 
     /** The {@link Ascii} table of a deterministic machine, or null where it would hold more than the
@@ -324,7 +493,7 @@ public final class StringPattern implements Predicate<String> {
         return new Ascii(kind, kinds, steps);
     }
 
-    /** The {@link #subsets} of a machine that is not deterministic, holding the one a walk starts
+    /** The {@link #subsets} of a machine walked as sets of states, holding the one a walk starts
      *  in: the first state and every live one it reaches for no character. Null where that set is
      *  past what the sets kept may hold, and every walk moves each state for every character. */
     private @Nullable Subsets subsets(SymbolClasses classes, Budget budget) {
@@ -488,6 +657,9 @@ public final class StringPattern implements Predicate<String> {
      * anywhere, so what it says is checked here, once, and a pattern that was read answers every
      * text it is asked about. Anything else is an {@link IllegalArgumentException}.
      *
+     * <p>Whether a deterministic machine leads one way is asked of its sets, whatever a walk over it
+     * is given to walk faster on ({@link #oneWay}).
+     *
      * @param image the image, as the strings it was cut into
      * @return the pattern it writes
      */
@@ -541,8 +713,7 @@ public final class StringPattern implements Predicate<String> {
         if (!in.done()) {
             throw new IllegalArgumentException("an image holds one machine and nothing after it");
         }
-        int[][] runs = deterministic ? runs(over, target) : new int[0][];
-        return new StringPattern(deterministic, accepting, runs, over, target, free, Budget.DEFAULT);
+        return new StringPattern(deterministic, accepting, over, target, free, Budget.DEFAULT);
     }
 
     /**
@@ -569,7 +740,8 @@ public final class StringPattern implements Predicate<String> {
         int[][][] over = new int[states][][];
         int[][] target = new int[states][];
         int[][] free = new int[states][];
-        Map<CodePoints, int[]> sets = new HashMap<>();
+        // A set is held once in a machine however many steps are over it, so it is written out once.
+        Map<CodePoints, int[]> sets = new IdentityHashMap<>();
         for (int state = 0; state < states; state++) {
             accepting[state] = machine.stopsAt(state);
             List<Automaton.Step> steps = machine.stepsFrom(state);
@@ -585,8 +757,7 @@ public final class StringPattern implements Predicate<String> {
                         "a deterministic machine steps nowhere for no character");
             }
         }
-        int[][] runs = deterministic ? runs(over, target) : new int[0][];
-        return new StringPattern(deterministic, accepting, runs, over, target, free, budget);
+        return new StringPattern(deterministic, accepting, over, target, free, budget);
     }
 
     /** A set as the ascending {@code from, to} pairs a walk searches. */
@@ -617,6 +788,17 @@ public final class StringPattern implements Predicate<String> {
         return ranges;
     }
 
+    /** How many {@link #runs} the steps {@code over} come to, counted without making them. */
+    private static long runs(int[][][] over) {
+        long out = 0;
+        for (int[][] sets : over) {
+            for (int[] set : sets) {
+                out += set.length / 2;
+            }
+        }
+        return out;
+    }
+
     /** A deterministic machine's steps as sorted runs, so a character is one search. */
     private static int[][] runs(int[][][] over, int[][] target) {
         int[][] out = new int[over.length][];
@@ -632,8 +814,7 @@ public final class StringPattern implements Predicate<String> {
             int[] flat = new int[each.size() * 3];
             for (int i = 0; i < each.size(); i++) {
                 if (i > 0 && each.get(i)[0] <= each.get(i - 1)[1]) {
-                    throw new IllegalArgumentException("a deterministic machine steps one way for a"
-                            + " character, and state " + state + " steps two ways for " + each.get(i)[0]);
+                    throw twoWays(state, each.get(i)[0]);
                 }
                 System.arraycopy(each.get(i), 0, flat, i * 3, 3);
             }
@@ -683,8 +864,8 @@ public final class StringPattern implements Predicate<String> {
         if (table != null) {
             return look(value, table, checkpoint);
         }
-        if (deterministic) {
-            return walk(value, checkpoint);
+        if (runs != null) {
+            return walk(value, runs, checkpoint);
         }
         if (subsets != null) {
             return remember(value, subsets, checkpoint);
@@ -736,7 +917,7 @@ public final class StringPattern implements Predicate<String> {
      * every other character a search of the state's runs. The table leads nowhere rather than to a
      * state no walk is accepted from, so a walk stops at the same character either way.
      */
-    private boolean walk(String value, @Nullable Checkpoint checkpoint) {
+    private boolean walk(String value, int[][] runs, @Nullable Checkpoint checkpoint) {
         @Nullable Ascii table = ascii;
         int state = 0;
         int at = 0;
@@ -781,7 +962,7 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * One set of states at a time, over a machine that is not deterministic, as the set of them
+     * One set of states at a time, over a machine walked as sets of states, as the set of them
      * ({@link Subset}) it was in before.
      *
      * <p>Where a class leads from a set is worked out the first time a walk asks, as
@@ -872,7 +1053,7 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * A set of states a walk over a machine that is not deterministic has been in, and where each
+     * A set of states a walk as sets of states has been in, and where each
      * class has been found to lead from it.
      *
      * <p>A pattern is asked about from any number of threads at once, and the sets are found by
@@ -1049,7 +1230,7 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * What a walk over a machine that is not deterministic is held in, as large as the machine: the
+     * What a walk as sets of states is held in, as large as the machine: the
      * states it is in and is going into, which of them it has put in this round, and those it has
      * yet to look past for steps for no character. With them, what the states last put in come to.
      */
@@ -1081,7 +1262,7 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * Every state the walk is in at once, over a machine that is not deterministic.
+     * Every state the walk is in at once, over a machine walked as sets of states.
      *
      * <p>A state is put in the walk once for each character however many ways lead to it, which is
      * what keeps a character's work to the machine's size: {@code seen} holds the character a state
