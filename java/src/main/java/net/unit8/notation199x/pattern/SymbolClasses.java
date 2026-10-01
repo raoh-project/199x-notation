@@ -234,8 +234,11 @@ final class SymbolClasses {
         return ascii[unit];
     }
 
-    /** The class of {@code symbol}. */
+    /** The class of {@code symbol}, or -1 where it is a surrogate, which is in none. */
     int of(int symbol) {
+        if (CodePoints.isSurrogate(symbol)) {
+            return -1;
+        }
         return symbol < BMP ? blocks[index[symbol >>> 8] + (symbol & 0xFF)] : beyond(symbol);
     }
 

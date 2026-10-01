@@ -103,8 +103,8 @@ final class SymbolPartition {
             set++;
         }
         // Numbering the classes again looks at each piece and each class a few times, and saying
-        // which classes each set holds is the pieces it covers again, and putting them in order.
-        if (!making.work(2L * pieces + 2L * classes + 2 * covered)) {
+        // which classes each set holds is the pieces it covers again.
+        if (!making.work(2L * pieces + 2L * classes + covered)) {
             return null;
         }
         // A class every piece was moved out of holds nothing, and the surrogates are no symbol, so
@@ -124,6 +124,10 @@ final class SymbolPartition {
             }
             classOf[piece] = renumbered[classOf[piece]];
         }
+        // A set that holds a class holds its least symbol, which is where a walk over the set's
+        // pieces in order first meets the class; and the classes are numbered in the order of their
+        // least symbols. So the classes a set holds come in ascending order as its pieces are
+        // walked, each the first time it is met, and need no putting in order.
         int[][] classesOf = new int[sets.size()][];
         int[] seenBy = new int[count];
         Arrays.fill(seenBy, -1);
@@ -141,9 +145,7 @@ final class SymbolPartition {
                     }
                 }
             }
-            int[] mine = Arrays.copyOf(held, many);
-            Arrays.sort(mine);
-            classesOf[set++] = mine;
+            classesOf[set++] = Arrays.copyOf(held, many);
         }
         return new SymbolPartition(cuts, classOf, count, Arrays.copyOf(least, count), classesOf);
     }
@@ -193,8 +195,28 @@ final class SymbolPartition {
         return classesOf[set];
     }
 
-    /** Each class as the symbols it holds, in the order the classes are numbered. */
-    List<CodePoints> classes() {
+    /** The class {@code symbol} is in, or -1 where it is a surrogate, which is in none. A search of
+     *  where the pieces begin. */
+    int classAt(int symbol) {
+        int low = 0;
+        int high = cuts.length - 2;
+        while (low < high) {
+            int mid = (low + high + 1) >>> 1;
+            if (cuts[mid] <= symbol) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        return classOf[low];
+    }
+
+    /** Each class as the symbols it holds, in the order the classes are numbered; or null where
+     *  writing them out, which looks at every piece, is more than {@code making} allows. */
+    @Nullable List<CodePoints> classes(Meter.Making making) {
+        if (!making.work(1L + pieces() + count)) {
+            return null;
+        }
         List<List<CodePoints.Range>> runs = new ArrayList<>(count);
         for (int each = 0; each < count; each++) {
             runs.add(new ArrayList<>());

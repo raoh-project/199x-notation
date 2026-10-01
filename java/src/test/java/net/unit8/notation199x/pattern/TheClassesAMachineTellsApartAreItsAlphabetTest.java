@@ -65,6 +65,12 @@ class TheClassesAMachineTellsApartAreItsAlphabetTest {
                             Arrays.binarySearch(partition.classesOf(set), one) >= 0);
                 }
             }
+            for (int set = 0; set < sets.size(); set++) {
+                int[] held = partition.classesOf(set);
+                for (int at = 1; at < held.length; at++) {
+                    assertTrue(held[at - 1] < held[at], "the classes a set holds are each once, ascending");
+                }
+            }
         }
     }
 
@@ -88,12 +94,12 @@ class TheClassesAMachineTellsApartAreItsAlphabetTest {
         SymbolPartition partition = Objects.requireNonNull(SymbolPartition.of(
                 List.of(new int[] {0, 0xD7FF, 0xE000, 0x10FFFF}, new int[] {0xD700, 0xD7FF}), roomy()));
         assertEquals(2, partition.count());
-        for (CodePoints each : partition.classes()) {
+        for (CodePoints each : Objects.requireNonNull(partition.classes(roomy()))) {
             for (CodePoints.Range range : each.ranges()) {
                 assertTrue(range.to() < 0xD800 || range.from() > 0xDFFF, each.toString());
             }
         }
-        assertEquals(CodePoints.EVERYTHING, partition.classes().get(0).or(partition.classes().get(1)));
+        assertEquals(CodePoints.EVERYTHING, Objects.requireNonNull(partition.classes(roomy())).get(0).or(Objects.requireNonNull(partition.classes(roomy())).get(1)));
     }
 
     /**
@@ -141,6 +147,17 @@ class TheClassesAMachineTellsApartAreItsAlphabetTest {
         assertEquals(false, shaped.accepts(out, Held.roomy()));
         assertTrue(not.walks(out));
         assertTrue(not.walks(""));
+    }
+
+    /** Steps over equal sets are over one set, however the machine was written out. */
+    @Test
+    void equalSetsInAMachineAreOneSet() {
+        CodePoints one = CodePoints.between('a', 'c');
+        CodePoints other = CodePoints.between('a', 'b').or(CodePoints.of('c'));
+        Automaton machine = Automaton.madeOf(List.of(
+                List.of(new Automaton.Step(one, 1)),
+                List.of(new Automaton.Step(other, 0))), new java.util.BitSet());
+        assertTrue(machine.stepsFrom(0).get(0).over() == machine.stepsFrom(1).get(0).over());
     }
 
     private static Meter.Making roomy() {

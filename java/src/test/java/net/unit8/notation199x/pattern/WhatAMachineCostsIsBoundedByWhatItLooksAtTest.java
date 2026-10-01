@@ -3,6 +3,11 @@ package net.unit8.notation199x.pattern;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -78,6 +83,95 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
         assertEquals(Meter.Stopped.ONE_MACHINE, meter.stoppedBy());
         assertTrue(Automaton.of(meaning, Held.roomy()) != null,
                 "its shape is within the state limit, so what refused it is the work");
+    }
+
+    /**
+     * A set is held once in a machine however many steps are over it, so a deterministic machine
+     * every state of which steps over one wide class holds that class once: making it, running it
+     * and writing it out each read the class once and not once a state.
+     */
+    @Test
+    void aWideClassEveryStateStepsOverIsHeldOnce() {
+        PatternMeaning meaning = meaning(wideClass(3000) + "{2000}");
+        Automaton deterministic = Objects.requireNonNull(Held.canonical(meaning, Held.roomy()));
+        Set<CodePoints> sets = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (int state = 0; state < deterministic.size(); state++) {
+            for (Automaton.Step each : deterministic.stepsFrom(state)) {
+                sets.add(each.over());
+            }
+        }
+        assertEquals(3, sets.size(), "the class, the rest, and every symbol out of where a walk is done");
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            for (int i = 0; i < 20; i++) {
+                assertEquals(StringPattern.Way.TABLE, StringPattern.of(deterministic, true).way());
+                assertInstanceOf(PatternImage.Written.class, PatternImages.of(deterministic, true));
+                assertTrue(deterministic.shortest() != null);
+            }
+        });
+    }
+
+    /**
+     * An image is held to what reading it looks at however many states step over one set: a set
+     * of two hundred thousand runs that every state steps over is read as its classes, and not as
+     * its runs once a state.
+     */
+    @Test
+    void anImageWhoseStatesAllStepOverOneWideSetIsReadAsItsClasses() {
+        int runs = 200_000;
+        int states = 20_000;
+        StringBuilder image = new StringBuilder("P1,1,1,").append(runs);
+        for (int i = 0; i < runs; i++) {
+            image.append(',').append(0x10000 + 2 * i).append(',').append(0x10000 + 2 * i);
+        }
+        image.append(',').append(states);
+        for (int state = 0; state < states; state++) {
+            image.append(",1,1,0,").append((state + 1) % states).append(",0");
+        }
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            StringPattern run = StringPattern.of(List.of(image.toString()));
+            assertEquals(StringPattern.Way.TABLE, run.way());
+            assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10002)
+                    .toString()));
+            assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10001).toString()));
+        });
+    }
+
+    /**
+     * And where the classes are too many for a table and the runs every state would hold over again
+     * are past what is allowed, an image said to be deterministic is walked as the machine its steps
+     * write, which answers the same, rather than its runs being made whatever they come to.
+     */
+    @Test
+    void anImageWhoseRunsArePastWhatIsAllowedIsWalkedAsItsSteps() {
+        int runs = 200_000;
+        int singles = 600;
+        int states = 1_000;
+        StringBuilder image = new StringBuilder("P1,1,").append(1 + singles).append(',').append(runs);
+        for (int i = 0; i < runs; i++) {
+            image.append(',').append(0x10000 + 2 * i).append(',').append(0x10000 + 2 * i);
+        }
+        for (int i = 0; i < singles; i++) {
+            image.append(",1,").append(0x10001 + 2 * i).append(',').append(0x10001 + 2 * i);
+        }
+        image.append(',').append(states);
+        // The first state steps over each character of its own as well; every state steps over the
+        // wide set to the next, and every one may be stopped at.
+        image.append(",1,").append(1 + singles).append(",0,1");
+        for (int i = 0; i < singles; i++) {
+            image.append(',').append(1 + i).append(",0");
+        }
+        image.append(",0");
+        for (int state = 1; state < states; state++) {
+            image.append(",1,1,0,").append((state + 1) % states).append(",0");
+        }
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            StringPattern run = StringPattern.of(List.of(image.toString()));
+            assertEquals(StringPattern.Way.SETS_KEPT, run.way());
+            assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10001).appendCodePoint(0x10000)
+                    .toString()));
+            assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10001)
+                    .toString()));
+        });
     }
 
     /**
