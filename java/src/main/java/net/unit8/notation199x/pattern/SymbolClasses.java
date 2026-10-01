@@ -21,6 +21,11 @@ import java.util.Map;
  * <p>No set a step is over holds a surrogate, so the surrogates are in a class with the symbols no
  * set holds, and from every state it leads nowhere: half a surrogate pair needs no rule of its own
  * past being looked up.
+ *
+ * <p>Working the classes out looks at each piece of the symbols each set covers, which for sets
+ * nested in one another is as many as the sets times the pieces. So it is counted on a
+ * {@link Meter}, as making a machine deterministic is, and given up where that runs out: the classes
+ * are a way to walk faster and decide no answer, and a machine without them is walked by its sets.
  */
 final class SymbolClasses {
 
@@ -43,13 +48,18 @@ final class SymbolClasses {
     private final char[] beyond;
     /** A symbol of each class, which every set holds as it holds the rest of the class. */
     private final int[] some;
-    /** Past ASCII and inside the Basic Multilingual Plane, where each run of one class begins,
-     *  ascending, and the class of each. */
-    private final int[] wideFrom;
-    private final char[] wide;
+    /** For each class, which ASCII characters it holds: those below 64, and the rest. */
+    private final long[] low;
+    private final long[] high;
+    /** For each class, at {@code class * 2} and the one after, the two longest runs it holds past
+     *  ASCII inside the Basic Multilingual Plane, as where each begins and ends; a run it does not
+     *  have begins after it ends. */
+    private final char[] runFrom;
+    private final char[] runTo;
 
     private SymbolClasses(int count, char[] ascii, char[] index, char[] blocks, int[] beyondFrom,
-                          char[] beyond, int[] some, int[] wideFrom, char[] wide) {
+                          char[] beyond, int[] some, long[] low, long[] high, char[] runFrom,
+                          char[] runTo) {
         this.count = count;
         this.ascii = ascii;
         this.index = index;
@@ -57,19 +67,29 @@ final class SymbolClasses {
         this.beyondFrom = beyondFrom;
         this.beyond = beyond;
         this.some = some;
-        this.wideFrom = wideFrom;
-        this.wide = wide;
+        this.low = low;
+        this.high = high;
+        this.runFrom = runFrom;
+        this.runTo = runTo;
     }
 
     /**
      * The classes {@code sets} cut the symbols into, or null where they are more than
-     * {@link #MOST}.
+     * {@link #MOST} or working them out is more than {@code making} allows.
      *
-     * @param sets each set a step is over, as ascending {@code from, to} pairs of scalar values
+     * @param sets   each set a step is over, as ascending {@code from, to} pairs of scalar values
+     * @param making what working them out may look at, counted before it is looked at
      */
-    static @Nullable SymbolClasses of(Collection<int[]> sets) {
+    static @Nullable SymbolClasses of(Collection<int[]> sets, Meter.Making making) {
         // The symbols are first cut wherever a set begins or ends, and the pieces are then put
         // together where no set tells them apart.
+        long bounds = 2;
+        for (int[] ranges : sets) {
+            bounds += ranges.length;
+        }
+        if (!making.work(bounds)) {
+            return null;
+        }
         int[] cuts = cuts(sets);
         int pieces = cuts.length - 1;
         int[] classOf = new int[pieces];
@@ -84,6 +104,9 @@ final class SymbolClasses {
             for (int at = 0; at < ranges.length; at += 2) {
                 int piece = Arrays.binarySearch(cuts, ranges[at]);
                 for (; cuts[piece] <= ranges[at + 1]; piece++) {
+                    if (!making.work(1)) {
+                        return null;
+                    }
                     int was = classOf[piece];
                     if (splitBy[was] != set) {
                         splitBy[was] = set;
@@ -99,6 +122,11 @@ final class SymbolClasses {
                 }
             }
             set++;
+        }
+        // What is left is looked at a few times over each piece and each class, and once over the
+        // plane, whatever the sets are.
+        if (!making.work(6L * pieces + 4L * classes + BMP)) {
+            return null;
         }
         // A class every piece was moved out of holds nothing, and the rest are numbered again in
         // the order their first symbol comes in.
@@ -178,23 +206,44 @@ final class SymbolClasses {
             beyondFrom[runs] = Math.max(cuts[piece], BMP);
             beyond[runs++] = (char) classOf[piece];
         }
-        int[] wideFrom = new int[pieces];
-        char[] wide = new char[pieces];
-        int wideRuns = 0;
-        for (piece = 0; piece < pieces; piece++) {
-            if (cuts[piece + 1] <= ASCII || cuts[piece] >= BMP) {
-                continue;
+        long[] low = new long[count];
+        long[] high = new long[count];
+        for (int unit = 0; unit < ASCII; unit++) {
+            if (unit < 64) {
+                low[ascii[unit]] |= 1L << unit;
+            } else {
+                high[ascii[unit]] |= 1L << unit;
             }
-            if (wideRuns > 0 && wide[wideRuns - 1] == classOf[piece]) {
-                continue;
-            }
-            wideFrom[wideRuns] = Math.max(cuts[piece], ASCII);
-            wide[wideRuns++] = (char) classOf[piece];
         }
-        return new SymbolClasses(count, ascii, index,
-                blocks.toString().toCharArray(), Arrays.copyOf(beyondFrom, runs),
-                Arrays.copyOf(beyond, runs), some, Arrays.copyOf(wideFrom, wideRuns),
-                Arrays.copyOf(wide, wideRuns));
+        // A class's runs past ASCII, pieces of it beside each other taken as one, of which the two
+        // longest are kept.
+        char[] runFrom = new char[count * 2];
+        char[] runTo = new char[count * 2];
+        Arrays.fill(runFrom, (char) 1);
+        for (piece = 0; piece < pieces; ) {
+            int begins = Math.max(cuts[piece], ASCII);
+            int of = classOf[piece];
+            while (piece < pieces && classOf[piece] == of) {
+                piece++;
+            }
+            int ends = Math.min(cuts[piece], BMP) - 1;
+            if (ends < begins) {
+                continue;
+            }
+            int longest = of * 2;
+            if (ends - begins > runTo[longest] - runFrom[longest]) {
+                runFrom[longest + 1] = runFrom[longest];
+                runTo[longest + 1] = runTo[longest];
+                runFrom[longest] = (char) begins;
+                runTo[longest] = (char) ends;
+            } else if (ends - begins > runTo[longest + 1] - runFrom[longest + 1]) {
+                runFrom[longest + 1] = (char) begins;
+                runTo[longest + 1] = (char) ends;
+            }
+        }
+        return new SymbolClasses(count, ascii, index, blocks.toString().toCharArray(),
+                Arrays.copyOf(beyondFrom, runs), Arrays.copyOf(beyond, runs), some, low, high,
+                runFrom, runTo);
     }
 
     /** Every symbol where a set begins or where one ends before the last, ascending, between
@@ -268,58 +317,39 @@ final class SymbolClasses {
     }
 
     /**
-     * The characters a walk stays where it is on, where {@code stays} says which classes keep it
-     * there, as {@link Stay} looks them up.
-     */
-    Stay stay(boolean[] stays) {
-        long low = 0;
-        long high = 0;
-        for (int unit = 0; unit < ASCII; unit++) {
-            if (stays[ascii[unit]]) {
-                if (unit < 64) {
-                    low |= 1L << unit;
-                } else {
-                    high |= 1L << unit;
-                }
-            }
-        }
-        // The two longest runs of the plane past ASCII that it stays on. No surrogate is one, as
-        // no class a surrogate is in leads anywhere.
-        int from = 1;
-        int to = 0;
-        int otherFrom = 1;
-        int otherTo = 0;
-        for (int run = 0; run < wideFrom.length; ) {
-            if (!stays[wide[run]]) {
-                run++;
-                continue;
-            }
-            int begins = wideFrom[run];
-            while (run < wideFrom.length && stays[wide[run]]) {
-                run++;
-            }
-            int ends = (run < wideFrom.length ? wideFrom[run] : BMP) - 1;
-            if (ends - begins > to - from) {
-                otherFrom = from;
-                otherTo = to;
-                from = begins;
-                to = ends;
-            } else if (ends - begins > otherTo - otherFrom) {
-                otherFrom = begins;
-                otherTo = ends;
-            }
-        }
-        return new Stay(low, high, (char) from, (char) to, (char) otherFrom, (char) otherTo);
-    }
-
-    /**
      * Characters a walk stays where it is on, looked up without a table: the ASCII ones as a bit
      * each, and up to two runs past them in the Basic Multilingual Plane, each as where it begins
      * and ends. A run that holds none begins after it ends.
      *
-     * <p>Some characters it stays on may not be among them, and those are walked one at a time.
+     * <p>Some characters it stays on may not be among them, and those are walked one at a time. So
+     * it is made a class at a time ({@link #with}), each in a few steps, and never by looking over
+     * every class or every run.
      */
     record Stay(long low, long high, char from, char to, char otherFrom, char otherTo) {
+
+        /** Characters a walk stays on none of. */
+        static final Stay NONE = new Stay(0, 0, (char) 1, (char) 0, (char) 1, (char) 0);
+
+        /** These and the ASCII characters of class {@code each} of {@code classes}, with the two
+         *  longest runs of the four these and that class have. */
+        Stay with(SymbolClasses classes, int each) {
+            char[] froms = {from, otherFrom, classes.runFrom[each * 2], classes.runFrom[each * 2 + 1]};
+            char[] tos = {to, otherTo, classes.runTo[each * 2], classes.runTo[each * 2 + 1]};
+            int first = 0;
+            for (int at = 1; at < 4; at++) {
+                if (tos[at] - froms[at] > tos[first] - froms[first]) {
+                    first = at;
+                }
+            }
+            int second = first == 0 ? 1 : 0;
+            for (int at = 0; at < 4; at++) {
+                if (at != first && tos[at] - froms[at] > tos[second] - froms[second]) {
+                    second = at;
+                }
+            }
+            return new Stay(low | classes.low[each], high | classes.high[each], froms[first],
+                    tos[first], froms[second], tos[second]);
+        }
 
         /** How far from {@code at} the characters of {@code value} keep a walk where it is. */
         int over(String value, int at) {
@@ -361,9 +391,6 @@ final class SymbolClasses {
             }
             return at;
         }
-
-        /** Characters a walk stays on none of. */
-        static final Stay NONE = new Stay(0, 0, (char) 1, (char) 0, (char) 1, (char) 0);
     }
 
     private int beyond(int symbol) {

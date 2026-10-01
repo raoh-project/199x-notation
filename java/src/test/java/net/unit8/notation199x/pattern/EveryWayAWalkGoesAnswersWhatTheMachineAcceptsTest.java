@@ -12,6 +12,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -47,11 +48,10 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             PatternRead.Read read = assertInstanceOf(PatternRead.Read.class, PatternParser.read(pattern), pattern);
             PatternMachine machine = PatternMachine.of(read.meaning());
             Automaton shaped = machine.shaped();
-            List<StringPattern> runs = new ArrayList<>(List.of(machine.pattern(),
-                    StringPattern.of(shaped, false), StringPattern.of(shaped, false, 0),
-                    StringPattern.of(shaped, false, 1), StringPattern.of(shaped, false, 3)));
+            List<StringPattern> runs = new ArrayList<>(List.of(machine.pattern()));
+            runs.addAll(everyWay(shaped, false));
             if (machine.deterministic() != null) {
-                runs.add(StringPattern.of(machine.deterministic(), true));
+                runs.addAll(everyWay(machine.deterministic(), true));
             }
             for (int each = 0; each < 400; each++) {
                 String subject = subject(random);
@@ -63,6 +63,83 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
                 }
             }
         }
+    }
+
+    /** {@code machine} run each way a walk may go over it, as budgets that run out where each does
+     *  choose, each held to be the way it says. */
+    private static List<StringPattern> everyWay(Automaton machine, boolean deterministic) {
+        StringPattern.Budget given = StringPattern.Budget.DEFAULT;
+        List<StringPattern> out = new ArrayList<>();
+        if (deterministic) {
+            out.add(way(StringPattern.Way.TABLE, machine, true, given));
+            StringPattern.Budget noTable = new StringPattern.Budget(given.classWork(), 0,
+                    given.asciiEntries(), given.subsets(), given.remembered());
+            out.add(way(StringPattern.Way.ASCII_AND_RUNS, machine, true, noTable));
+            out.add(way(StringPattern.Way.RUNS, machine, true, new StringPattern.Budget(
+                    given.classWork(), 0, 0, given.subsets(), given.remembered())));
+            out.add(way(StringPattern.Way.ASCII_AND_RUNS, machine, true, new StringPattern.Budget(
+                    0, given.tableEntries(), given.asciiEntries(), given.subsets(), given.remembered())));
+        } else {
+            out.add(way(StringPattern.Way.SETS_KEPT, machine, false, given));
+            out.add(way(StringPattern.Way.SETS_KEPT, machine, false, given.keeping(1)));
+            out.add(way(StringPattern.Way.SETS_KEPT, machine, false, given.keeping(3)));
+            out.add(way(StringPattern.Way.EVERY_STATE, machine, false, given.keeping(0)));
+            out.add(way(StringPattern.Way.EVERY_STATE, machine, false, new StringPattern.Budget(
+                    0, given.tableEntries(), given.asciiEntries(), given.subsets(), given.remembered())));
+        }
+        return out;
+    }
+
+    private static StringPattern way(StringPattern.Way expected, Automaton machine, boolean deterministic,
+                                     StringPattern.Budget budget) {
+        StringPattern run = StringPattern.of(machine, deterministic, budget);
+        assertEquals(expected, run.way(), budget.toString());
+        return run;
+    }
+
+    /**
+     * A set a walk would start in that is past what the sets kept may hold is not kept uncounted:
+     * the pattern keeps none and moves each state for every character.
+     */
+    @Test
+    void aFirstSetPastWhatMayBeKeptKeepsNone() {
+        Automaton shaped = PatternMachine.of(((PatternRead.Read) PatternParser.read("(a?){50}b")).meaning())
+                .shaped();
+        StringPattern.Budget given = StringPattern.Budget.DEFAULT;
+        StringPattern run = StringPattern.of(shaped, false, new StringPattern.Budget(given.classWork(),
+                given.tableEntries(), given.asciiEntries(), given.subsets(), 10));
+        assertEquals(StringPattern.Way.EVERY_STATE, run.way());
+        assertTrue(run.matches("a".repeat(50) + "b"));
+        assertFalse(run.matches("a".repeat(51) + "b"));
+    }
+
+    /**
+     * Sets nested one in another cover each other's pieces, as many as the sets times the pieces:
+     * working their classes out is counted, and given up where it is past what it is allowed,
+     * rather than done whatever it costs.
+     */
+    @Test
+    void classesOfSetsNestedDeeplyAreGivenUpOnTheWorkTheyTake() {
+        int sets = 5_000;
+        List<int[]> nested = new ArrayList<>();
+        StringBuilder regex = new StringBuilder();
+        StringBuilder text = new StringBuilder();
+        for (int each = 0; each < sets; each++) {
+            int from = 0x4E00 + each;
+            int to = 0x4E00 + 2 * sets - each;
+            nested.add(new int[] {from, to});
+            regex.append(String.format("[\\x{%X}-\\x{%X}]", from, to));
+            text.append((char) (0x4E00 + sets));
+        }
+        assertEquals(null, SymbolClasses.of(nested, new Meter(1, 1, 5_000_000).making()));
+        assertTrue(SymbolClasses.of(nested.subList(0, 100), new Meter(1, 1, 5_000_000).making()) != null);
+
+        Automaton shaped = Automaton.of(((PatternRead.Read) PatternParser.read(regex.toString())).meaning(),
+                Held.roomy());
+        StringPattern run = StringPattern.of(shaped, false);
+        assertEquals(StringPattern.Way.EVERY_STATE, run.way());
+        assertTrue(run.matches(text.toString()));
+        assertFalse(run.matches(text.substring(1) + "a"));
     }
 
     /**
@@ -115,7 +192,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             }
             sets.add(pairs);
         }
-        SymbolClasses classes = SymbolClasses.of(sets);
+        SymbolClasses classes = SymbolClasses.of(sets, new Meter(1, 1, 5_000_000).making());
         for (int symbol = 0; symbol <= Character.MAX_CODE_POINT; symbol++) {
             int some = classes.some(classes.of(symbol));
             for (int[] set : sets) {

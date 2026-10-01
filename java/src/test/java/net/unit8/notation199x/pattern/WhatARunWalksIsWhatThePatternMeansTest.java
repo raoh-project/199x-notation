@@ -180,18 +180,37 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
         StringPattern run = StringPattern.of(PatternImages.deterministic(meaning, plenty()));
         String whole = text.toString();
-        // Every ASCII character is a class of its own and the rest are one more; the machine has a
-        // state for each place in the text and one past it.
-        int classes = 128 + 1;
-        int states = whole.length() + 1;
-        assertTrue((long) states * classes > StringPattern.MOST_TABLE_ENTRIES,
-                "the machine is past the table, as " + states + " states of " + classes + " classes");
+        assertEquals(StringPattern.Way.RUNS, run.way());
 
         assertTrue(run.matches(whole));
         assertFalse(run.matches(whole.substring(0, whole.length() - 1)));
         assertFalse(run.matches(whole.substring(0, 300) + "é" + whole.substring(301)));
         assertFalse(run.matches(whole.substring(0, 300) + "a" + whole.substring(301)));
         assertFalse(run.matches(whole.substring(0, 300) + "\uD800" + whole.substring(301)));
+    }
+
+    /**
+     * A deterministic machine whose classes are many, and whose ASCII characters are of few kinds,
+     * is past the table of its classes and still looks its ASCII characters up in one.
+     *
+     * <p>Each place takes a letter or a character of its own past ASCII, so every place is a class of
+     * its own, and ASCII is the letters and the rest.
+     */
+    @Test
+    void aMachineOfManyClassesLooksItsAsciiUpAllTheSame() {
+        StringBuilder regex = new StringBuilder();
+        for (int place = 0; place < 600; place++) {
+            regex.append(String.format("(?:\\x{%X}|[a-z])", 0x100 + place));
+        }
+        PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
+        StringPattern run = PatternMachine.of(meaning).pattern();
+        assertEquals(StringPattern.Way.ASCII_AND_RUNS, run.way());
+
+        assertTrue(run.matches("a".repeat(600)));
+        assertTrue(run.matches("a".repeat(300) + "\u022C" + "a".repeat(299)));
+        assertFalse(run.matches("a".repeat(300) + "\u022D" + "a".repeat(299)));
+        assertFalse(run.matches("a".repeat(599)));
+        assertFalse(run.matches("a".repeat(599) + "A"));
     }
 
     /**

@@ -72,7 +72,7 @@ class AMatchIsStoppedWhereItIsAskedTest {
     /** The machine a walk is run over: one that keeps the sets of states it is in, or one that keeps
      *  none and moves each state for every character. */
     private static StringPattern wide(Automaton machine, boolean remembering) {
-        return remembering ? StringPattern.of(machine, false) : StringPattern.of(machine, false, 0);
+        return remembering ? StringPattern.of(machine, false) : StringPattern.of(machine, false, StringPattern.Budget.DEFAULT.keeping(0));
     }
 
     /** A walk over a large machine stopped at its first ask has not made the room the walk is
@@ -108,7 +108,8 @@ class AMatchIsStoppedWhereItIsAskedTest {
     @Test
     void aWalkAsksAtEveryPlaceItSaysItDoes() {
         Automaton machine = Automaton.of(meaning("(a?){1000}b"), Held.roomy());
-        StringPattern wide = StringPattern.of(machine, false, 0);
+        StringPattern wide = StringPattern.of(machine, false, StringPattern.Budget.DEFAULT.keeping(0));
+        assertEquals(StringPattern.Way.EVERY_STATE, wide.way());
         for (String subject : List.of("", "a", "aaa", "ba")) {
             Counting all = Counting.never();
             assertEquals(new Outcome.Answered<>(false), wide.matches(subject, all), subject);
@@ -170,7 +171,8 @@ class AMatchIsStoppedWhereItIsAskedTest {
         List<String> subjects = List.of("", "b", "ab", "a".repeat(29) + "b", "a".repeat(30) + "b",
                 "a".repeat(31) + "b", "a".repeat(10) + "bab", "aaaa", "\uD800", "aa\uD800b");
         for (int most : new int[] {1, 2, 3, 5, 40}) {
-            StringPattern run = StringPattern.of(machine, false, most);
+            StringPattern run = StringPattern.of(machine, false, StringPattern.Budget.DEFAULT.keeping(most));
+            assertEquals(StringPattern.Way.SETS_KEPT, run.way());
             for (String subject : subjects) {
                 boolean accepted = machine.accepts(subject, Held.roomy());
                 assertEquals(accepted, run.matches(subject), most + " " + subject);
@@ -179,10 +181,10 @@ class AMatchIsStoppedWhereItIsAskedTest {
                 // Counted on a pattern no walk has been run on, as each stopped walk is.
                 Counting all = Counting.never();
                 assertEquals(new Outcome.Answered<>(accepted),
-                        StringPattern.of(machine, false, most).matches(subject, all), most + " " + subject);
+                        StringPattern.of(machine, false, StringPattern.Budget.DEFAULT.keeping(most)).matches(subject, all), most + " " + subject);
                 for (long at = 1; at <= all.asked; at += Math.max(1, all.asked / 7)) {
                     assertInstanceOf(Outcome.Stopped.class,
-                            StringPattern.of(machine, false, most).matches(subject, new Counting(at)),
+                            StringPattern.of(machine, false, StringPattern.Budget.DEFAULT.keeping(most)).matches(subject, new Counting(at)),
                             most + " " + subject + " stopped at ask " + at);
                 }
             }
@@ -205,7 +207,8 @@ class AMatchIsStoppedWhereItIsAskedTest {
             PatternMeaning meaning = meaning(pattern);
             Automaton shaped = Automaton.of(meaning, Held.roomy());
             for (StringPattern run : List.of(PatternMachine.of(meaning).pattern(), StringPattern.of(shaped, false),
-                    StringPattern.of(shaped, false, 0), StringPattern.of(shaped, false, 2))) {
+                    StringPattern.of(shaped, false, StringPattern.Budget.DEFAULT.keeping(0)),
+                    StringPattern.of(shaped, false, StringPattern.Budget.DEFAULT.keeping(2)))) {
                 Predicate<String> predicate = run;
                 for (String subject : subjects) {
                     Boolean accepted = shaped.accepts(subject, Held.roomy());
