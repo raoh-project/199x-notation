@@ -31,19 +31,32 @@ public sealed interface PatternImage {
      */
     int MOST_CHARACTERS = 1 << 23;
 
-    /** The image, as the strings it is cut into ({@link StringPattern#CHUNK}). */
+    /**
+     * The image, as the strings it is cut into ({@link StringPattern#CHUNK}).
+     *
+     * @param strings the image, each string at most {@link StringPattern#CHUNK} characters
+     */
     record Written(List<String> strings) implements PatternImage {
 
+        /** Holds the strings as they were given, in a list nothing writes to. */
         public Written {
             strings = List.copyOf(strings);
         }
 
-        /** The pattern the image writes, as what text is matched against. */
+        /**
+         * The pattern the image writes, as what text is matched against.
+         *
+         * @return the pattern, read from the image
+         */
         public StringPattern pattern() {
             return StringPattern.of(strings);
         }
     }
 
-    /** The machine is written in more characters than {@code most}. */
+    /**
+     * The machine is written in more characters than {@code most}.
+     *
+     * @param most the most characters an image may take
+     */
     record MoreCharacters(int most) implements PatternImage {}
 }

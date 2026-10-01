@@ -21,6 +21,8 @@ import java.util.List;
  * is a union of ranges, a negated class is the universe less that union, and {@code .} is the
  * universe less the five line terminators. None of them is a rule of its own here: they are all the
  * same algebra, which is what stops a reader having to know which shape a set came from.
+ *
+ * @param ranges the runs, in any order; they are held sorted and joined
  */
 public record CodePoints(List<Range> ranges) {
 
@@ -36,9 +38,13 @@ public record CodePoints(List<Range> ranges) {
      *
      * <p>Never over a surrogate. A run that would span the hole is two runs, which is what
      * {@link #between} makes of it.
+     *
+     * @param from the first symbol of the run
+     * @param to   the last symbol of the run
      */
     public record Range(int from, int to) {
 
+        /** Holds a run to running from low to high inside the scalar values. */
         public Range {
             if (from < 0 || to > LAST || from > to) {
                 throw new IllegalArgumentException("a run of symbols runs from low to high inside"
@@ -51,6 +57,7 @@ public record CodePoints(List<Range> ranges) {
         }
     }
 
+    /** Holds the runs sorted, joined where they touch, so that one set has one spelling. */
     public CodePoints {
         ranges = normalised(ranges);
     }
@@ -62,12 +69,22 @@ public record CodePoints(List<Range> ranges) {
     public static final CodePoints EVERYTHING = new CodePoints(List.of(
             new Range(0, SURROGATES_FROM - 1), new Range(SURROGATES_TO + 1, LAST)));
 
-    /** Whether {@code codePoint} is a surrogate, which is no symbol. */
+    /**
+     * Whether {@code codePoint} is a surrogate, which is no symbol.
+     *
+     * @param codePoint a code point
+     * @return whether it is a surrogate
+     */
     public static boolean isSurrogate(int codePoint) {
         return codePoint >= SURROGATES_FROM && codePoint <= SURROGATES_TO;
     }
 
-    /** Just this one, which is a scalar value: a surrogate handed here is a symbol nothing reads. */
+    /**
+     * Just this one, which is a scalar value: a surrogate handed here is a symbol nothing reads.
+     *
+     * @param symbol a scalar value
+     * @return the set of it alone
+     */
     public static CodePoints of(int symbol) {
         return new CodePoints(List.of(new Range(symbol, symbol)));
     }
@@ -104,6 +121,10 @@ public record CodePoints(List<Range> ranges) {
      *
      * <p>Both ends are symbols. A range whose end is a surrogate names a character that is not
      * one, and whoever read the pattern refuses it before this is asked.
+     *
+     * @param from the first symbol, a scalar value
+     * @param to   the last symbol, a scalar value
+     * @return the scalar values from one to the other
      */
     public static CodePoints between(int from, int to) {
         if (isSurrogate(from) || isSurrogate(to)) {
@@ -113,7 +134,12 @@ public record CodePoints(List<Range> ranges) {
         return new CodePoints(scalarsIn(from, to));
     }
 
-    /** Every symbol below {@code symbol}, which is the order symbols are compared in. */
+    /**
+     * Every symbol below {@code symbol}, which is the order symbols are compared in.
+     *
+     * @param symbol a scalar value
+     * @return every scalar value below it
+     */
     public static CodePoints below(int symbol) {
         if (symbol < 0 || symbol > LAST) {
             throw new IllegalArgumentException("no symbol is " + symbol);
@@ -150,6 +176,9 @@ public record CodePoints(List<Range> ranges) {
      * <p>A search and not a walk: the runs are in order and apart, and a machine asks this of every
      * label at every step it works out, so a class written wide would make each of those as long as
      * the class.
+     *
+     * @param symbol a code point
+     * @return whether it is one of these
      */
     public boolean has(int symbol) {
         int low = 0;
@@ -168,33 +197,61 @@ public record CodePoints(List<Range> ranges) {
         return false;
     }
 
+    /**
+     * Whether these hold no symbol.
+     *
+     * @return whether there is none
+     */
     public boolean isEmpty() {
         return ranges.isEmpty();
     }
 
-    /** Whether these are every symbol there is. */
+    /**
+     * Whether these are every symbol there is.
+     *
+     * @return whether these are every scalar value
+     */
     public boolean isEverything() {
         return ranges.equals(EVERYTHING.ranges);
     }
 
-    /** Either of them. */
+    /**
+     * Either of them.
+     *
+     * @param other another set
+     * @return the symbols in either
+     */
     public CodePoints or(CodePoints other) {
         List<Range> both = new ArrayList<>(ranges);
         both.addAll(other.ranges);
         return new CodePoints(both);
     }
 
-    /** Both of them. */
+    /**
+     * Both of them.
+     *
+     * @param other another set
+     * @return the symbols in both
+     */
     public CodePoints and(CodePoints other) {
         return not().or(other.not()).not();
     }
 
-    /** These, less those. */
+    /**
+     * These, less those.
+     *
+     * @param other another set
+     * @return the symbols in these and not in {@code other}
+     */
     public CodePoints less(CodePoints other) {
         return and(other.not());
     }
 
-    /** Every symbol these are not, which is a set of scalar values like any other. */
+    /**
+     * Every symbol these are not, which is a set of scalar values like any other.
+     *
+     * @return the scalar values these do not hold
+     */
     public CodePoints not() {
         List<Range> out = new ArrayList<>();
         int next = 0;
@@ -215,6 +272,8 @@ public record CodePoints(List<Range> ranges) {
      *
      * <p>Asked only of a set that has one. What it is for is choosing the same value on two runs
      * over one model, and a set with nothing in it is one nothing is chosen from.
+     *
+     * @return the least symbol
      */
     public int least() {
         if (ranges.isEmpty()) {
@@ -223,7 +282,11 @@ public record CodePoints(List<Range> ranges) {
         return ranges.get(0).from();
     }
 
-    /** How many symbols these hold, which a caller bounding its work asks. */
+    /**
+     * How many symbols these hold, which a caller bounding its work asks.
+     *
+     * @return the number of symbols
+     */
     public long size() {
         long out = 0;
         for (Range each : ranges) {

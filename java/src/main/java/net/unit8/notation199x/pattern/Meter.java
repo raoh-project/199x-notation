@@ -56,6 +56,8 @@ public final class Meter {
     private @Nullable Stopped stopped;
 
     /**
+     * A meter that allows this much and has spent none of it.
+     *
      * @param mostStates how many states one machine may hold
      * @param mostBuilt how many states everything this meter is for may make between them, the
      *                  machines thrown away on the way included
@@ -87,12 +89,18 @@ public final class Meter {
      * cases that build and whose own pairs reach none of them, saying that as a capability rather
      * than as a comment. The day a pair that builds arrives, the state it asks for is refused where
      * it is asked for, rather than made out of an allowance nobody granted and charged to nobody.
+     *
+     * @return a meter that refuses every state
      */
     public static Meter refusing() {
         return new Meter();
     }
 
-    /** How much of the whole allowance is left, which is what a caller reports having spent. */
+    /**
+     * How much of the whole allowance is left, which is what a caller reports having spent.
+     *
+     * @return the states still allowed in all
+     */
     public int left() {
         return left;
     }
@@ -112,6 +120,8 @@ public final class Meter {
      * allowance. Working that out means building the machine a second way to see how far it gets,
      * which is the spending this exists to stop — so the question this can answer honestly is the
      * one about the limit that actually refused.
+     *
+     * @return the limit that refused the last construction, or null where none did
      */
     public @Nullable Stopped stoppedBy() {
         return stopped;
@@ -135,7 +145,11 @@ public final class Meter {
         }
     }
 
-    /** One machine about to be made, counting its own states as well as this meter's. */
+    /**
+     * One machine about to be made, counting its own states as well as this meter's.
+     *
+     * @return the count for that machine
+     */
     public Making making() {
         return new Making();
     }
@@ -153,7 +167,13 @@ public final class Meter {
         private int mine;
         private long looked;
 
-        /** Whether one more state may be made, and it is counted where the answer is yes. */
+        private Making() {}
+
+        /**
+         * Whether one more state may be made, and it is counted where the answer is yes.
+         *
+         * @return whether it may
+         */
         public boolean state() {
             return states(1);
         }
@@ -164,6 +184,9 @@ public final class Meter {
          *
          * <p>Asked before the looking, as a state is asked for before it is made. Attributed the
          * way states are: past what one machine may take, whatever else is true, is this machine.
+         *
+         * @param much how much is about to be looked at
+         * @return whether it may be
          */
         public boolean work(long much) {
             if (much < 0) {
@@ -189,6 +212,9 @@ public final class Meter {
          * them and a state to step into either, which is a count and not a guess about what will
          * be reached — and allocating that many to find out they were too many is the thing this
          * exists to stop.
+         *
+         * @param many how many states are about to be made
+         * @return whether they may be
          */
         public boolean states(long many) {
             if (many < 0) {

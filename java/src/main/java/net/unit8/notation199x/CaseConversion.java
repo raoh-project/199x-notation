@@ -25,29 +25,51 @@ public final class CaseConversion {
 
     private CaseConversion() {}
 
-    /** {@code s} in lowercase. One code point can map to several, and no locale narrows it: a Greek
-     *  capital sigma becomes the context-dependent final form only at the end of a cased run —
-     *  {@code lowercase("ΟΣ")} is {@code "ος"} but {@code lowercase("ΟΣΑ")} is {@code "οσα"} — which
-     *  is the one condition Unicode's default algorithm carries that is context rather than locale. */
+    /**
+     * {@code s} in lowercase. One code point can map to several, and no locale narrows it: a Greek
+     * capital sigma becomes the context-dependent final form only at the end of a cased run —
+     * {@code lowercase("ΟΣ")} is {@code "ος"} but {@code lowercase("ΟΣΑ")} is {@code "οσα"} — which
+     * is the one condition Unicode's default algorithm carries that is context rather than locale.
+     *
+     * @param s the text, a sequence of scalar values
+     * @return {@code s} in lowercase
+     */
     public static String lowercase(String s) {
         return unbounded(mapCase(s, true, Long.MAX_VALUE));
     }
 
-    /** {@code s} in uppercase: the same untailored full mapping, so one code point can widen to
-     *  several ({@code uppercase("straße")} is {@code "STRASSE"}), and no locale narrows it back —
-     *  Turkish {@code i} still becomes {@code I}, never {@code İ}. */
+    /**
+     * {@code s} in uppercase: the same untailored full mapping, so one code point can widen to
+     * several ({@code uppercase("straße")} is {@code "STRASSE"}), and no locale narrows it back —
+     * Turkish {@code i} still becomes {@code I}, never {@code İ}.
+     *
+     * @param s the text, a sequence of scalar values
+     * @return {@code s} in uppercase
+     */
     public static String uppercase(String s) {
         return unbounded(mapCase(s, false, Long.MAX_VALUE));
     }
 
-    /** {@link #lowercase}, or null where it is longer than {@code longest} scalar values, which is
-     *  found out before more than that is written. */
+    /**
+     * {@link #lowercase}, or null where it is longer than {@code longest} scalar values, which is
+     * found out before more than that is written.
+     *
+     * @param s       the text, a sequence of scalar values
+     * @param longest the most scalar values the answer may hold
+     * @return {@code s} in lowercase, or null where that is longer than {@code longest}
+     */
     public static @Nullable String lowercaseWithin(String s, long longest) {
         return mapCase(s, true, longest);
     }
 
-    /** {@link #uppercase}, or null where it is longer than {@code longest} scalar values, which is
-     *  found out before more than that is written. */
+    /**
+     * {@link #uppercase}, or null where it is longer than {@code longest} scalar values, which is
+     * found out before more than that is written.
+     *
+     * @param s       the text, a sequence of scalar values
+     * @param longest the most scalar values the answer may hold
+     * @return {@code s} in uppercase, or null where that is longer than {@code longest}
+     */
     public static @Nullable String uppercaseWithin(String s, long longest) {
         return mapCase(s, false, longest);
     }

@@ -29,6 +29,10 @@ jobs:
       - name: Test
         working-directory: java
         run: mvn --batch-mode test
+      # Every public type and member is documented, its tags included, and a warning fails.
+      - name: Javadoc
+        working-directory: java
+        run: mvn --batch-mode javadoc:javadoc
 
   # A tag names a release: vX.Y.Z on a commit whose version is X.Y.Z. Checked when it is pushed,
   # before anything is deployed from it.
