@@ -106,10 +106,16 @@ class ARuleIsStoppedWhereItIsAskedTest {
     @Test
     void aStopAtTheFirstAskHasMadeNothingAsLongAsTheText() {
         String text = "a".repeat(10_000_000);
+        // A mark first sends the text to the algorithm at once: the first ask reads the mark, and the
+        // second is the algorithm's own, once it has made room for the answer.
+        String marked = "\u0300" + text;
         for (Form form : Form.values()) {
             long made = allocatedBy(() -> assertInstanceOf(Outcome.Stopped.class,
                     Normalization.normalizeWithin(form, text, Long.MAX_VALUE, new Counting(1))));
             assertTrue(made < 1_000_000, form + " made " + made + " bytes");
+            long madeMarked = allocatedBy(() -> assertInstanceOf(Outcome.Stopped.class,
+                    Normalization.normalizeWithin(form, marked, Long.MAX_VALUE, new Counting(2))));
+            assertTrue(madeMarked < 1_000_000, form + " made " + madeMarked + " bytes for a marked text");
         }
         long lower = allocatedBy(() -> assertInstanceOf(Outcome.Stopped.class,
                 CaseConversion.lowercaseWithin(text, Long.MAX_VALUE, new Counting(1))));
@@ -197,16 +203,19 @@ class ARuleIsStoppedWhereItIsAskedTest {
         assertEquals(List.of(), failed.subList(0, Math.min(20, failed.size())));
     }
 
-    /** Every code point alone, and texts whose mapping turns on what is around it, answer as they do
+    /** Every scalar value, and texts whose mapping turns on what is around it, answer as they do
      *  without a checkpoint. */
     @Test
     void aCaseConversionThatGoesOnAnswersAsWithoutACheckpoint() {
-        List<String> texts = new ArrayList<>(List.of(
-                "", "abc", "straße", "İstanbul", "ΟΣ ΟΣΑ Ο'Σ", "ΟΣ'Α", "ﬃ", "𐐀𐐨", "ŉ", "ΐ", "Σ",
-                "\uD800", "Σ\uDC00", "A\uD800Σ"));
+        StringBuilder every = new StringBuilder();
         for (int cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
-            texts.add(Character.toString(cp));
+            if (cp < Character.MIN_SURROGATE || cp > Character.MAX_SURROGATE) {
+                every.appendCodePoint(cp);
+            }
         }
+        List<String> texts = List.of(every.toString(),
+                "", "abc", "straße", "İstanbul", "ΟΣ ΟΣΑ Ο'Σ", "ΟΣ'Α", "ﬃ", "𐐀𐐨", "ŉ", "ΐ", "Σ",
+                "\uD800", "Σ\uDC00", "A\uD800Σ");
         for (String text : texts) {
             for (long longest : new long[] {Long.MAX_VALUE, 2}) {
                 assertEquals(new Outcome.Answered<>(CaseConversion.lowercaseWithin(text, longest)),

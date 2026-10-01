@@ -36,12 +36,12 @@ import java.util.function.Predicate;
  * of the way through ({@link #matches(String, Checkpoint)}). It asks before each character of the
  * subject. Over a machine that is not deterministic, where one character can move as many states as
  * the machine has, it also asks before it makes the room the walk is held in, which is as large as
- * the machine, and before each state it moves, each step it looks at from one, and each state and
- * step for no character it takes the walk into.
+ * the machine, before each state it moves, each step it looks at from one, and each state and step
+ * for no character it takes the walk into, and, once the subject is read, before each state it ended
+ * in that it looks through for one it may stop at.
  *
- * <p>That is the whole of what a match does that grows with the subject or the machine. Whether a
- * walk that has read the subject is accepted is noted as states are put in, and is not looked for
- * among them afterwards. Between two asks the work is a search of a state's steps.
+ * <p>That is the whole of what a match does that grows with the subject or the machine. Between two
+ * asks the work is a search of a state's steps.
  */
 public final class StringPattern implements Predicate<String> {
 
@@ -551,17 +551,20 @@ public final class StringPattern implements Predicate<String> {
      * Every state the walk is in at once, over a machine that is not deterministic.
      *
      * <p>A state is put in the walk once for each character however many ways lead to it, which is
-     * what keeps a character's work to the machine's size. Whether the walk may stop is noted as
-     * states are put in, so once the subject is read the answer is known without looking at the
-     * states again.
+     * what keeps a character's work to the machine's size: {@code seen} holds the character a state
+     * was last put in for. Once the subject is read, the states the walk ended in are looked through
+     * for one it may stop at, and that is asked about as the rest of the walk is.
      */
     private boolean spread(String value, @Nullable Checkpoint checkpoint) {
         // The room a walk is held in is as large as the machine, and is made only once asked.
         Stop.ask(checkpoint);
-        Spread walk = new Spread(accepting.length, checkpoint);
-        int[] here = new int[accepting.length];
-        int[] there = new int[accepting.length];
-        int count = walk.close(0, here, 0);
+        int states = accepting.length;
+        int[] here = new int[states];
+        int[] there = new int[states];
+        int[] seen = new int[states];
+        int[] pending = new int[states];
+        int round = 1;
+        int count = close(0, here, 0, seen, round, pending, checkpoint);
         int at = 0;
         while (at < value.length()) {
             Stop.ask(checkpoint);
@@ -570,7 +573,7 @@ public final class StringPattern implements Predicate<String> {
             }
             int symbol = value.codePointAt(at);
             at += Character.charCount(symbol);
-            walk.round++;
+            round++;
             int next = 0;
             for (int i = 0; i < count; i++) {
                 Stop.ask(checkpoint);
@@ -579,7 +582,7 @@ public final class StringPattern implements Predicate<String> {
                 for (int step = 0; step < sets.length; step++) {
                     Stop.ask(checkpoint);
                     if (holds(sets[step], symbol)) {
-                        next = walk.close(target[state][step], there, next);
+                        next = close(target[state][step], there, next, seen, round, pending, checkpoint);
                     }
                 }
             }
@@ -588,64 +591,39 @@ public final class StringPattern implements Predicate<String> {
             there = was;
             count = next;
         }
-        return walk.mayStop();
+        for (int i = 0; i < count; i++) {
+            Stop.ask(checkpoint);
+            if (accepting[here[i]]) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    /** What a walk over a machine that is not deterministic holds besides the states it is in. */
-    private final class Spread {
-
-        private final @Nullable Checkpoint checkpoint;
-
-        /** For each state, the round it was last put in. */
-        private final int[] seen;
-
-        /** The states a {@link #close} has still to go from. */
-        private final int[] pending;
-
-        /** One round for the start and one for each character read. */
-        int round = 1;
-
-        /** The last round a state the walk may stop at was put in. */
-        private int stopsIn;
-
-        Spread(int states, @Nullable Checkpoint checkpoint) {
-            this.checkpoint = checkpoint;
-            this.seen = new int[states];
-            this.pending = new int[states];
+    /** {@code from} and every state it reaches for no character, put into {@code into} after its
+     *  first {@code count}; answers how many it holds now. */
+    private int close(int from, int[] into, int count, int[] seen, int round, int[] pending,
+                      @Nullable Checkpoint checkpoint) {
+        if (seen[from] == round || !live[from]) {
+            return count;
         }
-
-        /** {@code from} and every state it reaches for no character, put into {@code into} after
-         *  its first {@code count} in this round; answers how many it holds now. */
-        int close(int from, int[] into, int count) {
-            if (seen[from] == round || !live[from]) {
-                return count;
-            }
-            seen[from] = round;
-            int top = 0;
-            pending[top++] = from;
-            int held = count;
-            while (top > 0) {
+        seen[from] = round;
+        int top = 0;
+        pending[top++] = from;
+        int held = count;
+        while (top > 0) {
+            Stop.ask(checkpoint);
+            int state = pending[--top];
+            into[held++] = state;
+            for (int to : free[state]) {
                 Stop.ask(checkpoint);
-                int state = pending[--top];
-                into[held++] = state;
-                if (accepting[state]) {
-                    stopsIn = round;
-                }
-                for (int to : free[state]) {
-                    Stop.ask(checkpoint);
-                    if (seen[to] != round && live[to]) {
-                        seen[to] = round;
-                        pending[top++] = to;
-                    }
+                if (seen[to] != round && live[to]) {
+                    seen[to] = round;
+                    pending[top++] = to;
                 }
             }
-            return held;
         }
-
-        /** Whether a state the walk may stop at was put in this round. */
-        boolean mayStop() {
-            return stopsIn == round;
-        }
+        return held;
     }
 
     /** Whether {@code symbol} is in a set held as ascending {@code from, to} pairs. */

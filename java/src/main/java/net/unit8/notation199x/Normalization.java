@@ -102,21 +102,12 @@ public final class Normalization {
      * @return {@code s} in {@code form}, or null where that is longer than {@code longest}
      */
     public static @Nullable String normalizeWithin(Form form, String s, long longest) {
-        int unsettled = firstAtTrivialLimit(form, s);
-        if (unsettled == s.length()) {
-            return s.length() <= longest || s.codePointCount(0, s.length()) <= longest ? s : null;
-        }
-        return normalizeFrom(form, s, unsettled == 0 ? 0 : s.offsetByCodePoints(unsettled, -1), longest,
-                null);
+        return within(form, s, longest, null);
     }
 
     /**
      * {@link #normalizeWithin(Form, String, long)}, asking {@code checkpoint} as it goes whether to
      * go on.
-     *
-     * <p>All of the text is read by the algorithm, the part below the form's trivial limit as well,
-     * so that what is asked about is what is looked at, and none of it is copied into the answer in
-     * one operation; the answer is the same.
      *
      * @param form       the normalization form
      * @param s          the text, a sequence of scalar values
@@ -128,20 +119,32 @@ public final class Normalization {
      */
     public static Outcome<@Nullable String> normalizeWithin(Form form, String s, long longest,
                                                             Checkpoint checkpoint) {
-        return Checkpoints.answer(() -> normalizeFrom(form, s, 0, longest, checkpoint));
+        return Checkpoints.answer(() -> within(form, s, longest, checkpoint));
     }
 
-    /** Where the first code point at or above {@code form}'s trivial limit begins, or the text's
-     *  length where there is none. */
-    private static int firstAtTrivialLimit(Form form, String s) {
+    /**
+     * {@link #normalizeWithin}, asking {@code checkpoint}, where there is one, before each code point
+     * it reads.
+     *
+     * <p>The code points below the form's trivial limit are counted as they are read, so that the
+     * text before the one settled from is not read again to count it, and is copied into the answer
+     * only once it has been read.
+     */
+    private static @Nullable String within(Form form, String s, long longest, @Nullable Checkpoint checkpoint) {
+        int last = 0;
+        long beforeLast = 0;
+        long read = 0;
         for (int at = 0; at < s.length(); ) {
+            Checkpoints.ask(checkpoint);
             int cp = s.codePointAt(at);
             if (cp >= form.trivialLimit) {
-                return at;
+                return normalizeFrom(form, s, last, beforeLast, longest, checkpoint);
             }
+            last = at;
+            beforeLast = read++;
             at += Character.charCount(cp);
         }
-        return s.length();
+        return read <= longest ? s : null;
     }
 
     /**
@@ -157,14 +160,14 @@ public final class Normalization {
      * text and, in a composing form, longer than the answer.
      */
     static @Nullable String normalizeFromStart(Form form, String s, long longest) {
-        return normalizeFrom(form, s, 0, longest, null);
+        return normalizeFrom(form, s, 0, 0, longest, null);
     }
 
-    /** {@link #normalizeFromStart}, taking the text before {@code from} as it is: the caller knows
-     *  it is its own normalization and that nothing from {@code from} on composes into it. */
-    private static @Nullable String normalizeFrom(Form form, String s, int from, long longest,
+    /** {@link #normalizeFromStart}, taking the text before {@code from}, {@code kept} code points
+     *  long, as it is: the caller knows it is its own normalization and that nothing from
+     *  {@code from} on composes into it. */
+    private static @Nullable String normalizeFrom(Form form, String s, int from, long kept, long longest,
                                                   @Nullable Checkpoint checkpoint) {
-        int kept = s.codePointCount(0, from);
         if (kept > longest) {
             return null;
         }
@@ -231,7 +234,7 @@ public final class Normalization {
 
         /** Writes the text before {@code end}, {@code codePoints} long, as it is: asked before
          *  anything is taken, of text no longer than {@code longest}. */
-        void keep(String s, int end, int codePoints) {
+        void keep(String s, int end, long codePoints) {
             out.append(s, 0, end);
             written = codePoints;
         }
