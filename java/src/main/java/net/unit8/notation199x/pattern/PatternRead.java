@@ -4,10 +4,14 @@ package net.unit8.notation199x.pattern;
  * What came of reading a pattern.
  *
  * <p>Three answers, and they are about three different things. {@link Read} is a pattern of the
- * language, as what it means. {@link Refused} is text that is no pattern of the language, and says
- * what in it is not. {@link TooDeep} is a pattern the language has and this reader does not read,
- * which is a limit of the reader: an author told that their pattern is not in the language would
- * go looking for a construct when every construct in it is one the language has.
+ * language that is within the limits every implementation holds to, as what it means. {@link Refused}
+ * is text that is no pattern of the language, and says what in it is not. {@link Beyond} is a pattern
+ * of the language written past one of those limits: every construct in it is one the language has,
+ * so an author told it is not in the language would go looking for a construct that is not there.
+ *
+ * <p>The limits are the same number in every implementation, and each is decided from the text
+ * alone. So whether a pattern is read never depends on how a matcher for it is built, and every
+ * pattern that is read has a machine ({@link PatternMachine}).
  *
  * <p>A pattern read in part is not an answer: a tree of the constructs that were understood accepts
  * a language the author did not write, and every reader downstream would be holding a set narrower
@@ -43,15 +47,60 @@ public sealed interface PatternRead {
     }
 
     /**
-     * A pattern written more deeply than this reader reads.
+     * A pattern of the language written past one of the limits every implementation holds to.
      *
-     * <p>Not a refusal: the language has no depth past which a pattern stops being one. Every part
-     * that works a pattern out — the reader, the machines built from it, what a caller lowers it to —
-     * walks it by its depth, and this is where the reader says how deep it will go.
+     * <p>Not a refusal: the language has no count, depth or size past which a pattern stops being
+     * one. What is past a limit is what no implementation is asked to run.
      *
-     * @param deepest how deep a pattern may be written
+     * <p>Answered only of text read to its end and found to be a pattern, its anchors placed. Text
+     * that is no pattern is {@link Refused}, whatever limit it also went past.
+     *
+     * @param limit     which limit it is past
+     * @param from      where in the text the construct that is past it begins, in chars; nought for
+     *                  {@link Limit#MACHINE_STATES}, which is a fact about the whole pattern
+     * @param construct the construct as written: the count, the group opened past the depth, or the
+     *                  whole pattern
      */
-    record TooDeep(int deepest) implements PatternRead {}
+    record Beyond(Limit limit, int from, String construct) implements PatternRead {
+
+        public Beyond {
+            if (limit == null || construct == null || from < 0) {
+                throw new IllegalArgumentException("a pattern past a limit is past some limit");
+            }
+        }
+    }
+
+    /**
+     * The limits on a pattern every implementation holds to, each the same number everywhere.
+     *
+     * <p>They bound what running a pattern costs, and are stated of the text so that no
+     * implementation's way of running one decides which patterns it takes.
+     */
+    enum Limit {
+
+        /** A count of a repetition, written in {@code {n}}, {@code {n,}} or {@code {n,m}}. */
+        REPETITION_COUNT(134_217_727),
+
+        /** Groups one inside another. */
+        NESTING_DEPTH(200),
+
+        /**
+         * The states of the pattern with its repetitions written out, counted from the text as
+         * {@link PatternStates} counts them.
+         */
+        MACHINE_STATES(250_000);
+
+        private final int most;
+
+        Limit(int most) {
+            this.most = most;
+        }
+
+        /** The most a pattern within this limit writes. */
+        public int most() {
+            return most;
+        }
+    }
 
     /**
      * What makes text no pattern of the language.
@@ -70,8 +119,9 @@ public sealed interface PatternRead {
          *  a repetition with nothing before it to repeat. */
         SOMETHING_UNCLOSED,
 
-        /** A repetition whose count is no count: one with no digits, one too large to hold, a
-         *  ceiling below its floor, or a run whose end comes before its start. */
+        /** A repetition whose count is no count: one with no digits, a ceiling below its floor, or
+         *  a run whose end comes before its start. A count past {@link Limit#REPETITION_COUNT} is
+         *  a count, and is {@link Beyond}. */
         A_COUNT_THIS_CANNOT_READ,
 
         /** An escape with no meaning, or one with nothing after it. */

@@ -2,6 +2,7 @@ package net.unit8.notation199x.pattern;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The reader of the pattern language, and the only one.
@@ -12,21 +13,23 @@ import java.util.List;
  * construct this learns is learned by all of them at once, and there is no second reader whose
  * answer could differ.
  *
+ * <p>What it reads is also held to the limits every implementation holds to
+ * ({@link PatternRead.Limit}), and a pattern past one is {@link PatternRead.Beyond}. A limit is
+ * about a pattern, so it is answered only once the text is known to be one: a count or a depth past
+ * its limit is noted where it is met and the reading goes on to the end, and text that is no pattern
+ * anywhere in it, an anchor that cannot be placed included, is {@link PatternRead.Refused} whatever
+ * limit it also went past. Of the limits, the first one met in the text, left to right, is the
+ * answer, and the states are counted last, of a pattern within the other two.
+ *
+ * <p>So the reading has no depth of its own. Groups are read with a stack of their own rather than
+ * by recursion, and the anchors are placed the same way ({@link Anchors}), so text nested as deeply
+ * as it is long is read to its end and never runs a thread's stack out.
+ *
  * <p>Nothing here chooses a value. What one string of the language would be is a question for
  * whatever holds the language; a reader that answered it while parsing is the arrangement that lost
  * the second arm of every choice and the ceiling of every repetition.
  */
 public final class PatternParser {
-
-    /**
-     * How deep a pattern may be written.
-     *
-     * <p>A limit of this reader and not of the language. The reading is recursive, and so is every
-     * walk over what it reads — the machines built from it and what a caller lowers it to — so what
-     * bounds them is the stack. Past this the answer is {@link PatternRead.TooDeep} rather than a
-     * stack overflow somewhere later.
-     */
-    public static final int DEEPEST = 200;
 
     /** What {@link #peek()} answers past the last unit, outside every value a unit has. */
     private static final int END = -1;
@@ -36,6 +39,8 @@ public final class PatternParser {
     private int depth;
     /** Where the construct being read begins, which is what a refusal quotes. */
     private int construct;
+    /** The first limit met in the text, or null while none has been. */
+    private PatternRead.@Nullable Beyond past;
 
     private PatternParser(String regex) {
         this.regex = regex;
@@ -44,20 +49,14 @@ public final class PatternParser {
         this.construct = 0;
     }
 
-    /** What {@code regex} means, or what makes it no pattern, or that it is deeper than this reads. */
+    /** What {@code regex} means, or what makes it no pattern, or which limit it is past. */
     public static PatternRead read(String regex) {
         if (regex == null) {
             throw new IllegalArgumentException("a pattern is some string");
         }
         PatternParser reader = new PatternParser(regex);
         try {
-            WrittenPattern written = reader.alternation();
-            if (!reader.done()) {
-                // A bracket closing nothing, which is what is left when the reading of a choice
-                // stops before the end.
-                return new PatternRead.Refused(PatternRead.Refusal.SOMETHING_UNCLOSED, reader.at,
-                        regex.substring(reader.at, reader.at + 1));
-            }
+            WrittenPattern written = reader.pattern();
             // Every anchor has to come to something, and what it comes to is settled by where it
             // stands rather than by how it is written — which is known now that the whole of the
             // pattern is.
@@ -66,49 +65,151 @@ public final class PatternParser {
                 return new PatternRead.Refused(PatternRead.Refusal.AN_ANCHOR_THIS_CANNOT_PLACE, 0,
                         regex);
             }
+            // The text is a pattern. Whether it is one every implementation takes is asked now.
+            if (reader.past != null) {
+                return reader.past;
+            }
+            // Counted on what was written, where an anchor is one state whatever it came to, so
+            // the count is never below the states of the machine the meaning builds.
+            if (PatternStates.of(written) > PatternRead.Limit.MACHINE_STATES.most()) {
+                return new PatternRead.Beyond(PatternRead.Limit.MACHINE_STATES, 0, regex);
+            }
             return new PatternRead.Read(meaning);
         } catch (Refused refused) {
             int to = Math.min(regex.length(), Math.max(refused.to, refused.from));
             return new PatternRead.Refused(refused.why, refused.from,
                     regex.substring(refused.from, to));
-        } catch (TooDeep _) {
-            return new PatternRead.TooDeep(DEEPEST);
+        }
+    }
+
+    /**
+     * The pattern {@code regex} as it is written, before its anchors are placed, for a check
+     * holding what is counted from the text against what is built.
+     *
+     * @throws IllegalArgumentException where the text is no pattern or is past a count or a depth
+     */
+    static WrittenPattern writtenOf(String regex) {
+        PatternParser reader = new PatternParser(regex);
+        try {
+            WrittenPattern written = reader.pattern();
+            if (reader.past != null) {
+                throw new IllegalArgumentException("past a limit: " + regex);
+            }
+            return written;
+        } catch (Refused e) {
+            throw new IllegalArgumentException("not read: " + regex);
         }
     }
 
     // --- the grammar ------------------------------------------------------------------------------
 
-    private WrittenPattern alternation() {
-        List<WrittenPattern> arms = new ArrayList<>();
-        arms.add(sequence());
-        while (peek() == '|') {
-            take();
-            arms.add(sequence());
+    /**
+     * A choice being read, in a group or at the top: the arms read so far, and the parts of the one
+     * being read.
+     *
+     * @param open    where the group's bracket is, which a refusal of it quotes; -1 at the top
+     */
+    private record Open(int open, List<WrittenPattern> arms, List<WrittenPattern> parts) {
+
+        Open(int open) {
+            this(open, new ArrayList<>(), new ArrayList<>());
         }
-        return arms.size() == 1 ? arms.get(0) : new WrittenPattern.EitherOf(arms);
+
+        /** The arm being read, as what it is written as. */
+        WrittenPattern arm() {
+            return switch (parts.size()) {
+                case 0 -> new WrittenPattern.Meant(new PatternMeaning.Nothing());
+                case 1 -> parts.get(0);
+                default -> new WrittenPattern.InTurn(parts);
+            };
+        }
+
+        /** The choice, as what it is written as. */
+        WrittenPattern choice() {
+            arms.add(arm());
+            return arms.size() == 1 ? arms.get(0) : new WrittenPattern.EitherOf(arms);
+        }
     }
 
-    private WrittenPattern sequence() {
-        List<WrittenPattern> parts = new ArrayList<>();
-        while (!done() && peek() != '|' && peek() != ')') {
-            WrittenPattern one = quantified();
-            // A group of nothing is nothing, and is left out so that one written pattern has one
-            // tree. An anchor is not one of those: where it stands is what decides what it comes
-            // to, so dropping it here would be answering that question with the one place that
-            // cannot see the answer.
-            if (!(one instanceof WrittenPattern.Meant(PatternMeaning.Nothing _))) {
-                parts.add(one);
+    /**
+     * The whole text, as what it is written as.
+     *
+     * <p>A choice is read with a stack of the choices open around it, so a group is a push and its
+     * closing bracket a pop, and nothing here recurses. The tree is the one a recursive reading of
+     * the grammar builds: an arm of one part is that part, an arm of none is nothing, a choice of one
+     * arm is that arm, and a group is what is inside it.
+     */
+    private WrittenPattern pattern() {
+        List<Open> open = new ArrayList<>();
+        Open reading = new Open(-1);
+        while (true) {
+            if (!done() && peek() != '|' && peek() != ')') {
+                construct = at;
+                if (peek() == '(') {
+                    opened();
+                    open.add(reading);
+                    reading = new Open(construct);
+                } else {
+                    part(reading, quantified(atom()));
+                }
+                continue;
             }
+            if (peek() == '|') {
+                take();
+                reading.arms().add(reading.arm());
+                reading.parts().clear();
+                continue;
+            }
+            WrittenPattern choice = reading.choice();
+            if (open.isEmpty()) {
+                if (!done()) {
+                    // A bracket closing nothing, which is what is left when the reading of a
+                    // choice stops before the end.
+                    construct = at;
+                    take();
+                    throw refused(PatternRead.Refusal.SOMETHING_UNCLOSED);
+                }
+                return choice;
+            }
+            expect(')');
+            depth--;
+            reading = open.removeLast();
+            construct = at;
+            part(reading, quantified(choice));
         }
-        return switch (parts.size()) {
-            case 0 -> new WrittenPattern.Meant(new PatternMeaning.Nothing());
-            case 1 -> parts.get(0);
-            default -> new WrittenPattern.InTurn(parts);
-        };
     }
 
-    private WrittenPattern quantified() {
-        WrittenPattern one = atom();
+    /** {@code one} put at the end of the arm being read. A group of nothing is nothing, and is left
+     *  out so that one written pattern has one tree. An anchor is not one of those: where it stands
+     *  is what decides what it comes to, so dropping it here would be answering that question with
+     *  the one place that cannot see the answer. */
+    private static void part(Open reading, WrittenPattern one) {
+        if (!(one instanceof WrittenPattern.Meant(PatternMeaning.Nothing _))) {
+            reading.parts().add(one);
+        }
+    }
+
+    /** A group's opening, plain or {@code (?:}, which are the two the grammar has. */
+    private void opened() {
+        expect('(');
+        if (peek() == '?') {
+            take();
+            // `(?:` and nothing else. A lookaround and a named group have no spelling in the
+            // grammar, and a flag group would change what a class means for the rest of the pattern.
+            if (peek() != ':') {
+                take();
+                throw refused(PatternRead.Refusal.A_GROUP_THE_GRAMMAR_DOES_NOT_HAVE);
+            }
+            take();
+        }
+        if (++depth > PatternRead.Limit.NESTING_DEPTH.most()) {
+            // The group that went past it, from its bracket to where its reading stopped.
+            beyond(PatternRead.Limit.NESTING_DEPTH, construct, at);
+        }
+    }
+
+    /** {@code one} with the count written after it, if any. */
+    private WrittenPattern quantified(WrittenPattern one) {
         int least;
         int most;
         construct = at;
@@ -118,16 +219,21 @@ public final class PatternParser {
             case '+' -> { take(); least = 1; most = PatternMeaning.Repeated.NO_CEILING; }
             case '{' -> {
                 take();
-                least = count();
-                most = least;
+                Count floor = count();
+                Count ceiling = floor;
+                boolean capped = true;
                 if (peek() == ',') {
                     take();
-                    most = peek() == '}' ? PatternMeaning.Repeated.NO_CEILING : count();
+                    capped = peek() != '}';
+                    ceiling = capped ? count() : null;
                 }
                 expect('}');
-                if (most != PatternMeaning.Repeated.NO_CEILING && most < least) {
+                // Compared as written, since either may be past what a count is held at.
+                if (capped && ceiling.below(floor)) {
                     throw refused(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ);
                 }
+                least = floor.held();
+                most = capped ? ceiling.held() : PatternMeaning.Repeated.NO_CEILING;
             }
             default -> {
                 return one;
@@ -150,11 +256,10 @@ public final class PatternParser {
         return new WrittenPattern.Repeated(one, least, most);
     }
 
+    /** One thing written, other than a group. */
     private WrittenPattern atom() {
-        construct = at;
         int c = peek();
         return switch (c) {
-            case '(' -> group();
             case '[' -> {
                 take();
                 yield symbols(characterClass());
@@ -192,26 +297,6 @@ public final class PatternParser {
 
     private static WrittenPattern symbols(CodePoints held) {
         return new WrittenPattern.Meant(new PatternMeaning.Symbols(held));
-    }
-
-    /** A group, plain or {@code (?:}, which are the two the grammar has. */
-    private WrittenPattern group() {
-        expect('(');
-        if (peek() == '?') {
-            take();
-            // `(?:` and nothing else. A lookaround and a named group have no spelling in the
-            // grammar, and a flag group would change what a class means for the rest of the pattern.
-            if (peek() != ':') {
-                take();
-                throw refused(PatternRead.Refusal.A_GROUP_THE_GRAMMAR_DOES_NOT_HAVE);
-            }
-            take();
-        }
-        deeper();
-        WrittenPattern inside = alternation();
-        shallower();
-        expect(')');
-        return inside;
     }
 
     // --- character classes -------------------------------------------------------------------------
@@ -398,34 +483,53 @@ public final class PatternParser {
         return symbol(written);
     }
 
-    /** A repetition's count, which is a whole number this can hold. */
-    private int count() {
-        int value = 0;
-        int digits = 0;
-        while (!done() && peek() >= '0' && peek() <= '9') {
-            value = value * 10 + (take() - '0');
-            digits++;
-            if (value > Integer.MAX_VALUE / 16) {
-                throw refused(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ);
-            }
+    /**
+     * A count as written: its digits without leading zeros, and the value it is held at, which is
+     * one past {@link PatternRead.Limit#REPETITION_COUNT} where it is past that.
+     */
+    private record Count(String digits, int held) {
+
+        /** Whether this is a smaller number than {@code other}, compared as written. */
+        boolean below(Count other) {
+            return digits.length() != other.digits.length()
+                    ? digits.length() < other.digits.length()
+                    : digits.compareTo(other.digits) < 0;
         }
-        if (digits == 0) {
+    }
+
+    /**
+     * A repetition's count.
+     *
+     * <p>Every digit is read, and a count past {@link PatternRead.Limit#REPETITION_COUNT} is noted
+     * and held at one more than it, which is all that is asked of its value; the digits are kept so
+     * that a floor and a ceiling are compared as they are written.
+     */
+    private Count count() {
+        int from = at;
+        long most = PatternRead.Limit.REPETITION_COUNT.most();
+        long value = 0;
+        while (!done() && peek() >= '0' && peek() <= '9') {
+            value = Math.min(most + 1, value * 10 + (take() - '0'));
+        }
+        if (at == from) {
             throw refused(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ);
         }
-        return value;
+        if (value > most) {
+            beyond(PatternRead.Limit.REPETITION_COUNT, from, at);
+        }
+        String digits = regex.substring(from, at).replaceFirst("^0+(?=.)", "");
+        return new Count(digits, (int) value);
+    }
+
+    /** Notes the first limit met in the text, which is the answer if the text turns out to be a
+     *  pattern. */
+    private void beyond(PatternRead.Limit limit, int from, int to) {
+        if (past == null) {
+            past = new PatternRead.Beyond(limit, from, regex.substring(from, to));
+        }
     }
 
     // --- walking -----------------------------------------------------------------------------------
-
-    private void deeper() {
-        if (++depth > DEEPEST) {
-            throw new TooDeep();
-        }
-    }
-
-    private void shallower() {
-        depth--;
-    }
 
     private boolean done() {
         return at >= regex.length();
@@ -479,16 +583,6 @@ public final class PatternParser {
             this.why = why;
             this.from = from;
             this.to = to;
-        }
-    }
-
-    /** What a pattern written past {@link #DEEPEST} raises. */
-    private static final class TooDeep extends RuntimeException {
-
-        private static final long serialVersionUID = 1L;
-
-        TooDeep() {
-            super(null, null, false, false);
         }
     }
 }

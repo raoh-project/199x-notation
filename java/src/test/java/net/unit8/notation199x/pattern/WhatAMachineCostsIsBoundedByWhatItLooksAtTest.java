@@ -34,10 +34,10 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
      */
     @Test
     void theLongestRepetitionAClassRunsFitsTheImageItIsGiven() {
-        int most = PatternImage.MOST_STATES;
+        int most = PatternRead.Limit.MACHINE_STATES.most();
         PatternMeaning meaning = meaning("a{" + (most - 10) + "}");
         PatternImage.Written image =
-                assertInstanceOf(PatternImage.Written.class, PatternImage.of(meaning));
+                assertInstanceOf(PatternImage.Written.class, PatternMachine.of(meaning).image());
         StringPattern run = StringPattern.of(image.strings());
         assertTrue(run.matches("a".repeat(most - 10)));
         assertFalse(run.matches("a".repeat(most - 11)));

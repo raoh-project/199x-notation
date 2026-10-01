@@ -13,16 +13,17 @@ import java.util.function.Predicate;
  * against.
  *
  * <p>No pattern text is here and none is read. {@link PatternParser} reads a pattern,
- * {@link PatternImage} builds the machine it means and writes it as an image ({@link Writer}), and
- * what is run is read from that image ({@link #of}). So nothing in a match decides what a pattern
- * means, and no engine's way of finding a match is involved in the answer.
+ * {@link PatternMachine} builds the machine it means, and what is run is that machine
+ * ({@link PatternMachine#pattern}) or an image it was written as and read back from
+ * ({@link #of}). So nothing in a match decides what a pattern means, and no engine's way of finding
+ * a match is involved in the answer.
  *
  * <p>A walk reads each character of the subject once, holds no stack and never goes back. Where the
  * machine is deterministic a character is one lookup; where it is not, a character moves each state
- * the walk is in, and a state is in the walk at most once. Which of the two an image holds is
- * {@link PatternImage}'s choice and changes no answer: a pattern whose deterministic machine is too large to
- * write is written as the machine its shape builds, which is never larger than the pattern's
- * repetitions written out.
+ * the walk is in, and a state is in the walk at most once. Which of the two is run is
+ * {@link PatternMachine}'s choice and changes no answer: a pattern whose deterministic machine is
+ * too costly to make is run as the machine its shape builds, which has the states
+ * {@link PatternStates} counts and no more.
  *
  * <p>A symbol is a scalar value. Text holding half a surrogate pair is no text, and no set
  * in an image holds a surrogate, so such text is accepted by nothing.
@@ -210,6 +211,55 @@ public final class StringPattern implements Predicate<String> {
         }
         int[][] runs = deterministic ? runs(over, target) : new int[0][];
         return new StringPattern(deterministic, accepting, runs, over, target, free);
+    }
+
+    /**
+     * What {@code machine} accepts, run as it is: the machine a pattern is run as, held here without
+     * being written into an image and read back.
+     *
+     * <p>For a caller that runs a pattern where it reads it, which has nowhere to carry an image to.
+     * The machine is one this package built, so what an image is checked for on the way in holds
+     * of it already, and a set a machine steps over twice is held once.
+     *
+     * @param machine       the machine
+     * @param deterministic whether it is one where a walk is only ever in one state, which has no
+     *                      step for no character
+     */
+    static StringPattern of(Automaton machine, boolean deterministic) {
+        int states = machine.size();
+        boolean[] accepting = new boolean[states];
+        int[][][] over = new int[states][][];
+        int[][] target = new int[states][];
+        int[][] free = new int[states][];
+        Map<CodePoints, int[]> sets = new HashMap<>();
+        for (int state = 0; state < states; state++) {
+            accepting[state] = machine.stopsAt(state);
+            List<Automaton.Step> steps = machine.stepsFrom(state);
+            over[state] = new int[steps.size()][];
+            target[state] = new int[steps.size()];
+            for (int step = 0; step < steps.size(); step++) {
+                over[state][step] = sets.computeIfAbsent(steps.get(step).over(), StringPattern::pairs);
+                target[state][step] = steps.get(step).to();
+            }
+            free[state] = machine.freeFrom(state).clone();
+            if (deterministic && free[state].length > 0) {
+                throw new IllegalArgumentException(
+                        "a deterministic machine steps nowhere for no character");
+            }
+        }
+        int[][] runs = deterministic ? runs(over, target) : new int[0][];
+        return new StringPattern(deterministic, accepting, runs, over, target, free);
+    }
+
+    /** A set as the ascending {@code from, to} pairs a walk searches. */
+    private static int[] pairs(CodePoints over) {
+        List<CodePoints.Range> ranges = over.ranges();
+        int[] out = new int[ranges.size() * 2];
+        for (int at = 0; at < ranges.size(); at++) {
+            out[at * 2] = ranges.get(at).from();
+            out[at * 2 + 1] = ranges.get(at).to();
+        }
+        return out;
     }
 
     /** {@code ranges} as a set an image may write: {@code from, to} pairs of scalar values, each
@@ -431,6 +481,10 @@ public final class StringPattern implements Predicate<String> {
      * <p>Here beside the reader, so the one format has one owner: a writer elsewhere and a reader
      * here would be two accounts of it, and nothing would hold them to each other.
      *
+     * <p>Private to this package. Whether the machine is deterministic is said to the writer rather
+     * than worked out by it, so only a writer handed its machine by the code that built it
+     * ({@link PatternImages}) knows the answer it gives is true.
+     *
      * <p>A set is written once however many steps are over it. The machine a pattern's shape builds
      * writes a repetition out as copies, and each copy steps over the same set, so a class written
      * large is not written again for every copy.
@@ -441,7 +495,7 @@ public final class StringPattern implements Predicate<String> {
      * large. Counted exactly, but for the two counts at the front, which are taken at their widest:
      * a limit counted loosely would refuse machines the image holds.
      */
-    public static final class Writer {
+    static final class Writer {
 
         private final boolean deterministic;
         private final long mostCharacters;

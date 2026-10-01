@@ -295,7 +295,6 @@ class APatternIsReadAsWhatItAcceptsTest {
         assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refused("*a"));
         assertEquals(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ, refused("\\y"));
         assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ, refused("a{6,2}"));
-        assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ, refused("a{99999999999}"));
         assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ, refused("a{"));
     }
 
@@ -330,14 +329,16 @@ class APatternIsReadAsWhatItAcceptsTest {
         assertInstanceOf(PatternRead.Refused.class, PatternParser.read("(a)\\1[0-9]"));
     }
 
-    /** Written more deeply than the compiler reads is a limit of the compiler, and it says so
+    /** Written more deeply than every implementation reads is past a limit, and it says so
      *  rather than falling over — and not as a refusal, since every construct in it is one the
-     *  language has. */
+     *  language has. What is quoted is the group that went past it. */
     @Test
-    void aPatternNestedPastTheReadingSaysSo() {
-        assertEquals(new PatternRead.TooDeep(PatternParser.DEEPEST),
-                PatternParser.read("(?:".repeat(500) + "a" + ")".repeat(500)));
+    void aPatternNestedPastTheLimitSaysSo() {
+        int deepest = PatternRead.Limit.NESTING_DEPTH.most();
+        String past = "(?:".repeat(deepest) + "(a)" + ")".repeat(deepest);
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.NESTING_DEPTH, 3 * deepest, "("),
+                PatternParser.read(past));
         assertInstanceOf(PatternRead.Read.class, PatternParser.read(
-                "(?:".repeat(PatternParser.DEEPEST) + "a" + ")".repeat(PatternParser.DEEPEST)));
+                "(?:".repeat(deepest) + "a" + ")".repeat(deepest)));
     }
 }
