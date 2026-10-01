@@ -1,5 +1,6 @@
 package net.unit8.notation199x.pattern;
 
+import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -62,7 +63,7 @@ public final class Automaton {
      * a search, so a value costs its length and not its length times how finely the machine cuts
      * the symbols.
      */
-    private final int[][] runs;
+    private final int @Nullable [][] runs;
 
     /** One step, and what it costs to take: the symbols it is over, and the state it leads to. */
     public record Step(CodePoints over, int to) {
@@ -85,7 +86,7 @@ public final class Automaton {
      * <p>The free steps and the runs are arrays, which nothing freezes. Every one of them is made
      * by the construction that calls this and let go of, and none leaves the machine uncopied.
      */
-    private Automaton(List<List<Step>> steps, List<int[]> free, BitSet accepting, int[][] runs) {
+    private Automaton(List<List<Step>> steps, List<int[]> free, BitSet accepting, int @Nullable [][] runs) {
         List<List<Step>> rows = new ArrayList<>(steps.size());
         for (List<Step> row : steps) {
             rows.add(List.copyOf(row));
@@ -225,7 +226,7 @@ public final class Automaton {
      * pattern is worth this many states is a question about the answer being built, and nothing here
      * knows what that answer is for.
      */
-    public static Automaton of(PatternMeaning meaning, Meter meter) {
+    public static @Nullable Automaton of(PatternMeaning meaning, Meter meter) {
         Building building = new Building(meter.making());
         try {
             int start = building.state();
@@ -251,7 +252,7 @@ public final class Automaton {
      * of them, and a long value over a wide machine is their product. That is charged a symbol at a
      * time, before the steps are looked at.
      */
-    public Boolean accepts(String value, Meter meter) {
+    public @Nullable Boolean accepts(String value, Meter meter) {
         Meter.Making making = meter.making();
         BitSet here = closure(only(START));
         int at = 0;
@@ -352,7 +353,7 @@ public final class Automaton {
      * <p>Of words that are sequences of scalar values, which is the caller's to have asked: half a
      * surrogate pair is no symbol, and a word holding one is an {@link IllegalArgumentException}.
      */
-    public static Automaton ofWords(java.util.Collection<String> words, Meter meter) {
+    public static @Nullable Automaton ofWords(java.util.Collection<String> words, Meter meter) {
         Meter.Making making = meter.making();
         List<List<Step>> steps = new ArrayList<>();
         List<int[]> free = new ArrayList<>();
@@ -390,7 +391,7 @@ public final class Automaton {
      * <p>A new beginning that steps freely into both. Cheap: the states are the two machines'
      * together and one more, and nothing is copied.
      */
-    public Automaton or(Automaton other, Meter meter) {
+    public @Nullable Automaton or(Automaton other, Meter meter) {
         int mine = size();
         // What it will be: a beginning, and the two machines beside it. Asked before any of it is
         // made, since knowing the size and allocating it anyway is the thing a limit is for.
@@ -430,7 +431,7 @@ public final class Automaton {
      * multiplied is what a product could come to and hardly ever what it comes to, so a caller
      * refused on that number is refused an answer it could have afforded.
      */
-    public Automaton and(Automaton other, Meter meter) {
+    public @Nullable Automaton and(Automaton other, Meter meter) {
         try {
             Meter.Making making = meter.making();
             Pairs pairs = new Pairs(other.size(), making);
@@ -572,7 +573,7 @@ public final class Automaton {
      * holding nothing and holding everything, both of which are read off the one state a canonical
      * machine has.
      */
-    public Automaton not(Meter meter) {
+    public @Nullable Automaton not(Meter meter) {
         if (everySymbolLeadsOneWay()) {
             return turnedOver();
         }
@@ -674,7 +675,7 @@ public final class Automaton {
      * subsets were cut over is the labels the pattern happened to carry, and two ways of writing one
      * language cut it differently — gathered by where they lead, the runs are the language's own.
      */
-    public Automaton canonical(Meter meter) {
+    public @Nullable Automaton canonical(Meter meter) {
         try {
             Subsets subsets = new Subsets(meter.making());
             List<CodePoints> alphabet = subsets.alphabet();
@@ -978,7 +979,7 @@ public final class Automaton {
      * <p>Deterministic under both: the symbol taken out of a set is the least of it, and the states
      * are walked in the order they were made. Two runs over one model produce one value.
      */
-    public String shortest() {
+    public @Nullable String shortest() {
         String any = shortest(CodePoints.EVERYTHING, -1);
         if (any == null) {
             return null;
@@ -1000,7 +1001,7 @@ public final class Automaton {
      * caller writing a value into a model, where a string nobody can paste is not an answer at all.
      * A pattern admitting only control characters has a shortest string and no value to offer.
      */
-    public String shortestWritten() {
+    public @Nullable String shortestWritten() {
         return shortest(WRITABLE, -1);
     }
 
@@ -1031,7 +1032,7 @@ public final class Automaton {
      * of its predecessor's with one symbol more, and over a machine as long as the string it
      * answers, that is the square of the length.
      */
-    private String shortest(CodePoints these, int mostSymbols) {
+    private @Nullable String shortest(CodePoints these, int mostSymbols) {
         int[] cameFrom = new int[size()];
         int[] on = new int[size()];
         BitSet seen = closure(only(START));

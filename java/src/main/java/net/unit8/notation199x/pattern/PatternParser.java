@@ -220,20 +220,19 @@ public final class PatternParser {
             case '{' -> {
                 take();
                 Count floor = count();
-                Count ceiling = floor;
-                boolean capped = true;
+                // Null where the repetition has no ceiling: `{n,}`.
+                @Nullable Count ceiling = floor;
                 if (peek() == ',') {
                     take();
-                    capped = peek() != '}';
-                    ceiling = capped ? count() : null;
+                    ceiling = peek() == '}' ? null : count();
                 }
                 expect('}');
                 // Compared as written, since either may be past what a count is held at.
-                if (capped && ceiling.below(floor)) {
+                if (ceiling != null && ceiling.below(floor)) {
                     throw refused(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ);
                 }
                 least = floor.held();
-                most = capped ? ceiling.held() : PatternMeaning.Repeated.NO_CEILING;
+                most = ceiling == null ? PatternMeaning.Repeated.NO_CEILING : ceiling.held();
             }
             default -> {
                 return one;
@@ -429,7 +428,7 @@ public final class PatternParser {
      * {@code \\uD800\\uDC00} would name the two halves and not U+10000, a different set of strings
      * under the same spelling.
      */
-    private int spelled(PatternEscapes.Spelled escape) {
+    private int spelled(PatternEscapes.@Nullable Spelled escape) {
         if (escape == null) {
             throw refused(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ);
         }

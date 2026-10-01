@@ -1,5 +1,6 @@
 package net.unit8.notation199x.pattern;
 
+import org.jspecify.annotations.Nullable;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -118,7 +119,7 @@ final class UnicodeProperty {
         return ranges.clone();
     }
 
-    private static String versionIn(String line, String file) {
+    private static @Nullable String versionIn(String line, String file) {
         String prefix = "# " + file + "-";
         String suffix = ".txt";
         if (!line.startsWith(prefix) || !line.endsWith(suffix)) {

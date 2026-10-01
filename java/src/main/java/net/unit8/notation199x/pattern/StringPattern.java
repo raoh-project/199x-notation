@@ -3,6 +3,7 @@ package net.unit8.notation199x.pattern;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -161,7 +162,46 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
+     * The formats an image is written in, each named by the marker an image begins with.
+     *
+     * <p>An image is written by one copy of this library and read by another: a compiler writes it
+     * into a class, and the class runs against whichever release the program resolves. So a format
+     * that a release has written is read by every release after it, and one is added here and none
+     * is taken away. Which format is written is {@link #WRITTEN_FORMAT}, apart from this, so that
+     * writing a new format does not stop the old ones being read.
+     */
+    private enum ImageFormat {
+
+        /** The kind, the sets, and the states with their steps, as numbers between commas. */
+        P1;
+
+        /** The format {@code marker} names, or why there is none this reads. */
+        static ImageFormat named(String marker) {
+            for (ImageFormat each : values()) {
+                if (each.name().equals(marker)) {
+                    return each;
+                }
+            }
+            String shown = marker.length() > 20 ? marker.substring(0, 20) + "…" : marker;
+            if (marker.isEmpty() || marker.chars().allMatch(c -> c >= '0' && c <= '9')) {
+                throw new IllegalArgumentException("an image begins with the format it is written in,"
+                        + " and this one begins with \"" + shown + "\"; this reads "
+                        + Arrays.toString(values()));
+            }
+            throw new IllegalArgumentException("an image written in format \"" + shown
+                    + "\", and this reads " + Arrays.toString(values()));
+        }
+    }
+
+    /** The format a {@link Writer} writes. Not what is read, which is every {@link ImageFormat}. */
+    private static final ImageFormat WRITTEN_FORMAT = ImageFormat.P1;
+
+    /**
      * The pattern {@code image} writes.
+     *
+     * <p>The image begins with the format it is written in, and is read as that format. An image of
+     * a format this release does not read, or of none, is refused saying which it was given and
+     * which this reads: every format an earlier release wrote is one of them.
      *
      * <p>An image is held to writing a machine before there is a pattern: a state to start in, sets
      * that are runs of scalar values in order, steps over sets it has to states it has, and in a
@@ -170,7 +210,17 @@ public final class StringPattern implements Predicate<String> {
      * text it is asked about. Anything else is an {@link IllegalArgumentException}.
      */
     public static StringPattern of(List<String> image) {
-        Ints in = new Ints(String.join("", image));
+        String text = String.join("", image);
+        int comma = text.indexOf(',');
+        ImageFormat format = ImageFormat.named(comma < 0 ? text : text.substring(0, comma));
+        Ints in = new Ints(text, comma < 0 ? text.length() : comma + 1);
+        return switch (format) {
+            case P1 -> readP1(in);
+        };
+    }
+
+    /** The machine an image of {@link ImageFormat#P1} writes, read from after its marker. */
+    private static StringPattern readP1(Ints in) {
         boolean deterministic = in.flag("which kind of machine it is");
         int[][] sets = new int[in.count()][];
         for (int i = 0; i < sets.length; i++) {
@@ -493,7 +543,8 @@ public final class StringPattern implements Predicate<String> {
      * characters it comes to in the image, and a writer past its limit says so ({@link #holds}) so
      * that whoever is writing stops there, rather than an image being made whole and then found too
      * large. Counted exactly, but for the two counts at the front, which are taken at their widest:
-     * a limit counted loosely would refuse machines the image holds.
+     * a limit counted loosely would refuse machines the image holds. The format's marker is counted
+     * with the rest, since it is characters of the image like any other.
      */
     static final class Writer {
 
@@ -514,8 +565,9 @@ public final class StringPattern implements Predicate<String> {
         public Writer(boolean deterministic, long mostCharacters) {
             this.deterministic = deterministic;
             this.mostCharacters = mostCharacters;
-            // The kind, and the two counts written before what they count, at their widest.
-            this.characters = 2 + 2 * NUMBER;
+            // The format's marker, the kind, and the two counts written before what they count, at
+            // their widest.
+            this.characters = WRITTEN_FORMAT.name().length() + 1 + 2 + 2 * NUMBER;
         }
 
         /** The most characters one number of an image takes, its comma included. */
@@ -524,6 +576,11 @@ public final class StringPattern implements Predicate<String> {
         /** The characters {@code value} is written in, its comma included. */
         private static int written(int value) {
             return Integer.toString(value).length() + 1;
+        }
+
+        /** The characters the image is counted at so far, which is never fewer than it takes. */
+        long counted() {
+            return characters;
         }
 
         /** Whether what has been added so far still fits the image's limit. */
@@ -620,6 +677,7 @@ public final class StringPattern implements Predicate<String> {
                 }
             }
             StringBuilder out = new StringBuilder();
+            out.append(WRITTEN_FORMAT.name()).append(',');
             out.append(deterministic ? 1 : 0).append(',').append(sets.size());
             for (String each : sets) {
                 out.append(',').append(each);
@@ -657,8 +715,9 @@ public final class StringPattern implements Predicate<String> {
         private final String text;
         private int at;
 
-        Ints(String text) {
+        Ints(String text, int at) {
             this.text = text;
+            this.at = at;
         }
 
         int next() {

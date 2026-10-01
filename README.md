@@ -46,7 +46,8 @@ told apart from text that is no pattern. Every pattern within them has a machine
 how a machine is built or carried decides which patterns a caller takes. A caller that runs a
 pattern where it reads it takes the matcher; one that carries the machine elsewhere, as a compiler
 writing it into a class does, takes it written out as an image, and only the image has a size of
-its own.
+its own. An image begins with the format it is written in, and a release reads every format an
+earlier release wrote, so a class compiled against one release runs against a later one.
 
 What a caller asks about the patterns it holds beyond that, and how much it is willing to spend on
 an answer, is the caller's. The operations on machines take their limits as an argument. Souther's
@@ -66,7 +67,7 @@ One directory per language, beside the data they are all generated from and chec
 | `ucd/` | The Unicode Character Database files of the pinned version, with their checksums |
 | `gen/` | The programs that generate the tables from `ucd/` |
 | `suite/` | Test vectors every implementation runs |
-| `java/` | Maven artifact `net.unit8.notation199x:199x-notation`, package `net.unit8.notation199x` |
+| `java/` | Maven artifact `net.unit8.199x:199x-notation`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
 | `go/` | Package `notation199x` |
 | `php/` | Package `notation199x` |
@@ -85,8 +86,26 @@ The Java tests read `ucd/`, so they run in `java/`:
 cd java && mvn test
 ```
 
+Both packages are `@NullMarked`, and NullAway checks the main sources against that on every
+compile. Nothing else of Error Prone runs.
+
 CI checks the files in `ucd/` against their checksums, runs the generators and fails if the
 checked-in tables differ, and runs the tests.
+
+## Releasing
+
+A release is deployed from the commit its tag names, so what Central holds is what the tag holds.
+Merge the release into `main`, tag that commit `vX.Y.Z`, and deploy from a checkout of the tag:
+
+```sh
+git checkout vX.Y.Z
+cd java && mvn -Prelease clean deploy
+```
+
+`clean`, because NullAway runs inside javac and a compile Maven thinks is up to date is not
+checked. The `release` profile attaches the sources and the Javadoc and signs everything, and the
+Central Portal publishes the release once it has validated it. Then move `develop` to the next
+`-SNAPSHOT`.
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
 `notation199x`.

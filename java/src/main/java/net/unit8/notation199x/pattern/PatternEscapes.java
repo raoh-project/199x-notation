@@ -1,5 +1,6 @@
 package net.unit8.notation199x.pattern;
 
+import org.jspecify.annotations.Nullable;
 /**
  * How a pattern writes a character by its number.
  *
@@ -27,7 +28,7 @@ final class PatternEscapes {
      * <p>{@code \\uD800\\uDC00} is U+10000 and neither half on its own. A high escape with no low one
      * after it spells the high surrogate, which no text holds and the reader refuses.
      */
-    static Spelled unicode(String regex, int at) {
+    static @Nullable Spelled unicode(String regex, int at) {
         int first = fixedHex(regex, at, 4);
         if (first < 0) {
             return null;
@@ -46,7 +47,7 @@ final class PatternEscapes {
      * What {@code \x} spells, read from {@code at}, just past the {@code x}: two hex digits, or any
      * number of them in braces up to {@link CodePoints#LAST}. Null where it is neither.
      */
-    static Spelled hex(String regex, int at) {
+    static @Nullable Spelled hex(String regex, int at) {
         if (!regex.startsWith("{", at)) {
             int value = fixedHex(regex, at, 2);
             return value < 0 ? null : new Spelled(value, at + 2);
