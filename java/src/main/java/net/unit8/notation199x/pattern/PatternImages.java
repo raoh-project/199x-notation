@@ -1,5 +1,6 @@
 package net.unit8.notation199x.pattern;
 
+import org.jspecify.annotations.Nullable;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,7 +34,7 @@ final class PatternImages {
      * cost, so a small pattern only ever reaches the deterministic one there, and the other would go
      * unasked.
      */
-    static List<String> deterministic(PatternMeaning meaning, Meter meter) {
+    static @Nullable List<String> deterministic(PatternMeaning meaning, Meter meter) {
         Automaton shaped = Automaton.of(meaning, meter);
         Automaton one = shaped == null ? null : shaped.canonical(meter);
         return one == null ? null : written(one, true);
@@ -41,7 +42,7 @@ final class PatternImages {
 
     /** The shape's machine's image, or null where it is past {@code meter}. See
      *  {@link #deterministic}. */
-    static List<String> shaped(PatternMeaning meaning, Meter meter) {
+    static @Nullable List<String> shaped(PatternMeaning meaning, Meter meter) {
         Automaton shaped = Automaton.of(meaning, meter);
         return shaped == null ? null : written(shaped, false);
     }
@@ -54,7 +55,7 @@ final class PatternImages {
      * written: what is refused here is never written out first. A label is handed to the writer once
      * however many steps share it.
      */
-    private static List<String> written(Automaton machine, boolean deterministic) {
+    private static @Nullable List<String> written(Automaton machine, boolean deterministic) {
         StringPattern.Writer out = new StringPattern.Writer(deterministic, PatternImage.MOST_CHARACTERS);
         for (int state = 0; state < machine.size() && out.holds(); state++) {
             out.state(machine.stopsAt(state));

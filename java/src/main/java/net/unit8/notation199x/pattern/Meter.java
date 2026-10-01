@@ -1,5 +1,6 @@
 package net.unit8.notation199x.pattern;
 
+import org.jspecify.annotations.Nullable;
 /**
  * What a caller allows to be built while one answer is worked out, counted as it is built.
  *
@@ -52,7 +53,7 @@ public final class Meter {
     private int left;
     private final long mostWork;
     private long workLeft;
-    private Stopped stopped;
+    private @Nullable Stopped stopped;
 
     /**
      * @param mostStates how many states one machine may hold
@@ -112,7 +113,7 @@ public final class Meter {
      * which is the spending this exists to stop — so the question this can answer honestly is the
      * one about the limit that actually refused.
      */
-    public Stopped stoppedBy() {
+    public @Nullable Stopped stoppedBy() {
         return stopped;
     }
 

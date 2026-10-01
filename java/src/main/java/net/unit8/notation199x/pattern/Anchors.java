@@ -84,7 +84,7 @@ final class Anchors {
                         tasks.add(new Task(it.parts().get(at), sides[at][0], sides[at][1], false));
                     }
                 }
-                case WrittenPattern.Repeated it when !facts.get(it.what()).holds() -> {
+                case WrittenPattern.Repeated it when !factsOf(facts, it.what()).holds() -> {
                     tasks.add(task.putTogether());
                     tasks.add(new Task(it.what(), task.atStart(), task.atEnd(), false));
                 }
@@ -175,7 +175,7 @@ final class Anchors {
         boolean[] mustBefore = new boolean[count + 1];
         mustBefore[0] = true;
         for (int at = 0; at < count; at++) {
-            Facts part = facts.get(it.parts().get(at));
+            Facts part = factsOf(facts, it.parts().get(at));
             mayBefore[at + 1] = mayBefore[at] || part.may();
             mustBefore[at + 1] = mustBefore[at] && part.must();
         }
@@ -183,7 +183,7 @@ final class Anchors {
         boolean[] mustAfter = new boolean[count + 1];
         mustAfter[count] = true;
         for (int at = count - 1; at >= 0; at--) {
-            Facts part = facts.get(it.parts().get(at));
+            Facts part = factsOf(facts, it.parts().get(at));
             mayAfter[at] = mayAfter[at + 1] || part.may();
             mustAfter[at] = mustAfter[at + 1] && part.must();
         }
@@ -249,20 +249,29 @@ final class Anchors {
         };
     }
 
+    /** The facts of {@code part}, which are worked out before those of whatever holds it. */
+    private static Facts factsOf(Map<WrittenPattern, Facts> known, WrittenPattern part) {
+        Facts facts = known.get(part);
+        if (facts == null) {
+            throw new IllegalStateException("a part is asked about before its facts are known");
+        }
+        return facts;
+    }
+
     private static Facts factsOf(WrittenPattern written, Map<WrittenPattern, Facts> known) {
         return switch (written) {
             case WrittenPattern.Meant it -> new Facts(mayTake(it.meaning()), mustTake(it.meaning()), false);
             case WrittenPattern.Anchor _ -> new Facts(false, false, true);
             case WrittenPattern.InTurn it -> new Facts(
-                    it.parts().stream().anyMatch(each -> known.get(each).may()),
-                    it.parts().stream().anyMatch(each -> known.get(each).must()),
-                    it.parts().stream().anyMatch(each -> known.get(each).holds()));
+                    it.parts().stream().anyMatch(each -> factsOf(known, each).may()),
+                    it.parts().stream().anyMatch(each -> factsOf(known, each).must()),
+                    it.parts().stream().anyMatch(each -> factsOf(known, each).holds()));
             case WrittenPattern.EitherOf it -> new Facts(
-                    it.arms().stream().anyMatch(each -> known.get(each).may()),
-                    it.arms().stream().allMatch(each -> known.get(each).must()),
-                    it.arms().stream().anyMatch(each -> known.get(each).holds()));
+                    it.arms().stream().anyMatch(each -> factsOf(known, each).may()),
+                    it.arms().stream().allMatch(each -> factsOf(known, each).must()),
+                    it.arms().stream().anyMatch(each -> factsOf(known, each).holds()));
             case WrittenPattern.Repeated it -> {
-                Facts what = known.get(it.what());
+                Facts what = factsOf(known, it.what());
                 yield new Facts(
                         (it.most() == PatternMeaning.Repeated.NO_CEILING || it.most() > 0) && what.may(),
                         it.least() > 0 && what.must(),
