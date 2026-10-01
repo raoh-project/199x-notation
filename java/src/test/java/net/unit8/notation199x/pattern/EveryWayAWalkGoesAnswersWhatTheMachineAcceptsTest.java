@@ -115,7 +115,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         int characters = subject.codePointCount(0, subject.length());
         for (StringPattern run : everyWay(deterministic, true)) {
             if (run.way() == StringPattern.Way.SETS_KEPT || run.way() == StringPattern.Way.EVERY_STATE) {
-                // Walked as the machine its steps write, which asks as such a walk does.
+                // Walked as sets of states, which asks as such a walk does.
                 continue;
             }
             long[] asked = {0};
@@ -155,7 +155,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             out.add(way(StringPattern.Way.ASCII_AND_RUNS, machine, true, new StringPattern.Budget(
                     0, given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(),
                     given.remembered())));
-            // Neither a table nor runs: walked as the machine its steps write.
+            // Neither a table nor runs: walked as sets of states, and deterministic still.
             out.add(way(StringPattern.Way.SETS_KEPT, machine, true, new StringPattern.Budget(
                     given.classWork(), 0, given.asciiEntries(), 0, given.subsets(), given.remembered())));
             out.add(way(StringPattern.Way.EVERY_STATE, machine, true, new StringPattern.Budget(

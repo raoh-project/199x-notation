@@ -30,12 +30,16 @@ import java.lang.invoke.VarHandle;
  *
  * <p>A walk reads each character of the subject once, holds no stack and never goes back. The
  * symbols are put into the classes the machine's steps tell apart ({@link SymbolClasses}), and a
- * character is looked up as its class. Where the machine is deterministic, a character is then one
- * more lookup, of where its class leads. Where it is not, the walk is in a set of states, and where
- * a class leads from a set is worked out the first time a walk needs it, by moving each state of
- * the set, a state being put in the set at most once; it is kept with the set, so a walk that comes
- * to it again looks it up as over a deterministic machine. The sets kept are bounded, and a walk
- * that would need one more goes on moving each state it is in for every character. Which machine is
+ * character is looked up as its class. Where the machine is deterministic and its table is within
+ * what a pattern may spend ({@link Budget}), a character is then one more lookup, of where its
+ * class leads; without the table, a search of the state's runs. Otherwise the walk is in a set of
+ * states, and where a class leads from a set is worked out the first time a walk needs it, by moving
+ * each state of the set, a state being put in the set at most once; it is kept with the set, so a
+ * walk that comes to it again looks it up as over a table. The sets kept are bounded, and a walk
+ * that would need one more goes on moving each state it is in for every character. Whether a
+ * machine is deterministic is the machine's, and is held to it whatever the budget; how it is
+ * walked is the budget's, and a deterministic machine past both its table and its runs is walked as
+ * sets of states as any other is. Which machine is
  * run is {@link PatternMachine}'s choice and changes no answer: a pattern whose deterministic machine
  * is too costly to make is run as the machine its shape builds, which has the states
  * {@link PatternStates} counts and no more.
@@ -92,8 +96,8 @@ public final class StringPattern implements Predicate<String> {
      */
     private final int @Nullable [][] runs;
 
-    /** For each state of a machine that is not deterministic, the sets its steps are over, as
-     *  {@code from, to} pairs. */
+    /** For each state, the sets its steps are over, as {@code from, to} pairs: what a walk as sets
+     *  of states searches, and what every other way of walking is made from. */
     private final int[][][] over;
 
     /** Where each of those steps leads. */
@@ -117,7 +121,7 @@ public final class StringPattern implements Predicate<String> {
      *                     many as its states times the kinds of ASCII character it tells apart
      * @param runs         the most {@link #runs} a deterministic machine with no table holds, as many
      *                     as the runs of the sets each of its states steps over; past them it is
-     *                     walked as a machine that is not deterministic
+     *                     walked as sets of states, as a machine that is not deterministic is
      * @param subsets      the most sets of states a pattern keeps for its walks ({@link #remember})
      * @param remembered   the most states and steps those sets hold between them, each set's states
      *                     and one step for each class; each is an {@code int} or a reference, about
@@ -176,8 +180,8 @@ public final class StringPattern implements Predicate<String> {
      * For each state of a deterministic machine and each class, at {@code state * classes + class},
      * where it leads, written as that state times the classes so that the next lookup needs no
      * multiplying, or -1 where it leads nowhere or to a state from which no walk is accepted. Null
-     * for a machine that is not deterministic, that has no {@link #classes}, or whose table is past
-     * the {@link Budget}.
+     * for a machine that is not deterministic, for one with no {@link #classes}, and for one whose
+     * table is past the {@link Budget}.
      */
     private final @Nullable Table table;
 
@@ -227,9 +231,10 @@ public final class StringPattern implements Predicate<String> {
      */
     private record Ascii(byte[] kind, int kinds, int[] steps) {}
 
-    /** The sets of states a walk over a machine that is not deterministic has been found to be in,
-     *  or null where the machine is deterministic, has no {@link #classes}, or its first set is past
-     *  the {@link Budget}. */
+    /** The sets of states a walk has been found to be in, for a machine walked as sets of states:
+     *  one that is not deterministic, or one that is and has neither a {@link #table} nor
+     *  {@link #runs}. Null for any other, where there are no {@link #classes}, or where the first set
+     *  is past the {@link Budget}. */
     private final @Nullable Subsets subsets;
 
     private StringPattern(boolean deterministic, boolean[] accepting, int[][][] over, int[][] target,
@@ -488,7 +493,7 @@ public final class StringPattern implements Predicate<String> {
         return new Ascii(kind, kinds, steps);
     }
 
-    /** The {@link #subsets} of a machine that is not deterministic, holding the one a walk starts
+    /** The {@link #subsets} of a machine walked as sets of states, holding the one a walk starts
      *  in: the first state and every live one it reaches for no character. Null where that set is
      *  past what the sets kept may hold, and every walk moves each state for every character. */
     private @Nullable Subsets subsets(SymbolClasses classes, Budget budget) {
@@ -957,7 +962,7 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * One set of states at a time, over a machine that is not deterministic, as the set of them
+     * One set of states at a time, over a machine walked as sets of states, as the set of them
      * ({@link Subset}) it was in before.
      *
      * <p>Where a class leads from a set is worked out the first time a walk asks, as
@@ -1048,7 +1053,7 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * A set of states a walk over a machine that is not deterministic has been in, and where each
+     * A set of states a walk as sets of states has been in, and where each
      * class has been found to lead from it.
      *
      * <p>A pattern is asked about from any number of threads at once, and the sets are found by
@@ -1225,7 +1230,7 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * What a walk over a machine that is not deterministic is held in, as large as the machine: the
+     * What a walk as sets of states is held in, as large as the machine: the
      * states it is in and is going into, which of them it has put in this round, and those it has
      * yet to look past for steps for no character. With them, what the states last put in come to.
      */
@@ -1257,7 +1262,7 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * Every state the walk is in at once, over a machine that is not deterministic.
+     * Every state the walk is in at once, over a machine walked as sets of states.
      *
      * <p>A state is put in the walk once for each character however many ways lead to it, which is
      * what keeps a character's work to the machine's size: {@code seen} holds the character a state
