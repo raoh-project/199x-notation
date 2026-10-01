@@ -5,6 +5,7 @@ import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
@@ -173,7 +174,12 @@ public final class StringPattern implements Predicate<String> {
      * <p>A marker is written into images and outlives every name in this code, so it is a value of
      * its own and not the constant's name: renaming a constant changes nothing an image says. A
      * marker holds no comma, which ends it, and is not a number, which is how an image without a
-     * marker would begin.
+     * marker would begin. And no two formats have one marker, or an image of one would be read as
+     * the other: the formats are looked up by marker in {@link #BY_MARKER}, which is where that is
+     * held.
+     *
+     * <p>That every format has a reader is held by the compiler: {@link StringPattern#of} switches
+     * over the formats with no default.
      */
     private enum ImageFormat {
 
@@ -196,6 +202,21 @@ public final class StringPattern implements Predicate<String> {
             return marker;
         }
 
+        /** Each format by its marker, made once the formats are, and refusing two with one. */
+        private static final Map<String, ImageFormat> BY_MARKER = byMarker();
+
+        private static Map<String, ImageFormat> byMarker() {
+            Map<String, ImageFormat> out = new LinkedHashMap<>();
+            for (ImageFormat each : values()) {
+                ImageFormat had = out.putIfAbsent(each.marker, each);
+                if (had != null) {
+                    throw new IllegalStateException("two image formats, " + had.name() + " and "
+                            + each.name() + ", have the marker \"" + each.marker + "\"");
+                }
+            }
+            return Map.copyOf(out);
+        }
+
         /** Every marker this reads, for saying so. */
         static List<String> markers() {
             return Arrays.stream(values()).map(ImageFormat::marker).toList();
@@ -203,10 +224,9 @@ public final class StringPattern implements Predicate<String> {
 
         /** The format {@code marker} names, or why there is none this reads. */
         static ImageFormat named(String marker) {
-            for (ImageFormat each : values()) {
-                if (each.marker.equals(marker)) {
-                    return each;
-                }
+            ImageFormat format = BY_MARKER.get(marker);
+            if (format != null) {
+                return format;
             }
             String shown = marker.length() > 20 ? marker.substring(0, 20) + "…" : marker;
             if (marker.isEmpty() || marker.chars().allMatch(c -> c >= '0' && c <= '9')) {
