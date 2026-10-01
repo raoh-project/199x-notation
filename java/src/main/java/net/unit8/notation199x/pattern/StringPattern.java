@@ -43,7 +43,7 @@ import java.util.function.Predicate;
  *
  * <p>A match can also be run with a {@link Checkpoint}, for a caller that may have to stop it part
  * of the way through ({@link #matches(String, Checkpoint)}). It asks before each character of the
- * subject. Where the walk is in a set of states and where the character leads from it is not yet
+ * subject it reads, and a walk whose answer is no before any character reads none. Where the walk is in a set of states and where the character leads from it is not yet
  * known, which can take as many states as the machine has, it also asks before it makes the room
  * the walk works it out in, which is as large as the machine, before each state it moves, each step
  * it looks at from one, and each state and step for no character it takes the set into, and then
@@ -104,7 +104,7 @@ public final class StringPattern implements Predicate<String> {
      * <p>The table is held for as long as the pattern is. The machines of the formats people write
      * take a few hundred entries.
      */
-    private static final int MOST_TABLE_ENTRIES = 1 << 18;
+    static final int MOST_TABLE_ENTRIES = 1 << 18;
 
     /**
      * For each state of a deterministic machine and each class, at {@code state * classes + class},
@@ -193,12 +193,13 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /** The {@link #subsets} of a machine that is not deterministic, holding the one a walk starts
-     *  in: the first state and every live one it reaches for no character. */
-    private Subsets subsets(SymbolClasses classes, int mostSubsets) {
+     *  in: the first state and every live one it reaches for no character. Null where that set is
+     *  more than the sets kept may hold, and every walk moves each state for every character. */
+    private @Nullable Subsets subsets(SymbolClasses classes, int mostSubsets) {
         Room room = new Room(accepting.length);
         room.round = 1;
         int count = close(0, room.there, 0, room, null);
-        return new Subsets(classes, mostSubsets, room, count);
+        return Subsets.of(classes, mostSubsets, room, count);
     }
 
     /**
@@ -653,7 +654,9 @@ public final class StringPattern implements Predicate<String> {
      * from the set it is in as {@link #spread} does.
      *
      * <p>A walk that does not ask goes over a run of characters that keep it in one set as
-     * {@link #look} does over a state, once every class has been worked out from that set.
+     * {@link #look} does over a state, by the classes already found to lead from the set back to it
+     * ({@link #stay}). The set with no state in it ({@link Subsets#nothing}) is where a walk's answer
+     * is known to be no, and no walk goes on from it.
      */
     private boolean remember(String value, Subsets known, @Nullable Checkpoint checkpoint) {
         SymbolClasses classes = known.classes;
@@ -697,10 +700,7 @@ public final class StringPattern implements Predicate<String> {
                 // As over a deterministic machine's table ({@link #look}).
                 SymbolClasses.@Nullable Stay stays = in.stay;
                 if (stays == null) {
-                    if (room == null) {
-                        room = new Room(accepting.length);
-                    }
-                    stays = stay(known, in, room);
+                    stays = stay(classes, in);
                     in.stay = stays;
                 }
                 at = stays.over(value, at);
@@ -731,35 +731,41 @@ public final class StringPattern implements Predicate<String> {
         Subset to = count == 0 ? known.nothing : known.held(room, count, checkpoint);
         if (to != null) {
             from.next[each] = to;
+            if (to == from) {
+                // One more class keeps a walk here, which the characters worked out before leave
+                // out.
+                from.stay = null;
+            }
         }
         return to;
     }
 
     /**
-     * The characters a walk stays in {@code in} on, for a walk that does not ask: where every class
-     * leads from it is worked out, so that those leading back to it are known. Characters it stays
-     * on none of where that takes more sets than {@code known} keeps.
+     * The characters a walk stays in {@code in} on, by the classes already found to lead from it back
+     * to it.
+     *
+     * <p>Worked out from the steps the sets kept hold, and never by finding another: which sets are
+     * kept is the walks' to decide, and what a walk goes over without looking up is only a quicker
+     * way through them. A class not yet found to lead back is walked a character at a time, as every
+     * character the {@link SymbolClasses.Stay} leaves out is, and where it is found to,
+     * {@link #step} drops what was worked out here so that it is worked out again.
      */
-    private SymbolClasses.Stay stay(Subsets known, Subset in, Room room) {
-        boolean[] staying = new boolean[known.classes.count()];
+    private static SymbolClasses.Stay stay(SymbolClasses classes, Subset in) {
+        boolean[] staying = new boolean[classes.count()];
         for (int each = 0; each < staying.length; each++) {
-            Subset to = in.next[each];
-            if (to == null) {
-                to = step(known, in, each, room, null);
-                if (to == null) {
-                    return SymbolClasses.Stay.NONE;
-                }
-            }
-            staying[each] = to == in;
+            staying[each] = in.next[each] == in;
         }
-        return known.classes.stay(staying);
+        return classes.stay(staying);
     }
 
     /** The most sets of states a pattern keeps for its walks ({@link #remember}). */
     private static final int MOST_SUBSETS = 2048;
 
-    /** The most states and steps the sets a pattern keeps hold between them, each set's states and
-     *  one step for each class. */
+    /**
+     * The most states and steps the sets a pattern keeps hold between them, each set's states and
+     * one step for each class. Each is an {@code int} or a reference, so the sets a pattern keeps
+     * come to about four bytes for each, or four megabytes, where references are four bytes.
+     */
     private static final long MOST_REMEMBERED = 1 << 20;
 
     /**
@@ -793,7 +799,10 @@ public final class StringPattern implements Predicate<String> {
     private static final class Subsets {
 
         final SymbolClasses classes;
-        /** The set with no state in it, which every class leads back to and which accepts nothing. */
+        /**
+         * The set with no state in it, which accepts nothing. A step is found to lead to it, and a
+         * walk that is led there answers no; no walk is in it, so no step from it is ever found.
+         */
         final Subset nothing;
         final Subset start;
         private final int most;
@@ -801,20 +810,32 @@ public final class StringPattern implements Predicate<String> {
         private final AtomicInteger count = new AtomicInteger();
         private final AtomicLong remembered = new AtomicLong();
 
-        Subsets(SymbolClasses classes, int most, Room started, int count) {
+        /**
+         * The sets a pattern keeps, holding the one of the {@code count} states first in
+         * {@code started.there} that a walk starts in; or null where that one is more than they may
+         * hold, which a set kept is never past.
+         */
+        static @Nullable Subsets of(SymbolClasses classes, int most, Room started, int count) {
+            Subset nothing = new Subset(new int[0], false, 0, classes.count());
+            if (count == 0) {
+                return new Subsets(classes, most, nothing, nothing);
+            }
+            Subset start = new Subset(Arrays.copyOf(started.there, count), started.accepting,
+                    started.hash, classes.count());
+            Subsets out = new Subsets(classes, most, nothing, start);
+            if (!out.reserve(count)) {
+                return null;
+            }
+            out.slots.set(out.slot(start.hash), start);
+            return out;
+        }
+
+        private Subsets(SymbolClasses classes, int most, Subset nothing, Subset start) {
             this.classes = classes;
             this.most = most;
-            this.nothing = new Subset(new int[0], false, 0, classes.count());
-            Arrays.fill(nothing.next, nothing);
+            this.nothing = nothing;
+            this.start = start;
             this.slots = new AtomicReferenceArray<>(Integer.highestOneBit(Math.max(most, 1)) * 4);
-            if (count == 0) {
-                this.start = nothing;
-            } else {
-                this.start = new Subset(Arrays.copyOf(started.there, count), started.accepting,
-                        started.hash, classes.count());
-                reserve(count);
-                slots.set(slot(start.hash), start);
-            }
         }
 
         private int slot(int hash) {

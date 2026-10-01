@@ -180,6 +180,12 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
         StringPattern run = StringPattern.of(PatternImages.deterministic(meaning, plenty()));
         String whole = text.toString();
+        // Every ASCII character is a class of its own and the rest are one more; the machine has a
+        // state for each place in the text and one past it.
+        int classes = 128 + 1;
+        int states = whole.length() + 1;
+        assertTrue((long) states * classes > StringPattern.MOST_TABLE_ENTRIES,
+                "the machine is past the table, as " + states + " states of " + classes + " classes");
 
         assertTrue(run.matches(whole));
         assertFalse(run.matches(whole.substring(0, whole.length() - 1)));

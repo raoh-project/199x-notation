@@ -126,7 +126,15 @@ class AMatchIsStoppedWhereItIsAskedTest {
     @Test
     void aWalkKeepingItsSetsAsksAtEveryPlaceItSaysItDoes() {
         Automaton machine = Automaton.of(meaning("(a?){1000}b"), Held.roomy());
-        for (String subject : List.of("", "a", "aaa", "ba", "aab")) {
+        assertWalkKeepingItsSetsAsksAsItSays(machine, List.of("", "a", "aaa", "ba", "aab"));
+        // Two characters of one class, from one set the walk stays in: the second is looked up as
+        // the first was.
+        Automaton classed = Automaton.of(meaning("(a?){1000}[bc]*d"), Held.roomy());
+        assertWalkKeepingItsSetsAsksAsItSays(classed, List.of("abcb", "acbc", "aabcbc", "abcbd"));
+    }
+
+    private static void assertWalkKeepingItsSetsAsksAsItSays(Automaton machine, List<String> subjects) {
+        for (String subject : subjects) {
             Counting all = Counting.never();
             boolean accepted = machine.accepts(subject, Held.roomy());
             assertEquals(new Outcome.Answered<>(accepted),
@@ -250,12 +258,15 @@ class AMatchIsStoppedWhereItIsAskedTest {
     /**
      * How many times a walk that keeps the sets of states it is in says it asks over {@code subject},
      * on a pattern no walk has been run on yet, worked out over sets of states and apart from the
-     * walk: once for each character; and where the set that character leads to from the one the walk
-     * is in is not yet known, once before the first such room is made, once for each state moved and
+     * walk: once for each character; and where the set that character's class leads to from the one
+     * the walk is in is not yet known, once before the first such room is made, once for each state moved and
      * each step looked at from one, as {@link #close} counts for each state taken in, and at least
      * once as the set is looked for among those kept, and once more for each of its states where it
      * is one of them. The walk starts in the set its first state is in, made with the pattern, and
      * where that is empty it asks nothing.
+     *
+     * <p>A class is worked out here apart from the walk's: two symbols are in one where every set a
+     * step of the machine is over holds both or neither ({@link #classOf}).
      */
     static long asksRemembering(Automaton machine, String subject) {
         boolean[] live = live(machine);
@@ -273,7 +284,7 @@ class AMatchIsStoppedWhereItIsAskedTest {
             int symbol = subject.codePointAt(at);
             at += Character.charCount(symbol);
             asks++;
-            List<Object> key = List.of(here, symbol);
+            List<Object> key = List.of(here, classOf(machine, symbol));
             Set<Integer> there = known.get(key);
             if (there == null) {
                 if (!room) {
@@ -304,6 +315,21 @@ class AMatchIsStoppedWhereItIsAskedTest {
             here = there;
         }
         return asks;
+    }
+
+    /** The class of {@code symbol}, as which of the sets the machine's steps are over hold it. */
+    private static List<Boolean> classOf(Automaton machine, int symbol) {
+        Set<CodePoints> sets = new LinkedHashSet<>();
+        for (int state = 0; state < machine.size(); state++) {
+            for (Automaton.Step step : machine.stepsFrom(state)) {
+                sets.add(step.over());
+            }
+        }
+        List<Boolean> held = new ArrayList<>();
+        for (CodePoints set : sets) {
+            held.add(set.has(symbol));
+        }
+        return held;
     }
 
     /** Puts {@code from} and the live states it reaches for no character into {@code into}, where
