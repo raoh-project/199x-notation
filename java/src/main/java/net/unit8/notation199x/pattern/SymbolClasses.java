@@ -1,0 +1,382 @@
+package net.unit8.notation199x.pattern;
+
+import org.jspecify.annotations.Nullable;
+
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * The symbols a machine's steps tell apart, put into classes: two symbols are in one class where
+ * every set a step is over holds both or neither. A walk asks which class a character is in and
+ * then where that class leads, so a state's steps are one row as wide as the classes, and not a
+ * search of its sets.
+ *
+ * <p>A character of the Basic Multilingual Plane is two lookups, one for the block of 256 it is in
+ * and one inside that block, and blocks that hold the same classes are held once. A character past
+ * it is a search of where the classes change there, which is short for every set the database
+ * writes.
+ *
+ * <p>No set a step is over holds a surrogate, so the surrogates are in a class with the symbols no
+ * set holds, and from every state it leads nowhere: half a surrogate pair needs no rule of its own
+ * past being looked up.
+ */
+final class SymbolClasses {
+
+    /** The most classes this holds, each a {@code char}. A machine whose sets cut the symbols into
+     *  more has none, and is walked by its sets. */
+    static final int MOST = Character.MAX_VALUE;
+
+    private static final int BMP = 0x10000;
+    private static final int BLOCK = 256;
+    private static final int ASCII = 128;
+
+    private final int count;
+    private final char[] ascii;
+    /** For each block of 256 in the Basic Multilingual Plane, where its classes begin in
+     *  {@link #blocks}. */
+    private final char[] index;
+    private final char[] blocks;
+    /** Past the Basic Multilingual Plane, where each run of one class begins, ascending. */
+    private final int[] beyondFrom;
+    private final char[] beyond;
+    /** A symbol of each class, which every set holds as it holds the rest of the class. */
+    private final int[] some;
+    /** Past ASCII and inside the Basic Multilingual Plane, where each run of one class begins,
+     *  ascending, and the class of each. */
+    private final int[] wideFrom;
+    private final char[] wide;
+
+    private SymbolClasses(int count, char[] ascii, char[] index, char[] blocks, int[] beyondFrom,
+                          char[] beyond, int[] some, int[] wideFrom, char[] wide) {
+        this.count = count;
+        this.ascii = ascii;
+        this.index = index;
+        this.blocks = blocks;
+        this.beyondFrom = beyondFrom;
+        this.beyond = beyond;
+        this.some = some;
+        this.wideFrom = wideFrom;
+        this.wide = wide;
+    }
+
+    /**
+     * The classes {@code sets} cut the symbols into, or null where they are more than
+     * {@link #MOST}.
+     *
+     * @param sets each set a step is over, as ascending {@code from, to} pairs of scalar values
+     */
+    static @Nullable SymbolClasses of(Collection<int[]> sets) {
+        // The symbols are first cut wherever a set begins or ends, and the pieces are then put
+        // together where no set tells them apart.
+        int[] cuts = cuts(sets);
+        int pieces = cuts.length - 1;
+        int[] classOf = new int[pieces];
+        int classes = 1;
+        int[] splitInto = new int[pieces + 1];
+        int[] splitBy = new int[pieces + 1];
+        Arrays.fill(splitBy, -1);
+        int set = 0;
+        for (int[] ranges : sets) {
+            // Each set moves the pieces it holds out of the class they were in, into a class made
+            // for what it took from that one.
+            for (int at = 0; at < ranges.length; at += 2) {
+                int piece = Arrays.binarySearch(cuts, ranges[at]);
+                for (; cuts[piece] <= ranges[at + 1]; piece++) {
+                    int was = classOf[piece];
+                    if (splitBy[was] != set) {
+                        splitBy[was] = set;
+                        if (classes == splitInto.length) {
+                            splitInto = Arrays.copyOf(splitInto, classes * 2);
+                            int grown = splitBy.length;
+                            splitBy = Arrays.copyOf(splitBy, classes * 2);
+                            Arrays.fill(splitBy, grown, splitBy.length, -1);
+                        }
+                        splitInto[was] = classes++;
+                    }
+                    classOf[piece] = splitInto[was];
+                }
+            }
+            set++;
+        }
+        // A class every piece was moved out of holds nothing, and the rest are numbered again in
+        // the order their first symbol comes in.
+        int[] renumbered = new int[classes];
+        Arrays.fill(renumbered, -1);
+        int count = 0;
+        for (int piece = 0; piece < pieces; piece++) {
+            if (renumbered[classOf[piece]] < 0) {
+                renumbered[classOf[piece]] = count++;
+            }
+            classOf[piece] = renumbered[classOf[piece]];
+        }
+        if (count > MOST) {
+            return null;
+        }
+        int[] some = new int[count];
+        Arrays.fill(some, -1);
+        for (int piece = 0; piece < pieces; piece++) {
+            if (some[classOf[piece]] < 0) {
+                some[classOf[piece]] = cuts[piece];
+            }
+        }
+        // A block that one class fills is held once for that class, and any other block once for
+        // what it holds.
+        char[] index = new char[BMP / BLOCK];
+        Map<Integer, Character> filled = new HashMap<>();
+        Map<String, Character> held = new HashMap<>();
+        StringBuilder blocks = new StringBuilder();
+        char[] block = new char[BLOCK];
+        int piece = 0;
+        for (int each = 0; each < index.length; each++) {
+            int begins = each * BLOCK;
+            while (cuts[piece + 1] <= begins) {
+                piece++;
+            }
+            Character at;
+            if (cuts[piece + 1] >= begins + BLOCK) {
+                at = filled.get(classOf[piece]);
+                if (at == null) {
+                    Arrays.fill(block, (char) classOf[piece]);
+                    at = (char) blocks.length();
+                    filled.put(classOf[piece], at);
+                    blocks.append(block);
+                }
+            } else {
+                int inside = piece;
+                for (int unit = 0; unit < BLOCK; unit++) {
+                    while (cuts[inside + 1] <= begins + unit) {
+                        inside++;
+                    }
+                    block[unit] = (char) classOf[inside];
+                }
+                String written = new String(block);
+                at = held.get(written);
+                if (at == null) {
+                    at = (char) blocks.length();
+                    held.put(written, at);
+                    blocks.append(block);
+                }
+            }
+            index[each] = at;
+        }
+        char[] ascii = new char[ASCII];
+        for (int unit = 0; unit < ASCII; unit++) {
+            ascii[unit] = blocks.charAt(index[0] + unit);
+        }
+        int[] beyondFrom = new int[pieces];
+        char[] beyond = new char[pieces];
+        int runs = 0;
+        for (piece = 0; piece < pieces; piece++) {
+            if (cuts[piece + 1] <= BMP) {
+                continue;
+            }
+            if (runs > 0 && beyond[runs - 1] == classOf[piece]) {
+                continue;
+            }
+            beyondFrom[runs] = Math.max(cuts[piece], BMP);
+            beyond[runs++] = (char) classOf[piece];
+        }
+        int[] wideFrom = new int[pieces];
+        char[] wide = new char[pieces];
+        int wideRuns = 0;
+        for (piece = 0; piece < pieces; piece++) {
+            if (cuts[piece + 1] <= ASCII || cuts[piece] >= BMP) {
+                continue;
+            }
+            if (wideRuns > 0 && wide[wideRuns - 1] == classOf[piece]) {
+                continue;
+            }
+            wideFrom[wideRuns] = Math.max(cuts[piece], ASCII);
+            wide[wideRuns++] = (char) classOf[piece];
+        }
+        return new SymbolClasses(count, ascii, index,
+                blocks.toString().toCharArray(), Arrays.copyOf(beyondFrom, runs),
+                Arrays.copyOf(beyond, runs), some, Arrays.copyOf(wideFrom, wideRuns),
+                Arrays.copyOf(wide, wideRuns));
+    }
+
+    /** Every symbol where a set begins or where one ends before the last, ascending, between
+     *  nought and one past the last symbol. */
+    private static int[] cuts(Collection<int[]> sets) {
+        int size = 2;
+        for (int[] ranges : sets) {
+            size += ranges.length;
+        }
+        int[] cuts = new int[size];
+        int count = 0;
+        cuts[count++] = 0;
+        cuts[count++] = Character.MAX_CODE_POINT + 1;
+        for (int[] ranges : sets) {
+            for (int at = 0; at < ranges.length; at += 2) {
+                cuts[count++] = ranges[at];
+                cuts[count++] = ranges[at + 1] + 1;
+            }
+        }
+        Arrays.sort(cuts, 0, count);
+        int distinct = 0;
+        for (int at = 0; at < count; at++) {
+            if (distinct == 0 || cuts[at] != cuts[distinct - 1]) {
+                cuts[distinct++] = cuts[at];
+            }
+        }
+        return Arrays.copyOf(cuts, distinct);
+    }
+
+    /** How many classes there are. */
+    int count() {
+        return count;
+    }
+
+    /** A symbol of class {@code of}, which every set holds or does not as it does the rest. */
+    int some(int of) {
+        return some[of];
+    }
+
+    /**
+     * The class of the character {@code value} has at {@code at}, or -1 where that is half a
+     * surrogate pair. A character is one unit of the string, or two where it is a whole pair, and
+     * how far to go on is the caller's: two past a high surrogate, which is half a pair where it is
+     * not the first of two.
+     */
+    int at(String value, int at) {
+        char unit = value.charAt(at);
+        if (unit < ASCII) {
+            return ascii[unit];
+        }
+        if (!Character.isSurrogate(unit)) {
+            return blocks[index[unit >>> 8] + (unit & 0xFF)];
+        }
+        if (Character.isHighSurrogate(unit) && at + 1 < value.length()) {
+            char low = value.charAt(at + 1);
+            if (Character.isLowSurrogate(low)) {
+                return beyond(Character.toCodePoint(unit, low));
+            }
+        }
+        return -1;
+    }
+
+    /** The class of an ASCII character, {@code unit} being below 128. */
+    int ascii(char unit) {
+        return ascii[unit];
+    }
+
+    /** The class of {@code symbol}. */
+    int of(int symbol) {
+        return symbol < BMP ? blocks[index[symbol >>> 8] + (symbol & 0xFF)] : beyond(symbol);
+    }
+
+    /**
+     * The characters a walk stays where it is on, where {@code stays} says which classes keep it
+     * there, as {@link Stay} looks them up.
+     */
+    Stay stay(boolean[] stays) {
+        long low = 0;
+        long high = 0;
+        for (int unit = 0; unit < ASCII; unit++) {
+            if (stays[ascii[unit]]) {
+                if (unit < 64) {
+                    low |= 1L << unit;
+                } else {
+                    high |= 1L << unit;
+                }
+            }
+        }
+        // The two longest runs of the plane past ASCII that it stays on. No surrogate is one, as
+        // no class a surrogate is in leads anywhere.
+        int from = 1;
+        int to = 0;
+        int otherFrom = 1;
+        int otherTo = 0;
+        for (int run = 0; run < wideFrom.length; ) {
+            if (!stays[wide[run]]) {
+                run++;
+                continue;
+            }
+            int begins = wideFrom[run];
+            while (run < wideFrom.length && stays[wide[run]]) {
+                run++;
+            }
+            int ends = (run < wideFrom.length ? wideFrom[run] : BMP) - 1;
+            if (ends - begins > to - from) {
+                otherFrom = from;
+                otherTo = to;
+                from = begins;
+                to = ends;
+            } else if (ends - begins > otherTo - otherFrom) {
+                otherFrom = begins;
+                otherTo = ends;
+            }
+        }
+        return new Stay(low, high, (char) from, (char) to, (char) otherFrom, (char) otherTo);
+    }
+
+    /**
+     * Characters a walk stays where it is on, looked up without a table: the ASCII ones as a bit
+     * each, and up to two runs past them in the Basic Multilingual Plane, each as where it begins
+     * and ends. A run that holds none begins after it ends.
+     *
+     * <p>Some characters it stays on may not be among them, and those are walked one at a time.
+     */
+    record Stay(long low, long high, char from, char to, char otherFrom, char otherTo) {
+
+        /** How far from {@code at} the characters of {@code value} keep a walk where it is. */
+        int over(String value, int at) {
+            long low = this.low;
+            long high = this.high;
+            int from = this.from;
+            int to = this.to;
+            int otherFrom = this.otherFrom;
+            int otherTo = this.otherTo;
+            int length = value.length();
+            // One loop for each of the three, each with one test, gone round again for as long as
+            // one of them goes on: text is mostly in one of them for long stretches.
+            while (at < length) {
+                int was = at;
+                while (at < length) {
+                    char unit = value.charAt(at);
+                    if (unit >= ASCII || (((unit < 64 ? low : high) >>> unit) & 1) == 0) {
+                        break;
+                    }
+                    at++;
+                }
+                while (at < length) {
+                    char unit = value.charAt(at);
+                    if (unit < from || unit > to) {
+                        break;
+                    }
+                    at++;
+                }
+                while (at < length) {
+                    char unit = value.charAt(at);
+                    if (unit < otherFrom || unit > otherTo) {
+                        break;
+                    }
+                    at++;
+                }
+                if (at == was) {
+                    break;
+                }
+            }
+            return at;
+        }
+
+        /** Characters a walk stays on none of. */
+        static final Stay NONE = new Stay(0, 0, (char) 1, (char) 0, (char) 1, (char) 0);
+    }
+
+    private int beyond(int symbol) {
+        int low = 0;
+        int high = beyondFrom.length - 1;
+        while (low < high) {
+            int mid = (low + high + 1) >>> 1;
+            if (beyondFrom[mid] <= symbol) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        return beyond[low];
+    }
+}

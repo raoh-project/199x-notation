@@ -161,17 +161,17 @@ class WhatARunWalksIsWhatThePatternMeansTest {
     }
 
     /**
-     * A deterministic machine whose ASCII characters are all told apart, and whose states are many,
-     * is past the table a walk looks ASCII up in, and walks by its runs with the same answers.
+     * A deterministic machine whose characters are all told apart, and whose states are many, is
+     * past the table a walk looks its classes up in, and walks by its runs with the same answers.
      *
-     * <p>Every ASCII character written in turn, five times over: each character is a kind of its
-     * own and there is a state for each place in the text.
+     * <p>Every ASCII character written in turn, twenty-five times over: each character is a class
+     * of its own and there is a state for each place in the text.
      */
     @Test
-    void aMachineTooWideForItsAsciiTableAnswersByItsRuns() {
+    void aMachineTooWideForItsTableAnswersByItsRuns() {
         StringBuilder regex = new StringBuilder();
         StringBuilder text = new StringBuilder();
-        for (int copy = 0; copy < 5; copy++) {
+        for (int copy = 0; copy < 25; copy++) {
             for (int c = 0; c < 128; c++) {
                 regex.append(String.format("\\x{%X}", c));
                 text.append((char) c);
@@ -185,6 +185,7 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         assertFalse(run.matches(whole.substring(0, whole.length() - 1)));
         assertFalse(run.matches(whole.substring(0, 300) + "é" + whole.substring(301)));
         assertFalse(run.matches(whole.substring(0, 300) + "a" + whole.substring(301)));
+        assertFalse(run.matches(whole.substring(0, 300) + "\uD800" + whole.substring(301)));
     }
 
     /**
