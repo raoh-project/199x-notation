@@ -161,17 +161,17 @@ class WhatARunWalksIsWhatThePatternMeansTest {
     }
 
     /**
-     * A deterministic machine whose ASCII characters are all told apart, and whose states are many,
-     * is past the table a walk looks ASCII up in, and walks by its runs with the same answers.
+     * A deterministic machine whose characters are all told apart, and whose states are many, is
+     * past the table a walk looks its classes up in, and walks by its runs with the same answers.
      *
-     * <p>Every ASCII character written in turn, five times over: each character is a kind of its
-     * own and there is a state for each place in the text.
+     * <p>Every ASCII character written in turn, twenty-five times over: each character is a class
+     * of its own and there is a state for each place in the text.
      */
     @Test
-    void aMachineTooWideForItsAsciiTableAnswersByItsRuns() {
+    void aMachineTooWideForItsTableAnswersByItsRuns() {
         StringBuilder regex = new StringBuilder();
         StringBuilder text = new StringBuilder();
-        for (int copy = 0; copy < 5; copy++) {
+        for (int copy = 0; copy < 25; copy++) {
             for (int c = 0; c < 128; c++) {
                 regex.append(String.format("\\x{%X}", c));
                 text.append((char) c);
@@ -180,11 +180,37 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
         StringPattern run = StringPattern.of(PatternImages.deterministic(meaning, plenty()));
         String whole = text.toString();
+        assertEquals(StringPattern.Way.RUNS, run.way());
 
         assertTrue(run.matches(whole));
         assertFalse(run.matches(whole.substring(0, whole.length() - 1)));
         assertFalse(run.matches(whole.substring(0, 300) + "é" + whole.substring(301)));
         assertFalse(run.matches(whole.substring(0, 300) + "a" + whole.substring(301)));
+        assertFalse(run.matches(whole.substring(0, 300) + "\uD800" + whole.substring(301)));
+    }
+
+    /**
+     * A deterministic machine whose classes are many, and whose ASCII characters are of few kinds,
+     * is past the table of its classes and still looks its ASCII characters up in one.
+     *
+     * <p>Each place takes a letter or a character of its own past ASCII, so every place is a class of
+     * its own, and ASCII is the letters and the rest.
+     */
+    @Test
+    void aMachineOfManyClassesLooksItsAsciiUpAllTheSame() {
+        StringBuilder regex = new StringBuilder();
+        for (int place = 0; place < 600; place++) {
+            regex.append(String.format("(?:\\x{%X}|[a-z])", 0x100 + place));
+        }
+        PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
+        StringPattern run = PatternMachine.of(meaning).pattern();
+        assertEquals(StringPattern.Way.ASCII_AND_RUNS, run.way());
+
+        assertTrue(run.matches("a".repeat(600)));
+        assertTrue(run.matches("a".repeat(300) + "\u022C" + "a".repeat(299)));
+        assertFalse(run.matches("a".repeat(300) + "\u022D" + "a".repeat(299)));
+        assertFalse(run.matches("a".repeat(599)));
+        assertFalse(run.matches("a".repeat(599) + "A"));
     }
 
     /**

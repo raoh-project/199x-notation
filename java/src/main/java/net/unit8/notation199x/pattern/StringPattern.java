@@ -7,10 +7,16 @@ import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.Predicate;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 
 /**
  * The strings a pattern of the language accepts, as a machine a run walks: what text is matched
@@ -22,11 +28,16 @@ import java.util.function.Predicate;
  * ({@link #of}). So nothing in a match decides what a pattern means, and no engine's way of finding
  * a match is involved in the answer.
  *
- * <p>A walk reads each character of the subject once, holds no stack and never goes back. Where the
- * machine is deterministic a character is one lookup; where it is not, a character moves each state
- * the walk is in, and a state is in the walk at most once. Which of the two is run is
- * {@link PatternMachine}'s choice and changes no answer: a pattern whose deterministic machine is
- * too costly to make is run as the machine its shape builds, which has the states
+ * <p>A walk reads each character of the subject once, holds no stack and never goes back. The
+ * symbols are put into the classes the machine's steps tell apart ({@link SymbolClasses}), and a
+ * character is looked up as its class. Where the machine is deterministic, a character is then one
+ * more lookup, of where its class leads. Where it is not, the walk is in a set of states, and where
+ * a class leads from a set is worked out the first time a walk needs it, by moving each state of
+ * the set, a state being put in the set at most once; it is kept with the set, so a walk that comes
+ * to it again looks it up as over a deterministic machine. The sets kept are bounded, and a walk
+ * that would need one more goes on moving each state it is in for every character. Which machine is
+ * run is {@link PatternMachine}'s choice and changes no answer: a pattern whose deterministic machine
+ * is too costly to make is run as the machine its shape builds, which has the states
  * {@link PatternStates} counts and no more.
  *
  * <p>A symbol is a scalar value. Text holding half a surrogate pair is no text, and no set
@@ -34,14 +45,18 @@ import java.util.function.Predicate;
  *
  * <p>A match can also be run with a {@link Checkpoint}, for a caller that may have to stop it part
  * of the way through ({@link #matches(String, Checkpoint)}). It asks before each character of the
- * subject. Over a machine that is not deterministic, where one character can move as many states as
- * the machine has, it also asks before it makes the room the walk is held in, which is as large as
- * the machine, before each state it moves, each step it looks at from one, and each state and step
- * for no character it takes the walk into, and, once the subject is read, before each state it ended
- * in that it looks through for one it may stop at.
+ * subject it reads, and a walk whose answer is no before any character reads none. Where the walk is in a set of states and where the class of the character leads from it is
+ * not yet known, which can take as many states as the machine has, it also asks before it makes the room
+ * the walk works it out in, which is as large as the machine, before each state it moves, each step
+ * it looks at from one, and each state and step for no character it takes the set into, and then
+ * before each place it looks for the set among those kept and each state of a kept set it holds
+ * against it. A walk past the sets kept asks as one that moves each state for every character
+ * does: as above for each character, and before it makes its room, before each state and step for
+ * no character it starts in, and, once the subject is read, before each state it ended in that it
+ * looks through for one it may stop at.
  *
  * <p>That is the whole of what a match does that grows with the subject or the machine. Between two
- * asks the work is a search of a state's steps.
+ * asks the work is a search of a state's steps or of the classes past the Basic Multilingual Plane.
  */
 public final class StringPattern implements Predicate<String> {
 
@@ -81,37 +96,117 @@ public final class StringPattern implements Predicate<String> {
     private final int[][] free;
 
     /**
-     * The most entries an {@link Ascii} table holds. A deterministic machine whose table would be
-     * larger walks every character by its runs.
+     * What a pattern may spend on walking faster than one state, or one set of states, a character
+     * by a search of its steps. None of it decides an answer: where a part of it runs out, the walk
+     * that part would have quickened is walked the slower way, and says so ({@link #way}).
      *
-     * <p>The table is held for as long as the pattern is. The machines of the formats people write
-     * take a few hundred entries.
+     * <p>Each part is about one thing a faster walk is made of, and runs out on its own: a machine
+     * whose classes are too many for a table may still have its ASCII characters in one.
+     *
+     * @param classWork    what working out the {@link SymbolClasses} may look at
+     * @param tableEntries the most entries a deterministic machine's {@link Table} holds, as many as
+     *                     its states times its classes
+     * @param asciiEntries the most entries a deterministic machine's {@link Ascii} table holds, as
+     *                     many as its states times the kinds of ASCII character it tells apart
+     * @param subsets      the most sets of states a pattern keeps for its walks ({@link #remember})
+     * @param remembered   the most states and steps those sets hold between them, each set's states
+     *                     and one step for each class; each is an {@code int} or a reference, about
+     *                     four bytes
      */
-    private static final int MOST_ASCII_ENTRIES = 1 << 16;
+    record Budget(long classWork, int tableEntries, int asciiEntries, int subsets, long remembered) {
 
-    /** Where an ASCII character leads from each state of a deterministic machine, or null where
-     *  there is no such table. */
-    private final @Nullable Ascii ascii;
+        /** The most sets a budget may keep: the places they are looked up in are four times as
+         *  many, and are made with the pattern. */
+        static final int MOST_SUBSETS = 1 << 20;
 
-    private StringPattern(boolean deterministic, boolean[] accepting, int[][] runs,
-                          int[][][] over, int[][] target, int[][] free) {
-        this.deterministic = deterministic;
-        this.accepting = accepting;
-        this.runs = runs;
-        this.over = over;
-        this.target = target;
-        this.free = free;
-        this.live = live(accepting, target, free);
-        this.ascii = deterministic ? ascii(runs, live) : null;
+        /** Holds every part to being none or some, and the sets kept to what can be looked up. */
+        Budget {
+            if (classWork < 0 || tableEntries < 0 || asciiEntries < 0 || subsets < 0 || remembered < 0) {
+                throw new IllegalArgumentException("a budget allows nothing or something of each part");
+            }
+            if (subsets > MOST_SUBSETS) {
+                throw new IllegalArgumentException("a budget keeps at most " + MOST_SUBSETS + " sets");
+            }
+        }
+
+        /**
+         * What a pattern is given. The tables are held for as long as the pattern is: the machines
+         * of the formats people write take a few hundred entries, and the sets kept come to at most
+         * about four megabytes.
+         */
+        static final Budget DEFAULT = new Budget(5_000_000, 1 << 18, 1 << 16, 2048, 1 << 20);
+
+        /** This, keeping at most {@code subsets} sets of states. */
+        Budget keeping(int subsets) {
+            return new Budget(classWork, tableEntries, asciiEntries, subsets, remembered);
+        }
     }
 
+    /** How a pattern walks a subject, which {@link Budget} decides and no answer depends on. */
+    enum Way {
+        /** One state at a time, each character a lookup of its class and of where it leads. */
+        TABLE,
+        /** One state at a time, an ASCII character a lookup and any other a search of the steps. */
+        ASCII_AND_RUNS,
+        /** One state at a time, each character a search of the steps. */
+        RUNS,
+        /** One set of states at a time, kept with where each class leads from it. */
+        SETS_KEPT,
+        /** Every state at once, each moved for each character. */
+        EVERY_STATE
+    }
+
+    /** Which symbols the machine's steps tell apart, or null where working them out was past what
+     *  the {@link Budget} allows. */
+    private final @Nullable SymbolClasses classes;
+
     /**
-     * A deterministic machine's steps over ASCII, one lookup a character.
+     * For each state of a deterministic machine and each class, at {@code state * classes + class},
+     * where it leads, written as that state times the classes so that the next lookup needs no
+     * multiplying, or -1 where it leads nowhere or to a state from which no walk is accepted. Null
+     * for a machine that is not deterministic, that has no {@link #classes}, or whose table is past
+     * the {@link Budget}.
+     */
+    private final @Nullable Table table;
+
+    /**
+     * A deterministic machine's {@link #table}, with the classes it is as wide as, and for each state
+     * that steps back to itself, the characters it does so on.
      *
-     * <p>Most text a pattern is asked about is ASCII, and a run over it is otherwise a search over a
-     * state's runs for every character, which for a class such as {@code \w} or {@code .} is several
-     * comparisons. The characters are put into kinds first: two characters no run tells apart step
-     * every state to the same state, so the table is as wide as the kinds and not as the characters.
+     * <p>Those are worked out from the state's row the first time a walk stays in the state, by
+     * whichever walk does, and kept: a walk that reads none works them out again from the same row.
+     */
+    private record Table(SymbolClasses classes, int[] steps, SymbolClasses.@Nullable Stay[] stays) {
+
+        /** The characters state {@code state} steps back to itself on, {@code state} being written
+         *  as in {@link #steps}. */
+        SymbolClasses.Stay stay(int state) {
+            int width = classes.count();
+            SymbolClasses.@Nullable Stay known = stays[state / width];
+            if (known == null) {
+                known = SymbolClasses.Stay.NONE;
+                for (int each = 0; each < width; each++) {
+                    if (steps[state + each] == state) {
+                        known = known.with(classes, each);
+                    }
+                }
+                stays[state / width] = known;
+            }
+            return known;
+        }
+    }
+
+    /** Where an ASCII character leads from each state of a deterministic machine that has no
+     *  {@link #table}, or null where it has one or this would be past the {@link Budget}. */
+    private final @Nullable Ascii ascii;
+
+    /**
+     * A deterministic machine's steps over ASCII, one lookup a character, for a machine whose
+     * classes are too many for a {@link Table}: how many classes the whole of the symbols is cut
+     * into says nothing of how few kinds of ASCII character the machine tells apart.
+     *
+     * <p>The characters are put into kinds first: two characters no run tells apart step every
+     * state to the same state, so the table is as wide as the kinds and not as the characters.
      *
      * @param kind  for each ASCII character, the kind it is in
      * @param kinds how many kinds there are
@@ -120,9 +215,76 @@ public final class StringPattern implements Predicate<String> {
      */
     private record Ascii(byte[] kind, int kinds, int[] steps) {}
 
-    /** The {@link Ascii} table of a deterministic machine, or null where it would hold more than
-     *  {@link #MOST_ASCII_ENTRIES}. */
-    private static @Nullable Ascii ascii(int[][] runs, boolean[] live) {
+    /** The sets of states a walk over a machine that is not deterministic has been found to be in,
+     *  or null where the machine is deterministic, has no {@link #classes}, or its first set is past
+     *  the {@link Budget}. */
+    private final @Nullable Subsets subsets;
+
+    private StringPattern(boolean deterministic, boolean[] accepting, int[][] runs,
+                          int[][][] over, int[][] target, int[][] free, Budget budget) {
+        this.deterministic = deterministic;
+        this.accepting = accepting;
+        this.runs = runs;
+        this.over = over;
+        this.target = target;
+        this.free = free;
+        this.live = live(accepting, target, free);
+        this.classes = budget.classWork() > 0
+                ? SymbolClasses.of(distinct(over), new Meter(1, 1, budget.classWork()).making())
+                : null;
+        this.table = deterministic && classes != null ? table(runs, live, classes, budget) : null;
+        this.ascii = deterministic && table == null ? ascii(runs, live, budget) : null;
+        this.subsets = !deterministic && classes != null && budget.subsets() > 0
+                ? subsets(classes, budget) : null;
+    }
+
+    /** How this pattern walks a subject. */
+    Way way() {
+        if (table != null) {
+            return Way.TABLE;
+        }
+        if (deterministic) {
+            return ascii != null ? Way.ASCII_AND_RUNS : Way.RUNS;
+        }
+        return subsets != null ? Way.SETS_KEPT : Way.EVERY_STATE;
+    }
+
+    /** Each set the steps are over, once however many steps are over it. */
+    private static List<int[]> distinct(int[][][] over) {
+        Map<int[], Boolean> seen = new IdentityHashMap<>();
+        List<int[]> out = new ArrayList<>();
+        for (int[][] sets : over) {
+            for (int[] set : sets) {
+                if (seen.put(set, Boolean.TRUE) == null) {
+                    out.add(set);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** The {@link #table} of a deterministic machine, or null where it would hold more than the
+     *  {@link Budget} allows. */
+    private static @Nullable Table table(int[][] runs, boolean[] live, SymbolClasses classes,
+                                         Budget budget) {
+        int width = classes.count();
+        if ((long) runs.length * width > budget.tableEntries()) {
+            return null;
+        }
+        // Each class is asked by one symbol of it, which every run holds as it holds the rest.
+        int[] steps = new int[runs.length * width];
+        for (int state = 0; state < runs.length; state++) {
+            for (int each = 0; each < width; each++) {
+                int to = next(runs[state], classes.some(each));
+                steps[state * width + each] = (to >= 0 && live[to]) ? to * width : -1;
+            }
+        }
+        return new Table(classes, steps, new SymbolClasses.Stay[runs.length]);
+    }
+
+    /** The {@link Ascii} table of a deterministic machine, or null where it would hold more than the
+     *  {@link Budget} allows. */
+    private static @Nullable Ascii ascii(int[][] runs, boolean[] live, Budget budget) {
         // A kind begins at 0 and wherever a run begins or ends inside ASCII.
         boolean[] begins = new boolean[ASCII + 1];
         begins[0] = true;
@@ -144,7 +306,7 @@ public final class StringPattern implements Predicate<String> {
             }
             kind[c] = (byte) (kinds - 1);
         }
-        if ((long) runs.length * kinds > MOST_ASCII_ENTRIES) {
+        if ((long) runs.length * kinds > budget.asciiEntries()) {
             return null;
         }
         // Each kind is asked by its first character, which steps every state as the rest of it does.
@@ -162,8 +324,15 @@ public final class StringPattern implements Predicate<String> {
         return new Ascii(kind, kinds, steps);
     }
 
-    /** How many characters ASCII is. */
-    private static final int ASCII = 128;
+    /** The {@link #subsets} of a machine that is not deterministic, holding the one a walk starts
+     *  in: the first state and every live one it reaches for no character. Null where that set is
+     *  past what the sets kept may hold, and every walk moves each state for every character. */
+    private @Nullable Subsets subsets(SymbolClasses classes, Budget budget) {
+        Room room = new Room(accepting.length);
+        room.round = 1;
+        int count = close(0, room.there, 0, room, null);
+        return Subsets.of(classes, budget, room, count);
+    }
 
     /**
      * Whether the whole of {@code value} is one of the strings.
@@ -172,7 +341,7 @@ public final class StringPattern implements Predicate<String> {
      * @return whether the whole of it is accepted
      */
     public boolean matches(String value) {
-        return deterministic ? walk(value, null) : spread(value, null);
+        return run(value, null);
     }
 
     /**
@@ -186,7 +355,7 @@ public final class StringPattern implements Predicate<String> {
      */
     public Outcome<Boolean> matches(String value, Checkpoint checkpoint) {
         try {
-            return new Outcome.Answered<>(deterministic ? walk(value, checkpoint) : spread(value, checkpoint));
+            return new Outcome.Answered<>(run(value, checkpoint));
         } catch (Stop stop) {
             return new Outcome.Stopped<>();
         }
@@ -206,12 +375,18 @@ public final class StringPattern implements Predicate<String> {
         private Stop() {
             super(null, null, false, false);
         }
+    }
 
-        /** Asks {@code checkpoint}, where there is one, whether to go on, and throws where not. */
-        static void ask(@Nullable Checkpoint checkpoint) {
-            if (checkpoint != null && !checkpoint.proceed()) {
-                throw STOP;
-            }
+    /**
+     * Asks {@code checkpoint}, where there is one, whether to go on, and throws {@link Stop} where
+     * not.
+     *
+     * <p>Here and not on {@link Stop}: a compiler that leaves the methods of an exception's class
+     * out of the code that calls them would otherwise make every character of a walk a call.
+     */
+    private static void ask(@Nullable Checkpoint checkpoint) {
+        if (checkpoint != null && !checkpoint.proceed()) {
+            throw Stop.STOP;
         }
     }
 
@@ -367,7 +542,7 @@ public final class StringPattern implements Predicate<String> {
             throw new IllegalArgumentException("an image holds one machine and nothing after it");
         }
         int[][] runs = deterministic ? runs(over, target) : new int[0][];
-        return new StringPattern(deterministic, accepting, runs, over, target, free);
+        return new StringPattern(deterministic, accepting, runs, over, target, free, Budget.DEFAULT);
     }
 
     /**
@@ -383,6 +558,12 @@ public final class StringPattern implements Predicate<String> {
      *                      step for no character
      */
     static StringPattern of(Automaton machine, boolean deterministic) {
+        return of(machine, deterministic, Budget.DEFAULT);
+    }
+
+    /** {@link #of(Automaton, boolean)}, given {@code budget} to walk faster on, so that each
+     *  {@link Way} a walk goes can be run where the one it would be given is another. */
+    static StringPattern of(Automaton machine, boolean deterministic, Budget budget) {
         int states = machine.size();
         boolean[] accepting = new boolean[states];
         int[][][] over = new int[states][][];
@@ -405,7 +586,7 @@ public final class StringPattern implements Predicate<String> {
             }
         }
         int[][] runs = deterministic ? runs(over, target) : new int[0][];
-        return new StringPattern(deterministic, accepting, runs, over, target, free);
+        return new StringPattern(deterministic, accepting, runs, over, target, free, budget);
     }
 
     /** A set as the ascending {@code from, to} pairs a walk searches. */
@@ -496,8 +677,60 @@ public final class StringPattern implements Predicate<String> {
         return out;
     }
 
+    /** What a match runs: the {@link #table} where there is one, the runs of a deterministic machine
+     *  where not, and otherwise the {@link #subsets} or, where there are none, every state at once. */
+    private boolean run(String value, @Nullable Checkpoint checkpoint) {
+        if (table != null) {
+            return look(value, table, checkpoint);
+        }
+        if (deterministic) {
+            return walk(value, checkpoint);
+        }
+        if (subsets != null) {
+            return remember(value, subsets, checkpoint);
+        }
+        return spread(value, checkpoint);
+    }
+
     /**
-     * One state at a time, over a machine that is deterministic.
+     * One state at a time, over a deterministic machine's {@link #table}: a character is the lookup
+     * of its class and the lookup of where that leads.
+     */
+    private boolean look(String value, Table table, @Nullable Checkpoint checkpoint) {
+        SymbolClasses classes = table.classes();
+        int[] steps = table.steps();
+        int state = 0;
+        int at = 0;
+        int length = value.length();
+        while (at < length) {
+            ask(checkpoint);
+            char unit = value.charAt(at);
+            int each = unit < ASCII ? classes.ascii(unit) : classes.at(value, at);
+            if (each < 0) {
+                return false;
+            }
+            int next = steps[state + each];
+            at += Character.isHighSurrogate(unit) ? 2 : 1;
+            if (next != state) {
+                if (next < 0) {
+                    return false;
+                }
+                state = next;
+            } else if (checkpoint == null) {
+                // A state that steps back to itself is often stayed in for many characters, which
+                // are gone over without looking up their classes. A walk that asks before each
+                // character goes one at a time.
+                at = table.stay(state).over(value, at);
+            }
+        }
+        return accepting[state / classes.count()];
+    }
+
+    /** How many characters ASCII is. */
+    private static final int ASCII = 128;
+
+    /**
+     * One state at a time, over a deterministic machine with no {@link #table}.
      *
      * <p>An ASCII character is one lookup in the {@link Ascii} table where the machine has one, and
      * every other character a search of the state's runs. The table leads nowhere rather than to a
@@ -509,7 +742,7 @@ public final class StringPattern implements Predicate<String> {
         int at = 0;
         int length = value.length();
         while (at < length) {
-            Stop.ask(checkpoint);
+            ask(checkpoint);
             char unit = value.charAt(at);
             if (table != null && unit < ASCII) {
                 state = table.steps()[state * table.kinds() + table.kind()[unit]];
@@ -548,6 +781,306 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
+     * One set of states at a time, over a machine that is not deterministic, as the set of them
+     * ({@link Subset}) it was in before.
+     *
+     * <p>Where a class leads from a set is worked out the first time a walk asks, as
+     * {@link #spread} works out a character, and kept with the set, so a walk that asks again is one
+     * lookup. The set it leads to is looked up among the sets kept, so that a walk going round a
+     * loop of the pattern goes round a loop of sets and not into new ones. The sets kept are bounded
+     * by the {@link Budget}; a walk that needs one more than that goes on from the set it is in as
+     * {@link #spread} does.
+     *
+     * <p>A walk that does not ask goes over a run of characters that keep it in one set as
+     * {@link #look} does over a state, by the classes already found to lead from the set back to it
+     * ({@link Subset#stay}). The set with no state in it ({@link Subsets#nothing}) is where a walk's answer
+     * is known to be no, and no walk goes on from it.
+     */
+    private boolean remember(String value, Subsets known, @Nullable Checkpoint checkpoint) {
+        SymbolClasses classes = known.classes;
+        Subset nothing = known.nothing;
+        Subset in = known.start;
+        if (in == nothing) {
+            // No state the walk starts in reaches one it may stop at.
+            return false;
+        }
+        @Nullable Room room = null;
+        int at = 0;
+        int length = value.length();
+        while (at < length) {
+            ask(checkpoint);
+            char unit = value.charAt(at);
+            int each = unit < ASCII ? classes.ascii(unit) : classes.at(value, at);
+            if (each < 0) {
+                return false;
+            }
+            Subset next = in.next[each];
+            if (next == null) {
+                if (room == null) {
+                    // The room a walk works a set out in is as large as the machine, and is made
+                    // only once asked.
+                    ask(checkpoint);
+                    room = new Room(accepting.length);
+                }
+                next = step(known, in, each, room, checkpoint);
+                if (next == null) {
+                    System.arraycopy(in.states, 0, room.here, 0, in.states.length);
+                    return spread(value, at, room, in.states.length, checkpoint);
+                }
+            }
+            at += Character.isHighSurrogate(unit) ? 2 : 1;
+            if (next != in) {
+                if (next == nothing) {
+                    return false;
+                }
+                in = next;
+            } else if (checkpoint == null) {
+                // As over a deterministic machine's table ({@link #look}).
+                at = in.stay.over(value, at);
+            }
+        }
+        return in.accepting;
+    }
+
+    /** Where class {@code each} leads from {@code from}, worked out, kept and answered; or null where
+     *  the set it leads to is one more than {@code known} keeps. */
+    private @Nullable Subset step(Subsets known, Subset from, int each, Room room,
+                                  @Nullable Checkpoint checkpoint) {
+        int symbol = known.classes.some(each);
+        room.round++;
+        room.hash = 0;
+        room.accepting = false;
+        int count = 0;
+        for (int state : from.states) {
+            ask(checkpoint);
+            int[][] sets = over[state];
+            for (int step = 0; step < sets.length; step++) {
+                ask(checkpoint);
+                if (holds(sets[step], symbol)) {
+                    count = close(target[state][step], room.there, count, room, checkpoint);
+                }
+            }
+        }
+        Subset to = count == 0 ? known.nothing : known.held(room, count, checkpoint);
+        if (to == from) {
+            from.staysOn(known.classes, each);
+        }
+        if (to != null) {
+            from.next[each] = to;
+        }
+        return to;
+    }
+
+    /**
+     * A set of states a walk over a machine that is not deterministic has been in, and where each
+     * class has been found to lead from it.
+     *
+     * <p>A pattern is asked about from any number of threads at once, and the sets are found by
+     * whichever walk gets to one first. Where a class leads ({@link #next}) is written by the walk
+     * that found it, without a lock: a walk that reads null works it out again, and one that reads a
+     * set reads all of it, since everything a set holds was given to it as it was made.
+     */
+    private static final class Subset {
+
+        final int[] states;
+        final boolean accepting;
+        final int hash;
+        final @Nullable Subset[] next;
+
+        /**
+         * The characters a walk stays here on, made from the classes found to lead back here, one
+         * class added each time one is found ({@link #staysOn}).
+         *
+         * <p>Never worked out by finding where another class leads: which sets are kept is the
+         * walks' to decide, and what a walk goes over without looking up is only a quicker way
+         * through them. A walk on another thread may find a class in {@link #next} before it finds
+         * it here, and goes over that class's characters one at a time until it does.
+         */
+        volatile SymbolClasses.Stay stay = SymbolClasses.Stay.NONE;
+
+        private static final VarHandle STAY;
+
+        static {
+            try {
+                STAY = MethodHandles.lookup().findVarHandle(Subset.class, "stay", SymbolClasses.Stay.class);
+            } catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
+        Subset(int[] states, boolean accepting, int hash, int classes) {
+            this.states = states;
+            this.accepting = accepting;
+            this.hash = hash;
+            this.next = new Subset[classes];
+        }
+
+        /**
+         * Adds class {@code each} of {@code classes} to what a walk stays here on, whichever other
+         * walks add theirs, or the same, at once ({@link SymbolClasses.Stay#with}). A try is gone
+         * round again only where another walk added one first, which each walk does at most once
+         * for each class.
+         */
+        void staysOn(SymbolClasses classes, int each) {
+            SymbolClasses.Stay was;
+            do {
+                was = stay;
+            } while (!STAY.compareAndSet(this, was, was.with(classes, each)));
+        }
+    }
+
+    /** The sets a pattern keeps, each once, and what they may grow to. */
+    private static final class Subsets {
+
+        final SymbolClasses classes;
+        /**
+         * The set with no state in it, which accepts nothing. A step is found to lead to it, and a
+         * walk that is led there answers no; no walk is in it, so no step from it is ever found.
+         */
+        final Subset nothing;
+        final Subset start;
+        private final Budget budget;
+        private final AtomicReferenceArray<Subset> slots;
+        private final AtomicInteger count = new AtomicInteger();
+        private final AtomicLong remembered = new AtomicLong();
+
+        /**
+         * The sets a pattern keeps, holding the one of the {@code count} states first in
+         * {@code started.there} that a walk starts in; or null where that one is past what they may
+         * hold. It is kept as every other set is ({@link #keep}), so no set is held that is not
+         * counted.
+         */
+        static @Nullable Subsets of(SymbolClasses classes, Budget budget, Room started, int count) {
+            // No walk is in the set with no state in it, so no step from it is kept.
+            Subset nothing = new Subset(new int[0], false, 0, 0);
+            if (count == 0) {
+                return new Subsets(classes, budget, nothing, nothing);
+            }
+            Subset start = new Subset(Arrays.copyOf(started.there, count), started.accepting,
+                    started.hash, classes.count());
+            Subsets out = new Subsets(classes, budget, nothing, start);
+            return out.keep(out.slot(start.hash), start) ? out : null;
+        }
+
+        private Subsets(SymbolClasses classes, Budget budget, Subset nothing, Subset start) {
+            this.classes = classes;
+            this.budget = budget;
+            this.nothing = nothing;
+            this.start = start;
+            this.slots = new AtomicReferenceArray<>(Integer.highestOneBit(Math.max(budget.subsets(), 1)) * 4);
+        }
+
+        private int slot(int hash) {
+            return (hash ^ (hash >>> 16)) & (slots.length() - 1);
+        }
+
+        /**
+         * The set of the {@code count} states first in {@code room.there}, which are the ones
+         * {@code room.seen} marks with its round: the one kept where it is kept, and otherwise kept
+         * now. Null where it is one more than is kept.
+         */
+        @Nullable Subset held(Room room, int count, @Nullable Checkpoint checkpoint) {
+            int hash = room.hash;
+            int mask = slots.length() - 1;
+            @Nullable Subset made = null;
+            int at = slot(hash);
+            for (int probe = 0; probe <= mask; probe++) {
+                ask(checkpoint);
+                Subset held = slots.get(at);
+                if (held == null) {
+                    if (made == null) {
+                        made = new Subset(Arrays.copyOf(room.there, count), room.accepting, hash,
+                                classes.count());
+                    }
+                    if (keep(at, made)) {
+                        return made;
+                    }
+                    held = slots.get(at);
+                    if (held == null) {
+                        // Not taken by another walk, so past what may be kept.
+                        return null;
+                    }
+                }
+                if (held.hash == hash && same(held, room, count, checkpoint)) {
+                    return held;
+                }
+                at = (at + 1) & mask;
+            }
+            return null;
+        }
+
+        /** Whether {@code held} is the set {@code room} marks, asking before each state of it. */
+        private static boolean same(Subset held, Room room, int count, @Nullable Checkpoint checkpoint) {
+            if (held.states.length != count) {
+                return false;
+            }
+            for (int state : held.states) {
+                ask(checkpoint);
+                if (room.seen[state] != room.round) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /**
+         * Keeps {@code made} at slot {@code at}, counted against the {@link Budget}, and answers
+         * whether it is kept: not where it is past what may be kept, nor where another set was put
+         * there first. The one place a set is kept, so what is kept and what is counted are one.
+         */
+        private boolean keep(int at, Subset made) {
+            long holds = (long) made.states.length + made.next.length;
+            if (count.incrementAndGet() > budget.subsets()) {
+                count.decrementAndGet();
+                return false;
+            }
+            if (remembered.addAndGet(holds) > budget.remembered()) {
+                count.decrementAndGet();
+                remembered.addAndGet(-holds);
+                return false;
+            }
+            if (slots.compareAndSet(at, null, made)) {
+                return true;
+            }
+            count.decrementAndGet();
+            remembered.addAndGet(-holds);
+            return false;
+        }
+    }
+
+    /**
+     * What a walk over a machine that is not deterministic is held in, as large as the machine: the
+     * states it is in and is going into, which of them it has put in this round, and those it has
+     * yet to look past for steps for no character. With them, what the states last put in come to.
+     */
+    private static final class Room {
+
+        int[] here;
+        int[] there;
+        final int[] seen;
+        final int[] pending;
+        int round;
+        /** The sum of {@link #scatter} over the states put in since it was last set to nought. */
+        int hash;
+        /** Whether a walk may stop at any of the states put in since this was last set false. */
+        boolean accepting;
+
+        Room(int states) {
+            this.here = new int[states];
+            this.there = new int[states];
+            this.seen = new int[states];
+            this.pending = new int[states];
+        }
+    }
+
+    /** A state's part of the hash of a set it is in, which is the same in whatever order the set's
+     *  states are put in. */
+    private static int scatter(int state) {
+        int mixed = state * 0x9E3779B9;
+        return mixed ^ (mixed >>> 15);
+    }
+
+    /**
      * Every state the walk is in at once, over a machine that is not deterministic.
      *
      * <p>A state is put in the walk once for each character however many ways lead to it, which is
@@ -557,32 +1090,35 @@ public final class StringPattern implements Predicate<String> {
      */
     private boolean spread(String value, @Nullable Checkpoint checkpoint) {
         // The room a walk is held in is as large as the machine, and is made only once asked.
-        Stop.ask(checkpoint);
-        int states = accepting.length;
-        int[] here = new int[states];
-        int[] there = new int[states];
-        int[] seen = new int[states];
-        int[] pending = new int[states];
-        int round = 1;
-        int count = close(0, here, 0, seen, round, pending, checkpoint);
-        int at = 0;
+        ask(checkpoint);
+        Room room = new Room(accepting.length);
+        room.round = 1;
+        return spread(value, 0, room, close(0, room.here, 0, room, checkpoint), checkpoint);
+    }
+
+    /** {@link #spread} from the {@code count} states first in {@code room.here}, with the subject
+     *  read up to {@code from}. */
+    private boolean spread(String value, int from, Room room, int count, @Nullable Checkpoint checkpoint) {
+        int[] here = room.here;
+        int[] there = room.there;
+        int at = from;
         while (at < value.length()) {
-            Stop.ask(checkpoint);
+            ask(checkpoint);
             if (count == 0) {
                 return false;
             }
             int symbol = value.codePointAt(at);
             at += Character.charCount(symbol);
-            round++;
+            room.round++;
             int next = 0;
             for (int i = 0; i < count; i++) {
-                Stop.ask(checkpoint);
+                ask(checkpoint);
                 int state = here[i];
                 int[][] sets = over[state];
                 for (int step = 0; step < sets.length; step++) {
-                    Stop.ask(checkpoint);
+                    ask(checkpoint);
                     if (holds(sets[step], symbol)) {
-                        next = close(target[state][step], there, next, seen, round, pending, checkpoint);
+                        next = close(target[state][step], there, next, room, checkpoint);
                     }
                 }
             }
@@ -592,7 +1128,7 @@ public final class StringPattern implements Predicate<String> {
             count = next;
         }
         for (int i = 0; i < count; i++) {
-            Stop.ask(checkpoint);
+            ask(checkpoint);
             if (accepting[here[i]]) {
                 return true;
             }
@@ -601,22 +1137,27 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /** {@code from} and every state it reaches for no character, put into {@code into} after its
-     *  first {@code count}; answers how many it holds now. */
-    private int close(int from, int[] into, int count, int[] seen, int round, int[] pending,
-                      @Nullable Checkpoint checkpoint) {
+     *  first {@code count}, where {@code room} has not put them in this round; answers how many it
+     *  holds now. */
+    private int close(int from, int[] into, int count, Room room, @Nullable Checkpoint checkpoint) {
+        int[] seen = room.seen;
+        int round = room.round;
         if (seen[from] == round || !live[from]) {
             return count;
         }
+        int[] pending = room.pending;
         seen[from] = round;
         int top = 0;
         pending[top++] = from;
         int held = count;
         while (top > 0) {
-            Stop.ask(checkpoint);
+            ask(checkpoint);
             int state = pending[--top];
             into[held++] = state;
+            room.hash += scatter(state);
+            room.accepting |= accepting[state];
             for (int to : free[state]) {
-                Stop.ask(checkpoint);
+                ask(checkpoint);
                 if (seen[to] != round && live[to]) {
                     seen[to] = round;
                     pending[top++] = to;
