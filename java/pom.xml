@@ -132,11 +132,39 @@
     </build>
 
     <profiles>
-        <!-- What Central requires beside the jar: the sources, the Javadoc, and a signature of each. -->
+        <!--
+            A release: what Central requires beside the jar (the sources, the Javadoc, and a
+            signature of each), and only of a version that is one. A -SNAPSHOT version, or one that
+            depends on a snapshot, stops here rather than being signed and published as if it
+            were a release; snapshots are deployed without this profile.
+        -->
         <profile>
             <id>release</id>
             <build>
                 <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>a-release-is-a-release-version</id>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireReleaseVersion>
+                                            <message>The release profile deploys a release, and ${project.version} is a snapshot. Set the version first; snapshots are deployed without -Prelease.</message>
+                                        </requireReleaseVersion>
+                                        <requireReleaseDeps>
+                                            <message>A release depends on no snapshot.</message>
+                                        </requireReleaseDeps>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-source-plugin</artifactId>

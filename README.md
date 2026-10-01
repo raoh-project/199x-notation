@@ -94,18 +94,30 @@ checked-in tables differ, and runs the tests.
 
 ## Releasing
 
-A release is deployed from the commit its tag names, so what Central holds is what the tag holds.
-Merge the release into `main`, tag that commit `vX.Y.Z`, and deploy from a checkout of the tag:
+`develop` holds the next version as a snapshot, `X.Y.Z-SNAPSHOT`, and a release is that version
+without the suffix. A snapshot is deployed from anywhere with `cd java && mvn clean deploy`. A
+release is deployed from the commit its tag names, so what Central holds is what the tag holds:
 
-```sh
-git checkout vX.Y.Z
-cd java && mvn -Prelease clean deploy
-```
-
-`clean`, because NullAway runs inside javac and a compile Maven thinks is up to date is not
-checked. The `release` profile attaches the sources and the Javadoc and signs everything, and the
-Central Portal publishes the release once it has validated it. Then move `develop` to the next
-`-SNAPSHOT`.
+1. On a branch from `develop`, set the version to the release and open a pull request to `main`:
+   ```sh
+   cd java && mvn versions:set -DnewVersion=X.Y.Z -DgenerateBackupPoms=false
+   ```
+2. Merge it, and tag the merge commit on `main` `vX.Y.Z`. CI fails a tag that is not `v` and the
+   version, or whose version is a snapshot.
+3. Deploy from a checkout of the tag:
+   ```sh
+   git checkout vX.Y.Z
+   cd java && mvn -Prelease clean deploy
+   ```
+   The `release` profile refuses a snapshot version, attaches the sources and the Javadoc, and
+   signs everything, and the Central Portal publishes the release once it has validated it.
+   `clean`, because NullAway runs inside javac and a compile Maven thinks is up to date is not
+   checked.
+4. Merge `main` back into `develop`, so that the next release's pull request starts from this one,
+   and set `develop` to the next snapshot:
+   ```sh
+   cd java && mvn versions:set -DnewVersion=<next version>-SNAPSHOT -DgenerateBackupPoms=false
+   ```
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
 `notation199x`.

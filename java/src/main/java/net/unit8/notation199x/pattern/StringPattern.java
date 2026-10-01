@@ -169,16 +169,42 @@ public final class StringPattern implements Predicate<String> {
      * that a release has written is read by every release after it, and one is added here and none
      * is taken away. Which format is written is {@link #WRITTEN_FORMAT}, apart from this, so that
      * writing a new format does not stop the old ones being read.
+     *
+     * <p>A marker is written into images and outlives every name in this code, so it is a value of
+     * its own and not the constant's name: renaming a constant changes nothing an image says. A
+     * marker holds no comma, which ends it, and is not a number, which is how an image without a
+     * marker would begin.
      */
     private enum ImageFormat {
 
         /** The kind, the sets, and the states with their steps, as numbers between commas. */
-        P1;
+        P1("P1");
+
+        private final String marker;
+
+        ImageFormat(String marker) {
+            if (marker.isEmpty() || marker.indexOf(',') >= 0
+                    || marker.chars().allMatch(c -> c >= '0' && c <= '9')) {
+                throw new IllegalStateException("a format's marker is neither empty, nor holds a"
+                        + " comma, nor is a number: \"" + marker + "\"");
+            }
+            this.marker = marker;
+        }
+
+        /** What an image of this format begins with, before its first comma. */
+        String marker() {
+            return marker;
+        }
+
+        /** Every marker this reads, for saying so. */
+        static List<String> markers() {
+            return Arrays.stream(values()).map(ImageFormat::marker).toList();
+        }
 
         /** The format {@code marker} names, or why there is none this reads. */
         static ImageFormat named(String marker) {
             for (ImageFormat each : values()) {
-                if (each.name().equals(marker)) {
+                if (each.marker.equals(marker)) {
                     return each;
                 }
             }
@@ -186,10 +212,10 @@ public final class StringPattern implements Predicate<String> {
             if (marker.isEmpty() || marker.chars().allMatch(c -> c >= '0' && c <= '9')) {
                 throw new IllegalArgumentException("an image begins with the format it is written in,"
                         + " and this one begins with \"" + shown + "\"; this reads "
-                        + Arrays.toString(values()));
+                        + markers());
             }
             throw new IllegalArgumentException("an image written in format \"" + shown
-                    + "\", and this reads " + Arrays.toString(values()));
+                    + "\", and this reads " + markers());
         }
     }
 
@@ -567,7 +593,7 @@ public final class StringPattern implements Predicate<String> {
             this.mostCharacters = mostCharacters;
             // The format's marker, the kind, and the two counts written before what they count, at
             // their widest.
-            this.characters = WRITTEN_FORMAT.name().length() + 1 + 2 + 2 * NUMBER;
+            this.characters = WRITTEN_FORMAT.marker().length() + 1 + 2 + 2 * NUMBER;
         }
 
         /** The most characters one number of an image takes, its comma included. */
@@ -677,7 +703,7 @@ public final class StringPattern implements Predicate<String> {
                 }
             }
             StringBuilder out = new StringBuilder();
-            out.append(WRITTEN_FORMAT.name()).append(',');
+            out.append(WRITTEN_FORMAT.marker()).append(',');
             out.append(deterministic ? 1 : 0).append(',').append(sets.size());
             for (String each : sets) {
                 out.append(',').append(each);

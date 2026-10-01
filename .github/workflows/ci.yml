@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [develop, main]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -28,3 +29,28 @@ jobs:
       - name: Test
         working-directory: java
         run: mvn --batch-mode test
+
+  # A tag names a release: vX.Y.Z on a commit whose version is X.Y.Z. Checked when it is pushed,
+  # before anything is deployed from it.
+  release-tag:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: The tag is the version, and the version is a release
+        working-directory: java
+        run: |
+          version=$(mvn --batch-mode --quiet help:evaluate -Dexpression=project.version -DforceStdout)
+          tag="${GITHUB_REF#refs/tags/}"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::the tag is $tag and the version is $version"
+            exit 1
+          fi
+          case "$version" in
+            *-SNAPSHOT) echo "::error::$version is a snapshot, and a tag names a release"; exit 1 ;;
+          esac
