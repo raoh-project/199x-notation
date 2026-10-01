@@ -10,16 +10,18 @@ package net.unit8.notation199x;
  * and answers {@link Outcome.Stopped}, which is neither of its own answers.
  *
  * <p>Each rule that takes one says how often it asks, in what it looks at: the characters of the
- * text, the states of a walk, the marks of a combining run. Every loop of the rule whose count turns
- * on what the caller handed in asks once a time round, so between two asks the rule looks at one of
- * those and no more. How much asking costs is the caller's too: a checkpoint that is costly to
- * answer can answer most asks at once and look only every so often.
+ * text, the states of a walk, the marks of a combining run. Between two asks a rule goes over none
+ * of what the caller handed in, the text or the machine a pattern is run as, further than one of
+ * those. What it does between them is a lookup in a table, a search of a sorted one, which grows
+ * only as the logarithm of what it searches, or a loop with a fixed most. How much asking costs is
+ * the caller's too: a checkpoint that is costly to answer can answer most asks at once and look only
+ * every so often.
  *
- * <p>What the JVM does in one operation is not asked inside: making an array or a string, growing
- * one, copying one. A rule asks before it begins one, and makes none ahead of the work it is for.
- * Room for an answer starts small and grows with what is written, so a stop at the first ask has
- * made nothing as long as the text, and the answer is copied out into a string only after one more
- * ask. That copy, as long as the answer, is the one the rule cannot ask inside.
+ * <p>Nor does a rule make room ahead of the work from the size of what it was handed. Room for an
+ * answer starts small and grows with what is written, and a walk makes the room it is held in only
+ * once it has asked, so a stop at the first ask has made nothing as large as the text or the
+ * machine. What the platform does in one operation, such as growing that room or copying the answer
+ * out into a string at the end, is not asked inside.
  *
  * <p>A checkpoint that throws stops the rule as well, and what it throws comes out of the rule as
  * it is.

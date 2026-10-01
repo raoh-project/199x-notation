@@ -77,21 +77,48 @@ class AMatchIsStoppedWhereItIsAskedTest {
         assertInstanceOf(Outcome.Stopped.class, run.matches(subject, new Counting(1_000)));
     }
 
-    /** Whichever machine is run, a walk that goes on answers what one without a checkpoint does,
-     *  and a pattern is still the predicate it was. */
+    /**
+     * A walk can end in many states, none of which it may stop at. Whether it is accepted is known
+     * once the subject is read, and not looked for among those states afterwards, so the last ask
+     * is the end of the work.
+     */
     @Test
-    void aMatchThatGoesOnAnswersAsWithoutACheckpoint() {
-        List<String> patterns = List.of("[a-z]*", "(ab|a)*b?", "\\d{3}-\\d{4}", "(a?){50}a{50}", "[^x]+x", "");
-        List<String> subjects = List.of("", "a", "ab", "abab", "123-4567", "a".repeat(50), "a".repeat(100),
+    void aWalkThatEndsInManyStatesIsAnsweredWithoutGoingOverThem() {
+        StringPattern wide = StringPattern.of(Automaton.of(meaning("(a?){10000}b"), Held.roomy()), false);
+        assertEquals(new Outcome.Answered<>(false), wide.matches("", Counting.never()));
+        assertEquals(new Outcome.Answered<>(false), wide.matches("a".repeat(10_000), Counting.never()));
+        assertEquals(new Outcome.Answered<>(true), wide.matches("b", Counting.never()));
+        assertEquals(new Outcome.Answered<>(true), wide.matches("a".repeat(5_000) + "b", Counting.never()));
+        Counting all = Counting.never();
+        wide.matches("", all);
+        assertTrue(all.asked > 10_000, "asked " + all.asked + " times over no character");
+        for (long at : new long[] {1, all.asked / 2, all.asked}) {
+            assertInstanceOf(Outcome.Stopped.class, wide.matches("", new Counting(at)), "stopped at ask " + at);
+        }
+    }
+
+    /**
+     * Whichever machine is run, and with a checkpoint or without, a match answers what the shape's
+     * machine accepts as {@link Automaton#accepts} walks it, which is written apart from this walk.
+     * And a pattern is still the predicate it was.
+     */
+    @Test
+    void aMatchThatGoesOnAnswersWhatTheMachineAccepts() {
+        List<String> patterns = List.of("[a-z]*", "(ab|a)*b?", "\\d{3}-\\d{4}", "(a?){50}a{50}", "[^x]+x", "",
+                "(a?){30}b", "(a|ab)(c|bcd)(d*)", "((a|b)*c)?");
+        List<String> subjects = List.of("", "a", "b", "ab", "abab", "abcd", "abcdd", "c", "abc", "123-4567",
+                "a".repeat(30), "a".repeat(30) + "b", "a".repeat(31) + "b", "a".repeat(50), "a".repeat(100),
                 "a".repeat(101), "yyyx", "x", "日本語x", "\uD800");
         for (String pattern : patterns) {
             PatternMeaning meaning = meaning(pattern);
-            for (StringPattern run : List.of(PatternMachine.of(meaning).pattern(),
-                    StringPattern.of(Automaton.of(meaning, Held.roomy()), false))) {
+            Automaton shaped = Automaton.of(meaning, Held.roomy());
+            for (StringPattern run : List.of(PatternMachine.of(meaning).pattern(), StringPattern.of(shaped, false))) {
                 Predicate<String> predicate = run;
                 for (String subject : subjects) {
-                    assertEquals(new Outcome.Answered<>(predicate.test(subject)),
-                            run.matches(subject, Counting.never()), pattern + " " + run + " " + subject);
+                    Boolean accepted = shaped.accepts(subject, Held.roomy());
+                    String what = pattern + " " + run + " " + subject;
+                    assertEquals(accepted, predicate.test(subject), what);
+                    assertEquals(new Outcome.Answered<>(accepted), run.matches(subject, Counting.never()), what);
                 }
             }
         }

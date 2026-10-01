@@ -8,10 +8,10 @@ import org.jspecify.annotations.Nullable;
  * rule through {@link #answer}, and the rule asks through {@link #ask} and sizes what it writes into
  * by {@link #room}.
  *
- * <p>What {@link Checkpoint} promises a caller is held here, in two parts. Every loop the rule runs
- * whose count turns on what the caller handed in asks once a time round. And no work the JVM does in
- * one operation — making an array or a string, growing one, copying one — is begun before the
- * rule has asked, nor is any made larger than what has been asked about so far calls for: a buffer
+ * <p>What {@link Checkpoint} promises a caller is held here, in two parts. A loop whose count turns
+ * on the text, as against one bounded by a table or a fixed most, asks once a time round, and so
+ * does every phase of the rule: before the text, while it is read, and after it, where what has
+ * been held is settled. And no room is made from the text's length ahead of the work: a buffer
  * starts small and grows with what is written, and the answer is copied out of it only after one
  * more ask.
  */

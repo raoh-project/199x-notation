@@ -56,11 +56,12 @@ compiler keeps its own analysis of patterns and its budgets for it.
 A match, a bounded normalization and a bounded case conversion can also be run with a checkpoint
 the caller hands in, for a caller that may have to stop one part of the way through. The rule asks
 it whether to go on and holds no allowance of its own: what the caller counts, steps or a deadline,
-stays with the caller. Each rule says how often it asks, in what it looks at, and asks wherever one
-character of the text can make it look at as many others as the text or the machine has, not only
-once a character. What the platform does in one operation, such as copying the answer into a
-string, is not asked inside; a rule asks before it begins one, and makes no room ahead of what it
-has asked about. A rule that was stopped answers that it was stopped, apart from its own answers,
+stays with the caller. Each rule says how often it asks, in what it looks at. Between two asks it
+goes over no more of the text, or of the machine a pattern is run as, than one of what it counts,
+and it asks wherever one character can make it go over as many others as the text or the machine
+has, not only once a character. It makes no room from the size of what it was handed ahead of the
+work. What the platform does in one operation, such as copying the answer into a string, is not
+asked inside. A rule that was stopped answers that it was stopped, apart from its own answers,
 so a stopped match is neither accepted nor refused. The same rules run without a checkpoint answer
 as they did.
 
