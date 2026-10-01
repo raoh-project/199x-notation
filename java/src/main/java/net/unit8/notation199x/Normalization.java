@@ -51,13 +51,24 @@ public final class Normalization {
         }
     }
 
-    /** {@code s} in Normalization Form C. Idempotent — {@code nfc(nfc(s)) == nfc(s)} — because
-     *  composing an already-canonical sequence recomposes nothing further. */
+    /**
+     * {@code s} in Normalization Form C. Idempotent — {@code nfc(nfc(s)) == nfc(s)} — because
+     * composing an already-canonical sequence recomposes nothing further.
+     *
+     * @param s the text, a sequence of scalar values
+     * @return {@code s} in Normalization Form C
+     */
     public static String nfc(String s) {
         return normalize(Form.NFC, s);
     }
 
-    /** {@code s} in {@code form}. */
+    /**
+     * {@code s} in {@code form}.
+     *
+     * @param form the normalization form
+     * @param s    the text, a sequence of scalar values
+     * @return {@code s} in {@code form}
+     */
     public static String normalize(Form form, String s) {
         String normalized = normalizeWithin(form, s, Long.MAX_VALUE);
         if (normalized == null) {
@@ -78,6 +89,11 @@ public final class Normalization {
      * there is a starter that composes with nothing before it, and a starter blocks every mark after
      * it from composing with a starter before it. That code point itself is normalized with the rest,
      * since what follows it may compose with it.
+     *
+     * @param form    the normalization form
+     * @param s       the text, a sequence of scalar values
+     * @param longest the most code points the answer may hold
+     * @return {@code s} in {@code form}, or null where that is longer than {@code longest}
      */
     public static @Nullable String normalizeWithin(Form form, String s, long longest) {
         int unsettled = firstAtTrivialLimit(form, s);
@@ -380,12 +396,17 @@ public final class Normalization {
         return index >= 0 ? table.mapped()[index] : null;
     }
 
-    /** Unicode's canonical combining class of {@code cp}: 0 for a starter, and for a mark the class
-     *  canonical ordering sorts it by (UAX #15's Canonical Ordering Behavior section: stable, a mark
-     *  moving earlier only past marks of a strictly higher class and never past a starter).
-     *  {@code CCC_KEYS} holds only non-zero entries (spec of the generator that wrote it), and no
-     *  Hangul jamo or syllable is one of them — every one of them is 0 in {@code UnicodeData.txt}
-     *  — so a plain table lookup already answers 0 for them without a special case. */
+    /**
+     * Unicode's canonical combining class of {@code cp}: 0 for a starter, and for a mark the class
+     * canonical ordering sorts it by (UAX #15's Canonical Ordering Behavior section: stable, a mark
+     * moving earlier only past marks of a strictly higher class and never past a starter).
+     * {@code CCC_KEYS} holds only non-zero entries (spec of the generator that wrote it), and no
+     * Hangul jamo or syllable is one of them — every one of them is 0 in {@code UnicodeData.txt}
+     * — so a plain table lookup already answers 0 for them without a special case.
+     *
+     * @param cp a code point
+     * @return its canonical combining class, from 0 to 254
+     */
     public static int combiningClass(int cp) {
         int index = Arrays.binarySearch(NormalizationTables.CCC_KEYS, cp);
         return index >= 0 ? NormalizationTables.CCC_VALUES[index] : 0;

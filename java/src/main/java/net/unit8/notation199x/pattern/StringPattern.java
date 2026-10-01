@@ -152,7 +152,12 @@ public final class StringPattern implements Predicate<String> {
     /** How many characters ASCII is. */
     private static final int ASCII = 128;
 
-    /** Whether the whole of {@code value} is one of the strings. */
+    /**
+     * Whether the whole of {@code value} is one of the strings.
+     *
+     * @param value the text
+     * @return whether the whole of it is accepted
+     */
     public boolean matches(String value) {
         return deterministic ? walk(value) : spread(value);
     }
@@ -254,6 +259,9 @@ public final class StringPattern implements Predicate<String> {
      * deterministic machine no symbol leading two ways. An image is text and may come from
      * anywhere, so what it says is checked here, once, and a pattern that was read answers every
      * text it is asked about. Anything else is an {@link IllegalArgumentException}.
+     *
+     * @param image the image, as the strings it was cut into
+     * @return the pattern it writes
      */
     public static StringPattern of(List<String> image) {
         String text = String.join("", image);

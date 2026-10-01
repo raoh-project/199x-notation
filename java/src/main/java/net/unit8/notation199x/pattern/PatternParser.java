@@ -49,7 +49,12 @@ public final class PatternParser {
         this.construct = 0;
     }
 
-    /** What {@code regex} means, or what makes it no pattern, or which limit it is past. */
+    /**
+     * What {@code regex} means, or what makes it no pattern, or which limit it is past.
+     *
+     * @param regex the text of the pattern
+     * @return what was read
+     */
     public static PatternRead read(String regex) {
         if (regex == null) {
             throw new IllegalArgumentException("a pattern is some string");

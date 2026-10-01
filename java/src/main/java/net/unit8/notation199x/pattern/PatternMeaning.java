@@ -48,9 +48,12 @@ public sealed interface PatternMeaning {
      * <p>Every way of writing one character arrives here. `.` is the universe less the line
      * terminators, `[^a]` is the universe less one symbol, `\d` is the ten digits — what tells them
      * apart is the set, and a reader of this needs nothing else about how it was spelled.
+     *
+     * @param held the symbols it may be
      */
     record Symbols(CodePoints held) implements PatternMeaning {
 
+        /** Holds a set to being given. */
         public Symbols {
             if (held == null) {
                 throw new IllegalArgumentException("one symbol comes out of some set of them");
@@ -58,9 +61,14 @@ public sealed interface PatternMeaning {
         }
     }
 
-    /** One after another. */
+    /**
+     * One after another.
+     *
+     * @param parts what comes one after another, in order
+     */
     record InTurn(List<PatternMeaning> parts) implements PatternMeaning {
 
+        /** Holds the parts in a list nothing writes to. */
         public InTurn {
             parts = List.copyOf(parts);
         }
@@ -71,9 +79,12 @@ public sealed interface PatternMeaning {
      *
      * <p>Every arm and not the first. A reading that kept one arm answers for a language the author
      * did not write, and the ones it dropped are exactly the values a row may carry.
+     *
+     * @param arms what it may be, two or more
      */
     record EitherOf(List<PatternMeaning> arms) implements PatternMeaning {
 
+        /** Holds the arms in a list nothing writes to, and to there being two or more. */
         public EitherOf {
             arms = List.copyOf(arms);
             if (arms.size() < 2) {
@@ -89,12 +100,17 @@ public sealed interface PatternMeaning {
      * of length three to six are in the language and a reading holding the floor alone leaves them
      * out. {@link #NO_CEILING} is what {@code *}, {@code +} and {@code {n,}} put there, which is a
      * bound nothing reaches rather than a large one.
+     *
+     * @param what  what is repeated
+     * @param least the fewest times
+     * @param most  the most times, or {@link #NO_CEILING}
      */
     record Repeated(PatternMeaning what, int least, int most) implements PatternMeaning {
 
         /** What an unbounded repetition has instead of a ceiling. */
         public static final int NO_CEILING = -1;
 
+        /** Holds the counts to a floor of at least nought and a ceiling not below it. */
         public Repeated {
             if (what == null) {
                 throw new IllegalArgumentException("something is repeated");
@@ -108,6 +124,11 @@ public sealed interface PatternMeaning {
             }
         }
 
+        /**
+         * Whether nothing caps it.
+         *
+         * @return whether {@link #most} is {@link #NO_CEILING}
+         */
         public boolean unbounded() {
             return most == NO_CEILING;
         }
@@ -124,6 +145,9 @@ public sealed interface PatternMeaning {
      * <p>Of text that is a sequence of scalar values, which is the caller's to have asked
      * ({@code ScalarValues.halfAPairAt}): half a surrogate pair is no symbol, and handing one over
      * is an {@link IllegalArgumentException}.
+     *
+     * @param written the string, a sequence of scalar values
+     * @return the meaning that accepts it alone
      */
     static PatternMeaning text(String written) {
         List<PatternMeaning> symbols = written.codePoints()
@@ -138,6 +162,8 @@ public sealed interface PatternMeaning {
      * <p>Every symbol and not what {@code .} holds. A dot is the universe less the line
      * terminators, which is a fact about how a pattern is written; what stands on either side of
      * text somebody looked for is any string at all, newlines included.
+     *
+     * @return the meaning that accepts every string
      */
     static PatternMeaning anything() {
         return ofAnySymbols(0, Repeated.NO_CEILING);
@@ -153,6 +179,10 @@ public sealed interface PatternMeaning {
      *
      * <p>{@link Repeated#NO_CEILING} for a count nothing caps, which is the bound nothing reaches
      * rather than a large one.
+     *
+     * @param least the fewest symbols
+     * @param most  the most symbols, or {@link Repeated#NO_CEILING}
+     * @return the meaning that accepts those strings
      */
     static PatternMeaning ofAnySymbols(int least, int most) {
         return new Repeated(new Symbols(CodePoints.EVERYTHING), least, most);

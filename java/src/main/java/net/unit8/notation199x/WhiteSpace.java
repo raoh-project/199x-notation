@@ -12,7 +12,12 @@ public final class WhiteSpace {
 
     private WhiteSpace() {}
 
-    /** Whether {@code codePoint} has the {@code White_Space} property. */
+    /**
+     * Whether {@code codePoint} has the {@code White_Space} property.
+     *
+     * @param codePoint a code point
+     * @return whether it has the property
+     */
     public static boolean contains(int codePoint) {
         return switch (codePoint) {
             case 0x0009, 0x000A, 0x000B, 0x000C, 0x000D,

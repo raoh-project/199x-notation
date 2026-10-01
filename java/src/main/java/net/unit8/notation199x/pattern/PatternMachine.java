@@ -83,7 +83,11 @@ public final class PatternMachine {
         return new PatternMachine(shaped, shaped.canonical(deterministicRun()));
     }
 
-    /** What text is matched against: the machine, run where it is. */
+    /**
+     * What text is matched against: the machine, run where it is.
+     *
+     * @return the matcher
+     */
     public StringPattern pattern() {
         return deterministic != null
                 ? StringPattern.of(deterministic, true)
@@ -98,6 +102,8 @@ public final class PatternMachine {
      * <p>The deterministic machine where its image fits, and otherwise the shape's, which is never
      * larger. Past {@link PatternImage#MOST_CHARACTERS} for both, there is no image, and that is a
      * limit of carrying a machine and not of the pattern: {@link #pattern} runs it all the same.
+     *
+     * @return the image, or {@link PatternImage.MoreCharacters} where it is too large
      */
     public PatternImage image() {
         if (deterministic != null) {

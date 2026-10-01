@@ -16,8 +16,13 @@ public final class ScalarValues {
 
     private ScalarValues() {}
 
-    /** Where {@code text} holds a surrogate that is not one half of a pair beside the other, or -1
-     *  where it holds none and so is a sequence of scalar values. */
+    /**
+     * Where {@code text} holds a surrogate that is not one half of a pair beside the other, or -1
+     * where it holds none and so is a sequence of scalar values.
+     *
+     * @param text the text
+     * @return the index, in UTF-16 units, of the first surrogate that is not half of a pair, or -1
+     */
     public static int halfAPairAt(String text) {
         for (int at = 0; at < text.length(); at++) {
             char unit = text.charAt(at);
@@ -31,7 +36,12 @@ public final class ScalarValues {
         return -1;
     }
 
-    /** How many scalar values {@code text} is made of. */
+    /**
+     * How many scalar values {@code text} is made of.
+     *
+     * @param text the text, a sequence of scalar values
+     * @return the number of scalar values
+     */
     public static long count(String text) {
         return text.codePointCount(0, text.length());
     }
@@ -46,6 +56,11 @@ public final class ScalarValues {
      * units are compared as they are, with that one range moved: a surrogate goes above every other
      * unit. Both sides share every unit before the first one apart, so where one of them is the
      * second half of a pair so is the other, and two second halves keep their order under the move.
+     *
+     * @param a one text, a sequence of scalar values
+     * @param b another
+     * @return a negative number, zero or a positive number as {@code a} stands below, with or
+     *         above {@code b}
      */
     public static int compare(String a, String b) {
         int shared = Math.min(a.length(), b.length());

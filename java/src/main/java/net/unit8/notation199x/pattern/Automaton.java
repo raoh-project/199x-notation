@@ -65,9 +65,15 @@ public final class Automaton {
      */
     private final int @Nullable [][] runs;
 
-    /** One step, and what it costs to take: the symbols it is over, and the state it leads to. */
+    /**
+     * One step, and what it costs to take: the symbols it is over, and the state it leads to.
+     *
+     * @param over the symbols it is taken on
+     * @param to   the state it leads to
+     */
     public record Step(CodePoints over, int to) {
 
+        /** Holds a step to being over some set and leading to a state. */
         public Step {
             if (over == null) {
                 throw new IllegalArgumentException("a step is over some set of symbols");
@@ -97,7 +103,11 @@ public final class Automaton {
         this.runs = runs;
     }
 
-    /** How many states it has, which is what a caller bounding its work counts. */
+    /**
+     * How many states it has, which is what a caller bounding its work counts.
+     *
+     * @return the number of states
+     */
     public int size() {
         return steps.size();
     }
@@ -120,6 +130,7 @@ public final class Automaton {
      *
      * @param steps     for each state, the steps out of it; the first is {@link #START}
      * @param accepting the states a walk may stop at
+     * @return the machine
      */
     public static Automaton madeOf(List<List<Step>> steps, BitSet accepting) {
         int states = steps.size();
@@ -157,6 +168,9 @@ public final class Automaton {
      * the whole of what there is to do: the machine is deterministic and complete, so every symbol
      * leads somewhere and where it leads is a fact about the symbol. Walked over a machine that is
      * not, the steps are one of the ways the pattern happened to be written.
+     *
+     * @param state a state of the machine
+     * @return the steps out of it, which cannot be written to
      */
     public List<Step> stepsFrom(int state) {
         return steps.get(state);
@@ -168,12 +182,20 @@ public final class Automaton {
      * <p>A copy. For a reader writing the machine out as it is, steps for nothing included:
      * a run walks those as they are, and removing them would copy each step after one into every
      * state before it.
+     *
+     * @param state a state of the machine
+     * @return the states its free steps lead to, as a copy
      */
     public int[] freeFrom(int state) {
         return free.get(state).clone();
     }
 
-    /** Whether a walk may stop at {@code state}. */
+    /**
+     * Whether a walk may stop at {@code state}.
+     *
+     * @param state a state of the machine
+     * @return whether a walk may stop there
+     */
     public boolean stopsAt(int state) {
         return accepting.get(state);
     }
@@ -185,6 +207,8 @@ public final class Automaton {
      * one reader wants it: what a walk looking for a string does with a step is settled by whether
      * anything is stopped at past it, and so is whether a shape the machine has is one a string
      * ever reaches. Worked out by each of them, the two would be one walk written twice.
+     *
+     * @return for each state, whether a walk from it may reach one it stops at
      */
     public boolean[] reachingSomewhereItStops() {
         List<List<Integer>> back = new ArrayList<>();
@@ -215,7 +239,7 @@ public final class Automaton {
 
     /**
      * The machine for {@code meaning}, or null where building it would take more than
-     * {@code mostStates}.
+     * {@code meter} allows.
      *
      * <p>Null rather than a smaller machine. A repetition written large is a language with a great
      * many strings in it and no smaller machine accepts the same ones — so what a caller is told is
@@ -225,6 +249,10 @@ public final class Automaton {
      * <p>What to do about it is the caller's. Which is why the bound is an argument: whether a
      * pattern is worth this many states is a question about the answer being built, and nothing here
      * knows what that answer is for.
+     *
+     * @param meaning what the pattern means
+     * @param meter   what building it may spend
+     * @return the machine, or null where building it is past {@code meter}
      */
     public static @Nullable Automaton of(PatternMeaning meaning, Meter meter) {
         Building building = new Building(meter.making());
@@ -251,6 +279,10 @@ public final class Automaton {
      * <p>Every state the machine may be in is walked at once, so a symbol costs the steps out of all
      * of them, and a long value over a wide machine is their product. That is charged a symbol at a
      * time, before the steps are looked at.
+     *
+     * @param value the text, a sequence of scalar values
+     * @param meter what the walk may look at
+     * @return whether it is accepted, or null where walking it is past {@code meter}
      */
     public @Nullable Boolean accepts(String value, Meter meter) {
         Meter.Making making = meter.making();
@@ -288,6 +320,9 @@ public final class Automaton {
      * <p>Asked only of a machine made one where a walk is only ever in one state ({@link #runs}),
      * and a symbol found among the state's runs by a search. A symbol no run holds is half a
      * surrogate pair, which is in no language.
+     *
+     * @param value the text
+     * @return whether it is accepted
      */
     public boolean walks(String value) {
         if (runs == null) {
@@ -352,6 +387,10 @@ public final class Automaton {
      *
      * <p>Of words that are sequences of scalar values, which is the caller's to have asked: half a
      * surrogate pair is no symbol, and a word holding one is an {@link IllegalArgumentException}.
+     *
+     * @param words the strings it accepts, each a sequence of scalar values
+     * @param meter what building it may spend
+     * @return the machine, or null where building it is past {@code meter}
      */
     public static @Nullable Automaton ofWords(java.util.Collection<String> words, Meter meter) {
         Meter.Making making = meter.making();
@@ -390,6 +429,11 @@ public final class Automaton {
      *
      * <p>A new beginning that steps freely into both. Cheap: the states are the two machines'
      * together and one more, and nothing is copied.
+     *
+     * @param other the other machine
+     * @param meter what building it may spend
+     * @return the machine accepting what either accepts, or null where building it is past
+     *         {@code meter}
      */
     public @Nullable Automaton or(Automaton other, Meter meter) {
         int mine = size();
@@ -430,6 +474,11 @@ public final class Automaton {
      * <p>Which is why nothing is asked of the meter before the first state is made. The two sizes
      * multiplied is what a product could come to and hardly ever what it comes to, so a caller
      * refused on that number is refused an answer it could have afforded.
+     *
+     * @param other the other machine
+     * @param meter what building it may spend
+     * @return the machine accepting what both accept, or null where building it is past
+     *         {@code meter}
      */
     public @Nullable Automaton and(Automaton other, Meter meter) {
         try {
@@ -572,6 +621,10 @@ public final class Automaton {
      * construction is needed — acceptance never needs it, and neither do the two questions about
      * holding nothing and holding everything, both of which are read off the one state a canonical
      * machine has.
+     *
+     * @param meter what building it may spend
+     * @return the machine accepting what this does not, or null where building it is past
+     *         {@code meter}
      */
     public @Nullable Automaton not(Meter meter) {
         if (everySymbolLeadsOneWay()) {
@@ -658,7 +711,7 @@ public final class Automaton {
     }
 
     /**
-     * The one machine of its kind that accepts what this accepts, or null past {@code mostStates}.
+     * The one machine of its kind that accepts what this accepts, or null past what {@code meter} allows.
      *
      * <p>Two patterns accepting the same strings come to this same machine, state for state and
      * step for step. Which is what lets everything a reader asks of a language afterwards be a look
@@ -674,6 +727,9 @@ public final class Automaton {
      * <p>The steps out of a state are over as few runs of symbols as say where they go. What the
      * subsets were cut over is the labels the pattern happened to carry, and two ways of writing one
      * language cut it differently — gathered by where they lead, the runs are the language's own.
+     *
+     * @param meter what making it may spend
+     * @return the canonical machine, or null where making it is past {@code meter}
      */
     public @Nullable Automaton canonical(Meter meter) {
         try {
@@ -899,6 +955,9 @@ public final class Automaton {
      *
      * <p>A walk over two tables of the same shape and nothing more, which is what {@link #canonical}
      * is for. Asked of machines that are not canonical it is a question about how they were written.
+     *
+     * @param other another canonical machine
+     * @return whether the two are the same machine
      */
     public boolean sameAs(Automaton other) {
         if (size() != other.size() || !accepting.equals(other.accepting)) {
@@ -918,12 +977,18 @@ public final class Automaton {
      * <p>One state either way. What tells a language apart from another is a string one of them
      * stops on and the other does not, and neither of these two has one — so the smallest machine
      * for each is a single state that every symbol leads back to, accepting or not.
+     *
+     * @return whether it accepts no string
      */
     public boolean holdsNothing() {
         return size() == 1 && !accepting.get(START);
     }
 
-    /** The other of the two — see {@link #holdsNothing}. */
+    /**
+     * The other of the two — see {@link #holdsNothing}.
+     *
+     * @return whether it accepts every string
+     */
     public boolean holdsEverything() {
         return size() == 1 && accepting.get(START);
     }
@@ -937,6 +1002,8 @@ public final class Automaton {
      * ({@link #shape}) is a hash of the same table and agrees with it on equality only: two
      * different tables may hash alike, and an order that broke its ties on the hash would put the
      * same pair in either order on different runs.
+     *
+     * @param out where the table is written
      */
     public void writtenInto(StringBuilder out) {
         out.append(steps.size());
@@ -953,7 +1020,11 @@ public final class Automaton {
         }
     }
 
-    /** A number that agrees with {@link #sameAs}, read off the same table. */
+    /**
+     * A number that agrees with {@link #sameAs}, read off the same table.
+     *
+     * @return a hash of the table
+     */
     public int shape() {
         int out = accepting.hashCode();
         for (List<Step> each : steps) {
@@ -978,6 +1049,8 @@ public final class Automaton {
      *
      * <p>Deterministic under both: the symbol taken out of a set is the least of it, and the states
      * are walked in the order they were made. Two runs over one model produce one value.
+     *
+     * @return a string it accepts, or null where it accepts none
      */
     public @Nullable String shortest() {
         String any = shortest(CodePoints.EVERYTHING, -1);
@@ -1000,6 +1073,9 @@ public final class Automaton {
      * language holds and prefers a written string at the price of nothing; this one is asked by a
      * caller writing a value into a model, where a string nobody can paste is not an answer at all.
      * A pattern admitting only control characters has a shortest string and no value to offer.
+     *
+     * @return the shortest string it accepts that a source can carry, or null where there is
+     *         none
      */
     public @Nullable String shortestWritten() {
         return shortest(WRITABLE, -1);

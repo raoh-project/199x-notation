@@ -19,9 +19,14 @@ package net.unit8.notation199x.pattern;
  */
 public sealed interface PatternRead {
 
-    /** The whole pattern, as the strings it accepts. */
+    /**
+     * The whole pattern, as the strings it accepts.
+     *
+     * @param meaning the strings the pattern accepts
+     */
     record Read(PatternMeaning meaning) implements PatternRead {
 
+        /** Holds a meaning to being given. */
         public Read {
             if (meaning == null) {
                 throw new IllegalArgumentException("a pattern that was read says what it accepts");
@@ -39,6 +44,7 @@ public sealed interface PatternRead {
      */
     record Refused(Refusal why, int from, String construct) implements PatternRead {
 
+        /** Holds a refusal to its reason, its construct and a place in the text. */
         public Refused {
             if (why == null || construct == null || from < 0) {
                 throw new IllegalArgumentException("a pattern refused was stopped by something");
@@ -63,6 +69,7 @@ public sealed interface PatternRead {
      */
     record Beyond(Limit limit, int from, String construct) implements PatternRead {
 
+        /** Holds it to its limit, its construct and a place in the text. */
         public Beyond {
             if (limit == null || construct == null || from < 0) {
                 throw new IllegalArgumentException("a pattern past a limit is past some limit");
@@ -96,7 +103,11 @@ public sealed interface PatternRead {
             this.most = most;
         }
 
-        /** The most a pattern within this limit writes. */
+        /**
+         * The most a pattern within this limit writes.
+         *
+         * @return the greatest count, depth or number of states within the limit
+         */
         public int most() {
             return most;
         }

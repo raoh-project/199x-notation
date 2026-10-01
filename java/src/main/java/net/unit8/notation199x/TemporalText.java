@@ -40,15 +40,31 @@ import java.util.regex.Pattern;
 public final class TemporalText {
 
     /** The temporals that have a text form. */
-    public enum Kind { DATE, TIME, DATETIME, OFFSET_DATETIME, INSTANT }
+    public enum Kind {
+        /** A day: {@code yyyy-MM-dd}. */
+        DATE,
+        /** A time of day: {@code HH:mm} or {@code HH:mm:ss}, with a fraction of a second or not. */
+        TIME,
+        /** A day and a time of day, joined by {@code T}. */
+        DATETIME,
+        /** A day and a time of day, and an offset from UTC: {@code Z} or {@code ±HH:mm[:ss]}. */
+        OFFSET_DATETIME,
+        /** A moment: a day, a time of day with its seconds, and an offset from UTC. */
+        INSTANT
+    }
 
-    /** The least and the greatest year of a date. */
+    /** The least year of a date. */
     public static final long YEAR_MIN = -999_999_999L;
+
+    /** The greatest year of a date. */
     public static final long YEAR_MAX = 999_999_999L;
 
-    /** The least and the greatest moment of an instant, in seconds from 1970-01-01T00:00:00Z:
-     *  the first second of year -1000000000 and the last of year 1000000000. */
+    /** The least moment of an instant, in seconds from 1970-01-01T00:00:00Z: the first second of
+     *  year -1000000000. */
     public static final long INSTANT_MIN = -31_557_014_167_219_200L;
+
+    /** The greatest moment of an instant, in seconds from 1970-01-01T00:00:00Z: the last second of
+     *  year 1000000000. */
     public static final long INSTANT_MAX = 31_556_889_864_403_199L;
 
     /** Why a text is not one. */
@@ -87,7 +103,13 @@ public final class TemporalText {
 
     private TemporalText() {}
 
-    /** Why {@code text} is not a {@code kind}, or empty where it is one. */
+    /**
+     * Why {@code text} is not a {@code kind}, or empty where it is one.
+     *
+     * @param kind the temporal the text is to be
+     * @param text the text
+     * @return why it is not one, or empty where it is
+     */
     public static Optional<Refusal> refusal(Kind kind, String text) {
         return switch (kind) {
             case DATE -> {

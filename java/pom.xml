@@ -113,6 +113,25 @@
                 <version>3.5.2</version>
             </plugin>
             <!--
+                The Javadoc is held to doclint's every group, the missing tags included, and a
+                warning fails it. It is built for a release and checked on every pull request
+                (mvn javadoc:javadoc). javadoc stops counting at a hundred warnings by default, which
+                hides how many there are, so the count is lifted.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.11.2</version>
+                <configuration>
+                    <doclint>all</doclint>
+                    <failOnWarnings>true</failOnWarnings>
+                    <additionalOptions>
+                        <additionalOption>-Xmaxwarns</additionalOption>
+                        <additionalOption>100000</additionalOption>
+                    </additionalOptions>
+                </configuration>
+            </plugin>
+            <!--
                 Deploys to the Central Portal. A -SNAPSHOT version goes to the snapshot repository,
                 which takes it as it is. A release is uploaded as one deployment, and autoPublish
                 publishes it once the Portal has validated it, with nobody pressing Publish there.
@@ -181,7 +200,6 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>3.11.2</version>
                         <executions>
                             <execution>
                                 <id>attach-javadocs</id>
