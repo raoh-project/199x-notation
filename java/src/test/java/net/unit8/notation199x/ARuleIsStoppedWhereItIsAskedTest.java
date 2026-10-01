@@ -24,6 +24,10 @@ import net.unit8.notation199x.Normalization.Form;
  * many others as the text has: a combining run held until the starter after it, and the marks after
  * a sigma that decide whether it is final. Asking once a code point read would let either run as
  * long as the text without asking, so these hold that the rule asks while it looks, too.
+ *
+ * <p>How often each asks is what its class says, worked out here from the shape of the text, and each
+ * asks at least that often. Every place a rule asks is counted in it and is a large part of it, so
+ * a rule that stopped asking at any one of them would ask fewer times than it says.
  */
 class ARuleIsStoppedWhereItIsAskedTest {
 
@@ -49,12 +53,13 @@ class ARuleIsStoppedWhereItIsAskedTest {
 
     private static final int MANY = 100_000;
 
-    /** A starter, a long run of marks of two classes, and the starter that ends the run. */
-    private static final String LONG_RUN = "a" + "̖́".repeat(MANY / 2) + "b";
+    /** A starter, a long run of marks of two classes out of their canonical order, and the starter
+     *  that ends the run. */
+    private static final String LONG_RUN = "a" + "\u0301\u0316".repeat(MANY / 2) + "b";
 
-    /** A final-looking sigma, followed by as many {@code Case_Ignorable} marks as there are before
-     *  the cased letter that decides it is not final. */
-    private static final String LONG_LOOK = "AΣ" + "́".repeat(MANY) + "A";
+    /** A sigma with as many {@code Case_Ignorable} marks before it, back to the cased letter that
+     *  might make it final, as after it, up to the cased letter that decides it is not. */
+    private static final String LONG_LOOK = "A" + "\u0301".repeat(MANY) + "Σ" + "\u0301".repeat(MANY) + "A";
 
     @Test
     void aNormalizationAsksWhileItSettlesARunAndNotOnlyAsItReads() {
@@ -63,8 +68,15 @@ class ARuleIsStoppedWhereItIsAskedTest {
             Outcome<String> whole = Normalization.normalizeWithin(form, LONG_RUN, Long.MAX_VALUE, all);
             assertEquals(new Outcome.Answered<>(Normalization.normalize(form, LONG_RUN)), whole);
             long read = LONG_RUN.codePointCount(0, LONG_RUN.length());
-            assertTrue(all.asked >= read + MANY,
-                    form + " asked " + all.asked + " times over " + read + " code points");
+            String answer = Normalization.normalize(form, LONG_RUN);
+            boolean composes = form == Form.NFC || form == Form.NFKC;
+            // The starter is read before the first mark, which sends the text to the algorithm, and
+            // the algorithm reads all of it. The run is put in order by counting, which goes over the
+            // marks twice; composed, in a composing form; and the marks left, which is the answer
+            // without its two starters, written. Then the answer is made a string.
+            long says = 2 + read + 2L * MANY + (composes ? MANY : 0)
+                    + (answer.codePointCount(0, answer.length()) - 2) + 1;
+            assertTrue(all.asked >= says, form + " asked " + all.asked + " times, and says " + says);
             // The last code point is asked about before it is read, and the run is settled after.
             for (long at : new long[] {1, read / 2, read, read + 1, all.asked}) {
                 assertInstanceOf(Outcome.Stopped.class,
@@ -80,7 +92,10 @@ class ARuleIsStoppedWhereItIsAskedTest {
         Outcome<String> whole = CaseConversion.lowercaseWithin(LONG_LOOK, Long.MAX_VALUE, all);
         assertEquals(new Outcome.Answered<>(CaseConversion.lowercase(LONG_LOOK)), whole);
         long read = LONG_LOOK.codePointCount(0, LONG_LOOK.length());
-        assertTrue(all.asked >= read + MANY, "asked " + all.asked + " times over " + read + " code points");
+        // Each code point mapped; for the sigma, the marks before it and the letter past them, and
+        // the marks after it and the letter past those; then the answer made a string.
+        long says = read + (MANY + 1) + (MANY + 1) + 1;
+        assertTrue(all.asked >= says, "asked " + all.asked + " times, and says " + says);
         for (long at : new long[] {1, 3, MANY / 2, all.asked}) {
             assertInstanceOf(Outcome.Stopped.class,
                     CaseConversion.lowercaseWithin(LONG_LOOK, Long.MAX_VALUE, new Counting(at)),
