@@ -23,6 +23,12 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>Of text that is a sequence of scalar values, which is the only text there is to normalize;
  * this asks nothing. Half a surrogate pair handed in comes back out where it was.
+ *
+ * <p>A bounded normalization can also be run with a {@link Checkpoint}, for a caller that may have
+ * to stop it part of the way through. It asks before each code point of the text it reads, and
+ * before each mark of a combining run it puts in order, composes or writes out: a run is held until
+ * the starter after it, and may be as long as the text. And once more before the answer is made a
+ * string.
  */
 public final class Normalization {
 
@@ -96,24 +102,49 @@ public final class Normalization {
      * @return {@code s} in {@code form}, or null where that is longer than {@code longest}
      */
     public static @Nullable String normalizeWithin(Form form, String s, long longest) {
-        int unsettled = firstAtTrivialLimit(form, s);
-        if (unsettled == s.length()) {
-            return s.length() <= longest || s.codePointCount(0, s.length()) <= longest ? s : null;
-        }
-        return normalizeFrom(form, s, unsettled == 0 ? 0 : s.offsetByCodePoints(unsettled, -1), longest);
+        return within(form, s, longest, null);
     }
 
-    /** Where the first code point at or above {@code form}'s trivial limit begins, or the text's
-     *  length where there is none. */
-    private static int firstAtTrivialLimit(Form form, String s) {
+    /**
+     * {@link #normalizeWithin(Form, String, long)}, asking {@code checkpoint} as it goes whether to
+     * go on.
+     *
+     * @param form       the normalization form
+     * @param s          the text, a sequence of scalar values
+     * @param longest    the most code points the answer may hold
+     * @param checkpoint asked before each code point and each mark the normalization looks at, as the
+     *                   class says
+     * @return what {@link #normalizeWithin(Form, String, long)} answers, or {@link Outcome.Stopped}
+     *         where {@code checkpoint} said not to go on before it was found
+     */
+    public static Outcome<@Nullable String> normalizeWithin(Form form, String s, long longest,
+                                                            Checkpoint checkpoint) {
+        return Checkpoints.answer(() -> within(form, s, longest, checkpoint));
+    }
+
+    /**
+     * {@link #normalizeWithin}, asking {@code checkpoint}, where there is one, before each code point
+     * it reads.
+     *
+     * <p>The code points below the form's trivial limit are counted as they are read, so that the
+     * text before the one settled from is not read again to count it, and is copied into the answer
+     * only once it has been read.
+     */
+    private static @Nullable String within(Form form, String s, long longest, @Nullable Checkpoint checkpoint) {
+        int last = 0;
+        long beforeLast = 0;
+        long read = 0;
         for (int at = 0; at < s.length(); ) {
+            Checkpoints.ask(checkpoint);
             int cp = s.codePointAt(at);
             if (cp >= form.trivialLimit) {
-                return at;
+                return normalizeFrom(form, s, last, beforeLast, longest, checkpoint);
             }
+            last = at;
+            beforeLast = read++;
             at += Character.charCount(cp);
         }
-        return s.length();
+        return read <= longest ? s : null;
     }
 
     /**
@@ -129,20 +160,23 @@ public final class Normalization {
      * text and, in a composing form, longer than the answer.
      */
     static @Nullable String normalizeFromStart(Form form, String s, long longest) {
-        return normalizeFrom(form, s, 0, longest);
+        return normalizeFrom(form, s, 0, 0, longest, null);
     }
 
-    /** {@link #normalizeFromStart}, taking the text before {@code from} as it is: the caller knows
-     *  it is its own normalization and that nothing from {@code from} on composes into it. */
-    private static @Nullable String normalizeFrom(Form form, String s, int from, long longest) {
-        int kept = s.codePointCount(0, from);
+    /** {@link #normalizeFromStart}, taking the text before {@code from}, {@code kept} code points
+     *  long, as it is: the caller knows it is its own normalization and that nothing from
+     *  {@code from} on composes into it. */
+    private static @Nullable String normalizeFrom(Form form, String s, int from, long kept, long longest,
+                                                  @Nullable Checkpoint checkpoint) {
         if (kept > longest) {
             return null;
         }
         long[] inert = form.compatibility ? INERT_IN_COMPATIBILITY : INERT;
-        Composing composing = new Composing(form.composes, longest, (int) Math.min(s.length(), longest));
+        Composing composing = new Composing(form.composes, longest,
+                Checkpoints.room(checkpoint, Math.min(s.length(), longest)), checkpoint);
         composing.keep(s, from, kept);
         for (int at = from; at < s.length(); ) {
+            Checkpoints.ask(checkpoint);
             int cp = s.codePointAt(at);
             at += Character.charCount(cp);
             if (isInert(inert, cp)) {
@@ -177,27 +211,30 @@ public final class Normalization {
     /**
      * One pass of canonical ordering and, where the form composes, composition over code points
      * already decomposed, holding the starter of the run it is in and the marks after it, and writing
-     * what is settled.
+     * what is settled. Asks its checkpoint, where it has one, before each held mark it looks at and
+     * before the answer is made a string.
      */
     private static final class Composing {
 
         private final boolean composes;
         private final long longest;
         private final StringBuilder out;
+        private final @Nullable Checkpoint checkpoint;
         private long written;
         private int starter = -1;
         private int[] marks = new int[8];
         private int markCount;
 
-        Composing(boolean composes, long longest, int expected) {
+        Composing(boolean composes, long longest, int expected, @Nullable Checkpoint checkpoint) {
             this.composes = composes;
             this.longest = longest;
             this.out = new StringBuilder(expected);
+            this.checkpoint = checkpoint;
         }
 
         /** Writes the text before {@code end}, {@code codePoints} long, as it is: asked before
          *  anything is taken, of text no longer than {@code longest}. */
-        void keep(String s, int end, int codePoints) {
+        void keep(String s, int end, long codePoints) {
             out.append(s, 0, end);
             written = codePoints;
         }
@@ -236,7 +273,11 @@ public final class Normalization {
 
         /** What is left, once the text has been read; null where it passes {@code longest}. */
         @Nullable String finish() {
-            return write(settle()) ? out.toString() : null;
+            if (!write(settle())) {
+                return null;
+            }
+            Checkpoints.ask(checkpoint);
+            return out.toString();
         }
 
         private void holdMark(int cp) {
@@ -261,6 +302,7 @@ public final class Normalization {
             int kept = 0;
             int lastClass = -1;
             for (int i = 0; i < markCount; i++) {
+                Checkpoints.ask(checkpoint);
                 int mark = marks[i];
                 int markClass = combiningClass(mark);
                 Integer composed = lastClass < markClass ? compose(starter, mark) : null;
@@ -292,6 +334,7 @@ public final class Normalization {
             }
             int[] starts = new int[257];
             for (int i = 0; i < markCount; i++) {
+                Checkpoints.ask(checkpoint);
                 starts[combiningClass(marks[i]) + 1]++;
             }
             for (int c = 1; c < starts.length; c++) {
@@ -299,6 +342,7 @@ public final class Normalization {
             }
             int[] ordered = new int[markCount];
             for (int i = 0; i < markCount; i++) {
+                Checkpoints.ask(checkpoint);
                 ordered[starts[combiningClass(marks[i])]++] = marks[i];
             }
             marks = ordered;
@@ -310,6 +354,7 @@ public final class Normalization {
                 return false;
             }
             for (int i = 0; i < kept; i++) {
+                Checkpoints.ask(checkpoint);
                 if (!writeOne(marks[i])) {
                     return false;
                 }

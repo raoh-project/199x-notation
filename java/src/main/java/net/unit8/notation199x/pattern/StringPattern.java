@@ -1,5 +1,7 @@
 package net.unit8.notation199x.pattern;
 
+import net.unit8.notation199x.Checkpoint;
+import net.unit8.notation199x.Outcome;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -29,6 +31,17 @@ import java.util.function.Predicate;
  *
  * <p>A symbol is a scalar value. Text holding half a surrogate pair is no text, and no set
  * in an image holds a surrogate, so such text is accepted by nothing.
+ *
+ * <p>A match can also be run with a {@link Checkpoint}, for a caller that may have to stop it part
+ * of the way through ({@link #matches(String, Checkpoint)}). It asks before each character of the
+ * subject. Over a machine that is not deterministic, where one character can move as many states as
+ * the machine has, it also asks before it makes the room the walk is held in, which is as large as
+ * the machine, before each state it moves, each step it looks at from one, and each state and step
+ * for no character it takes the walk into, and, once the subject is read, before each state it ended
+ * in that it looks through for one it may stop at.
+ *
+ * <p>That is the whole of what a match does that grows with the subject or the machine. Between two
+ * asks the work is a search of a state's steps.
  */
 public final class StringPattern implements Predicate<String> {
 
@@ -159,7 +172,47 @@ public final class StringPattern implements Predicate<String> {
      * @return whether the whole of it is accepted
      */
     public boolean matches(String value) {
-        return deterministic ? walk(value) : spread(value);
+        return deterministic ? walk(value, null) : spread(value, null);
+    }
+
+    /**
+     * {@link #matches(String)}, asking {@code checkpoint} as it goes whether to go on.
+     *
+     * @param value      the text
+     * @param checkpoint asked before each character, state and step the walk looks at, as the class
+     *                   says
+     * @return whether the whole of {@code value} is accepted, or {@link Outcome.Stopped} where
+     *         {@code checkpoint} said not to go on before that was found
+     */
+    public Outcome<Boolean> matches(String value, Checkpoint checkpoint) {
+        try {
+            return new Outcome.Answered<>(deterministic ? walk(value, checkpoint) : spread(value, checkpoint));
+        } catch (Stop stop) {
+            return new Outcome.Stopped<>();
+        }
+    }
+
+    /**
+     * A walk's {@link Checkpoint} said not to go on: thrown where it was asked, and caught by
+     * {@link #matches(String, Checkpoint)}, which answers {@link Outcome.Stopped}.
+     *
+     * <p>The package's own rules keep theirs out of sight in that package, which this one cannot see
+     * into; what each promises a caller is one promise, which {@link Checkpoint} states.
+     */
+    private static final class Stop extends RuntimeException {
+
+        private static final Stop STOP = new Stop();
+
+        private Stop() {
+            super(null, null, false, false);
+        }
+
+        /** Asks {@code checkpoint}, where there is one, whether to go on, and throws where not. */
+        static void ask(@Nullable Checkpoint checkpoint) {
+            if (checkpoint != null && !checkpoint.proceed()) {
+                throw STOP;
+            }
+        }
     }
 
     @Override
@@ -450,12 +503,13 @@ public final class StringPattern implements Predicate<String> {
      * every other character a search of the state's runs. The table leads nowhere rather than to a
      * state no walk is accepted from, so a walk stops at the same character either way.
      */
-    private boolean walk(String value) {
+    private boolean walk(String value, @Nullable Checkpoint checkpoint) {
         @Nullable Ascii table = ascii;
         int state = 0;
         int at = 0;
         int length = value.length();
         while (at < length) {
+            Stop.ask(checkpoint);
             char unit = value.charAt(at);
             if (table != null && unit < ASCII) {
                 state = table.steps()[state * table.kinds() + table.kind()[unit]];
@@ -498,18 +552,22 @@ public final class StringPattern implements Predicate<String> {
      *
      * <p>A state is put in the walk once for each character however many ways lead to it, which is
      * what keeps a character's work to the machine's size: {@code seen} holds the character a state
-     * was last put in for.
+     * was last put in for. Once the subject is read, the states the walk ended in are looked through
+     * for one it may stop at, and that is asked about as the rest of the walk is.
      */
-    private boolean spread(String value) {
+    private boolean spread(String value, @Nullable Checkpoint checkpoint) {
+        // The room a walk is held in is as large as the machine, and is made only once asked.
+        Stop.ask(checkpoint);
         int states = accepting.length;
         int[] here = new int[states];
         int[] there = new int[states];
         int[] seen = new int[states];
         int[] pending = new int[states];
         int round = 1;
-        int count = close(0, here, 0, seen, round, pending);
+        int count = close(0, here, 0, seen, round, pending, checkpoint);
         int at = 0;
         while (at < value.length()) {
+            Stop.ask(checkpoint);
             if (count == 0) {
                 return false;
             }
@@ -518,11 +576,13 @@ public final class StringPattern implements Predicate<String> {
             round++;
             int next = 0;
             for (int i = 0; i < count; i++) {
+                Stop.ask(checkpoint);
                 int state = here[i];
                 int[][] sets = over[state];
                 for (int step = 0; step < sets.length; step++) {
+                    Stop.ask(checkpoint);
                     if (holds(sets[step], symbol)) {
-                        next = close(target[state][step], there, next, seen, round, pending);
+                        next = close(target[state][step], there, next, seen, round, pending, checkpoint);
                     }
                 }
             }
@@ -532,6 +592,7 @@ public final class StringPattern implements Predicate<String> {
             count = next;
         }
         for (int i = 0; i < count; i++) {
+            Stop.ask(checkpoint);
             if (accepting[here[i]]) {
                 return true;
             }
@@ -541,7 +602,8 @@ public final class StringPattern implements Predicate<String> {
 
     /** {@code from} and every state it reaches for no character, put into {@code into} after its
      *  first {@code count}; answers how many it holds now. */
-    private int close(int from, int[] into, int count, int[] seen, int round, int[] pending) {
+    private int close(int from, int[] into, int count, int[] seen, int round, int[] pending,
+                      @Nullable Checkpoint checkpoint) {
         if (seen[from] == round || !live[from]) {
             return count;
         }
@@ -550,9 +612,11 @@ public final class StringPattern implements Predicate<String> {
         pending[top++] = from;
         int held = count;
         while (top > 0) {
+            Stop.ask(checkpoint);
             int state = pending[--top];
             into[held++] = state;
             for (int to : free[state]) {
+                Stop.ask(checkpoint);
                 if (seen[to] != round && live[to]) {
                     seen[to] = round;
                     pending[top++] = to;

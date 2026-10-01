@@ -20,6 +20,11 @@ import org.jspecify.annotations.Nullable;
  * length: past the bound the answer is null, and what would be past it is never written. The bound
  * is the caller's, in scalar values as {@link Normalization#normalizeWithin} counts it; none is held
  * here.
+ *
+ * <p>A bounded conversion can also be run with a {@link Checkpoint}, for a caller that may have to
+ * stop it part of the way through. It asks before each code point of the text it maps, before
+ * each code point it looks at around a sigma to tell whether the sigma is final, which may be as
+ * many as the text has, and once before the answer is made a string.
  */
 public final class CaseConversion {
 
@@ -35,7 +40,7 @@ public final class CaseConversion {
      * @return {@code s} in lowercase
      */
     public static String lowercase(String s) {
-        return unbounded(mapCase(s, true, Long.MAX_VALUE));
+        return unbounded(mapped(s, true, Long.MAX_VALUE, null));
     }
 
     /**
@@ -47,7 +52,7 @@ public final class CaseConversion {
      * @return {@code s} in uppercase
      */
     public static String uppercase(String s) {
-        return unbounded(mapCase(s, false, Long.MAX_VALUE));
+        return unbounded(mapped(s, false, Long.MAX_VALUE, null));
     }
 
     /**
@@ -59,7 +64,7 @@ public final class CaseConversion {
      * @return {@code s} in lowercase, or null where that is longer than {@code longest}
      */
     public static @Nullable String lowercaseWithin(String s, long longest) {
-        return mapCase(s, true, longest);
+        return mapped(s, true, longest, null);
     }
 
     /**
@@ -71,7 +76,38 @@ public final class CaseConversion {
      * @return {@code s} in uppercase, or null where that is longer than {@code longest}
      */
     public static @Nullable String uppercaseWithin(String s, long longest) {
-        return mapCase(s, false, longest);
+        return mapped(s, false, longest, null);
+    }
+
+    /**
+     * {@link #lowercaseWithin(String, long)}, asking {@code checkpoint} as it goes whether to go on.
+     *
+     * @param s          the text, a sequence of scalar values
+     * @param longest    the most scalar values the answer may hold
+     * @param checkpoint asked before each code point the conversion looks at, as the class says
+     * @return what {@link #lowercaseWithin(String, long)} answers, or {@link Outcome.Stopped} where
+     *         {@code checkpoint} said not to go on before it was found
+     */
+    public static Outcome<@Nullable String> lowercaseWithin(String s, long longest, Checkpoint checkpoint) {
+        return checked(s, true, longest, checkpoint);
+    }
+
+    /**
+     * {@link #uppercaseWithin(String, long)}, asking {@code checkpoint} as it goes whether to go on.
+     *
+     * @param s          the text, a sequence of scalar values
+     * @param longest    the most scalar values the answer may hold
+     * @param checkpoint asked before each code point the conversion looks at, as the class says
+     * @return what {@link #uppercaseWithin(String, long)} answers, or {@link Outcome.Stopped} where
+     *         {@code checkpoint} said not to go on before it was found
+     */
+    public static Outcome<@Nullable String> uppercaseWithin(String s, long longest, Checkpoint checkpoint) {
+        return checked(s, false, longest, checkpoint);
+    }
+
+    private static Outcome<@Nullable String> checked(String s, boolean lower, long longest,
+                                                     Checkpoint checkpoint) {
+        return Checkpoints.answer(() -> mapped(s, lower, longest, checkpoint));
     }
 
     private static String unbounded(@Nullable String mapped) {
@@ -84,14 +120,23 @@ public final class CaseConversion {
     /**
      * The mapped text, or null where it is longer than {@code longest}.
      *
-     * <p>The whole of the input is taken out first, because {@code Final_Sigma} looks past the
-     * sigma for as many {@code Case_Ignorable} code points as there are. What is bounded is what is
-     * written: each code point's mapping is measured before any of it is, so the answer never holds
-     * more than {@code longest}, nor part of a mapping that would take it past.
+     * <p>The text is read where it is, and not taken out first: {@code Final_Sigma} looks either side
+     * of a sigma for as many {@code Case_Ignorable} code points as there are, and looks at them in
+     * the text. What is bounded is what is written: each code point's mapping is measured before any
+     * of it is, so the answer never holds more than {@code longest}, nor part of a mapping that would
+     * take it past.
+     *
+     * <p>With a checkpoint the answer is written into room that grows with it, and is made a string
+     * only once the checkpoint has been asked again ({@link Checkpoints}).
      */
-    private static @Nullable String mapCase(String s, boolean lower, long longest) {
-        StringBuilder out = new StringBuilder((int) Math.max(0, Math.min(s.length(), longest)));
-        return mapCase(s, lower, longest, out::appendCodePoint) ? out.toString() : null;
+    private static @Nullable String mapped(String s, boolean lower, long longest,
+                                            @Nullable Checkpoint checkpoint) {
+        StringBuilder out = new StringBuilder(Checkpoints.room(checkpoint, Math.min(s.length(), longest)));
+        if (!mapCase(s, lower, longest, out::appendCodePoint, checkpoint)) {
+            return null;
+        }
+        Checkpoints.ask(checkpoint);
+        return out.toString();
     }
 
     /**
@@ -100,18 +145,24 @@ public final class CaseConversion {
      * was within it.
      */
     static boolean mapCase(String s, boolean lower, long longest, IntConsumer out) {
+        return mapCase(s, lower, longest, out, null);
+    }
+
+    private static boolean mapCase(String s, boolean lower, long longest, IntConsumer out,
+                                   @Nullable Checkpoint checkpoint) {
         // Even the empty text is longer than a negative bound.
         if (longest < 0) {
             return false;
         }
-        int[] cps = s.codePoints().toArray();
         long written = 0;
-        for (int i = 0; i < cps.length; i++) {
-            int cp = cps[i];
+        for (int at = 0; at < s.length(); ) {
+            Checkpoints.ask(checkpoint);
+            int cp = s.codePointAt(at);
+            int after = at + Character.charCount(cp);
             int[] mapped = null;
             if (lower) {
                 int[] finalSigmaMapped = lookup(CaseTables.FINAL_SIGMA, cp);
-                if (finalSigmaMapped != null && isFinalSigmaContext(cps, i)) {
+                if (finalSigmaMapped != null && isFinalSigmaContext(s, at, after, checkpoint)) {
                     mapped = finalSigmaMapped;
                 }
             }
@@ -130,31 +181,40 @@ public final class CaseConversion {
                     out.accept(m);
                 }
             }
+            at = after;
         }
         return true;
     }
 
-    /** Unicode's {@code Final_Sigma} condition: immediately preceded, skipping {@code Case_Ignorable}
-     *  code points, by a {@code Cased} one, and NOT immediately followed, skipping the same way, by
-     *  another {@code Cased} one. Scanned over the whole string's code points rather than a window,
-     *  since what "immediately" skips over is itself defined by the property, not by a fixed count. */
-    private static boolean isFinalSigmaContext(int[] cps, int at) {
+    /** Unicode's {@code Final_Sigma} condition of the code point between {@code at} and
+     *  {@code after}: immediately preceded, skipping {@code Case_Ignorable} code points, by a
+     *  {@code Cased} one, and NOT immediately followed, skipping the same way, by another
+     *  {@code Cased} one. Scanned as far as the text goes rather than over a window, since what
+     *  "immediately" skips over is itself defined by the property, not by a fixed count. */
+    private static boolean isFinalSigmaContext(String s, int at, int after,
+                                               @Nullable Checkpoint checkpoint) {
         boolean precededByCased = false;
-        for (int j = at - 1; j >= 0; j--) {
-            if (isCaseIgnorable(cps[j])) {
+        for (int j = at; j > 0; ) {
+            Checkpoints.ask(checkpoint);
+            int cp = s.codePointBefore(j);
+            j -= Character.charCount(cp);
+            if (isCaseIgnorable(cp)) {
                 continue;
             }
-            precededByCased = isCased(cps[j]);
+            precededByCased = isCased(cp);
             break;
         }
         if (!precededByCased) {
             return false;
         }
-        for (int j = at + 1; j < cps.length; j++) {
-            if (isCaseIgnorable(cps[j])) {
+        for (int j = after; j < s.length(); ) {
+            Checkpoints.ask(checkpoint);
+            int cp = s.codePointAt(j);
+            j += Character.charCount(cp);
+            if (isCaseIgnorable(cp)) {
                 continue;
             }
-            return !isCased(cps[j]);
+            return !isCased(cp);
         }
         return true;
     }
