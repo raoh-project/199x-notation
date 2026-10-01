@@ -14,10 +14,11 @@ import java.util.List;
  * not of the pattern: every pattern that is read has a machine ({@link PatternMachine}), and a
  * caller that runs it where it is runs it whatever this answers.
  *
- * <p>Made by {@link PatternMachine#image} and nowhere else. An image says whether its machine is
- * one a walk is only ever in one state of, and that is a fact about the machine the image was
- * written from; a caller that could write one from any machine and say so of it would hold an image
- * no reader takes back.
+ * <p>An image written from a machine is written by {@link PatternMachine#image} and nowhere else.
+ * It says whether its machine is one a walk is only ever in one state of, and that is a fact about
+ * the machine the image was written from; a caller that could write one from any machine and say
+ * so of it would hold an image no reader takes back. A {@link Written} a caller makes itself is
+ * text like any other, and {@link StringPattern#of(List)} checks it when it is read.
  */
 public sealed interface PatternImage {
 
