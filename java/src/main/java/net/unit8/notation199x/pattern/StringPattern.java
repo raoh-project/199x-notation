@@ -70,12 +70,8 @@ public final class StringPattern implements Predicate<String> {
      */
     public static final int CHUNK = 65_535;
 
-    /**
-     * Whether a walk is only ever in one state: the machine was said to be, and that was held to it
-     * as its {@link #table} or its {@link #runs} were made. Where neither is within the
-     * {@link Budget}, it is walked as the machine its steps write, which for a machine that is
-     * deterministic answers the same.
-     */
+    /** Whether a walk is only ever in one state: the machine was said to be, and was held to it
+     *  ({@link #oneWay}). How it is walked is the {@link Budget}'s, and this is not. */
     private final boolean deterministic;
 
     /** For each state, whether the walk may stop there. */
@@ -253,14 +249,20 @@ public final class StringPattern implements Predicate<String> {
             partition = SymbolPartition.of(sets, making);
             classes = partition == null ? null : SymbolClasses.of(partition, making);
         }
+        // Held to what it says it is before anything is made of it, and whatever the budget: the
+        // budget decides how a machine is walked, and a deterministic machine with neither a table
+        // nor runs within it is walked as the sets of states its steps lead to.
+        if (deterministic) {
+            oneWay(over, sets);
+        }
+        this.deterministic = deterministic;
         this.classes = classes;
         this.table = deterministic && partition != null && classes != null
                 ? table(over, target, live, sets, partition, classes, budget) : null;
         this.runs = deterministic && table == null && runs(over) <= budget.runs()
                 ? runs(over, target) : null;
-        this.deterministic = table != null || runs != null;
         this.ascii = runs != null ? ascii(runs, live, budget) : null;
-        this.subsets = !this.deterministic && classes != null && budget.subsets() > 0
+        this.subsets = table == null && runs == null && classes != null && budget.subsets() > 0
                 ? subsets(classes, budget) : null;
     }
 
@@ -269,7 +271,7 @@ public final class StringPattern implements Predicate<String> {
         if (table != null) {
             return Way.TABLE;
         }
-        if (deterministic) {
+        if (runs != null) {
             return ascii != null ? Way.ASCII_AND_RUNS : Way.RUNS;
         }
         return subsets != null ? Way.SETS_KEPT : Way.EVERY_STATE;
@@ -294,8 +296,8 @@ public final class StringPattern implements Predicate<String> {
      * {@link Budget} allows.
      *
      * <p>Each step fills the classes its set holds, so a set is looked at as its classes and not as
-     * its runs, and a state's row is filled once each. A class filled twice is a state that steps
-     * two ways, found before more than one class past the row has been looked at.
+     * its runs, and a state's row is filled once each: the machine was held to stepping one way
+     * before this ({@link #oneWay}).
      */
     private static @Nullable Table table(int[][][] over, int[][] target, boolean[] live,
                                          List<int[]> sets, SymbolPartition partition,
@@ -309,29 +311,19 @@ public final class StringPattern implements Predicate<String> {
             index.put(sets.get(at), at);
         }
         int[] steps = new int[over.length * width];
-        Arrays.fill(steps, UNFILLED);
+        Arrays.fill(steps, -1);
         for (int state = 0; state < over.length; state++) {
             for (int step = 0; step < over[state].length; step++) {
                 int to = target[state][step];
-                for (int each : partition.classesOf(indexOf(index, over[state][step]))) {
-                    int cell = state * width + each;
-                    if (steps[cell] != UNFILLED) {
-                        throw twoWays(state, partition.least(each));
+                if (live[to]) {
+                    for (int each : partition.classesOf(indexOf(index, over[state][step]))) {
+                        steps[state * width + each] = to * width;
                     }
-                    steps[cell] = live[to] ? to * width : -1;
                 }
-            }
-        }
-        for (int cell = 0; cell < steps.length; cell++) {
-            if (steps[cell] == UNFILLED) {
-                steps[cell] = -1;
             }
         }
         return new Table(classes, steps, new SymbolClasses.Stay[over.length]);
     }
-
-    /** A cell of a {@link Table} no step has filled yet. */
-    private static final int UNFILLED = Integer.MIN_VALUE;
 
     private static int indexOf(Map<int[], Integer> index, int[] set) {
         Integer at = index.get(set);
@@ -339,6 +331,112 @@ public final class StringPattern implements Predicate<String> {
             throw new IllegalStateException("every set a step is over is one of the machine's sets");
         }
         return at;
+    }
+
+    /**
+     * Holds a machine said to be deterministic to stepping one way for each character out of every
+     * state, or throws {@link IllegalArgumentException} naming a state that steps two ways.
+     *
+     * <p>Asked of the sets alone, and not of any table a walk is given, so whether a machine is the
+     * one it says it is never turns on a {@link Budget}. A state stepping over fewer than two sets
+     * steps one way. Of the rest, states that step over the same sets are asked about once: a
+     * machine whose every state steps over one wide class and the rest is asked once. And the sets
+     * of a state are held against each other without going over the widest of them: each run of the
+     * others is looked for in it by a search. So what this looks at is, once for each different
+     * group of sets a state steps over, the runs of all but the widest of them.
+     *
+     * <p>That is not bounded by the image. A set is written once however many states step over it,
+     * and holding sets against one another in groups no two of which are alike is, in the worst
+     * case, more than the image is long; an image of a deterministic machine has always been held to
+     * this, and every image an earlier release wrote has to be read.
+     */
+    private static void oneWay(int[][][] over, List<int[]> sets) {
+        Map<int[], Integer> index = new IdentityHashMap<>();
+        for (int at = 0; at < sets.size(); at++) {
+            index.put(sets.get(at), at);
+        }
+        java.util.Set<Group> asked = new java.util.HashSet<>();
+        for (int state = 0; state < over.length; state++) {
+            int[][] mine = over[state];
+            if (mine.length < 2) {
+                continue;
+            }
+            int[] group = new int[mine.length];
+            for (int step = 0; step < mine.length; step++) {
+                group[step] = indexOf(index, mine[step]);
+            }
+            Arrays.sort(group);
+            if (!asked.add(new Group(group))) {
+                continue;
+            }
+            int widest = 0;
+            for (int at = 1; at < group.length; at++) {
+                if (group[at] == group[at - 1] && sets.get(group[at]).length > 0) {
+                    throw twoWays(state, sets.get(group[at])[0]);
+                }
+                if (sets.get(group[at]).length > sets.get(group[widest]).length) {
+                    widest = at;
+                }
+            }
+            // The runs of the others in order, which overlap where one begins before the one before
+            // it ends; and each looked for in the widest.
+            int[] wide = sets.get(group[widest]);
+            List<int[]> others = new ArrayList<>();
+            for (int at = 0; at < group.length; at++) {
+                int[] set = sets.get(group[at]);
+                if (at != widest) {
+                    for (int run = 0; run < set.length; run += 2) {
+                        others.add(new int[] {set[run], set[run + 1]});
+                    }
+                }
+            }
+            others.sort((one, other) -> Integer.compare(one[0], other[0]));
+            for (int at = 0; at < others.size(); at++) {
+                int[] run = others.get(at);
+                if (at > 0 && run[0] <= others.get(at - 1)[1]) {
+                    throw twoWays(state, run[0]);
+                }
+                int met = firstEndingFrom(wide, run[0]);
+                if (met >= 0 && wide[met] <= run[1]) {
+                    throw twoWays(state, Math.max(run[0], wide[met]));
+                }
+            }
+        }
+    }
+
+    /** The sets a state steps over, by where each is among the machine's sets, in order. */
+    private record Group(int[] sets) {
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Group it && Arrays.equals(sets, it.sets);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(sets);
+        }
+
+        @Override
+        public String toString() {
+            return Arrays.toString(sets);
+        }
+    }
+
+    /** Where in {@code ranges}, as {@code from, to} pairs, the first run ending at or after
+     *  {@code symbol} begins, or -1 where none does. */
+    private static int firstEndingFrom(int[] ranges, int symbol) {
+        int low = 0;
+        int high = ranges.length / 2;
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (ranges[mid * 2 + 1] < symbol) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low < ranges.length / 2 ? low * 2 : -1;
     }
 
     /** That a machine said to be deterministic steps two ways for {@code symbol} out of
@@ -554,12 +652,8 @@ public final class StringPattern implements Predicate<String> {
      * anywhere, so what it says is checked here, once, and a pattern that was read answers every
      * text it is asked about. Anything else is an {@link IllegalArgumentException}.
      *
-     * <p>Whether a deterministic machine leads one way is found out as what walks it one state at a
-     * time is made, a table of its classes or its runs, each within the {@link Budget}: those are
-     * the states times what each looks at, which may be far more than the image, since a set many
-     * states step over is written once. Where neither is within it, nothing is made that large and
-     * the machine is walked as the steps write it, which answers what a deterministic machine
-     * answers.
+     * <p>Whether a deterministic machine leads one way is asked of its sets, whatever a walk over it
+     * is given to walk faster on ({@link #oneWay}).
      *
      * @param image the image, as the strings it was cut into
      * @return the pattern it writes

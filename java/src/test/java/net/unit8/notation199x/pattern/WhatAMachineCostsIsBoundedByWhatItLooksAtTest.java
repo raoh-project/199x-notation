@@ -138,11 +138,39 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
 
     /**
      * And where the classes are too many for a table and the runs every state would hold over again
-     * are past what is allowed, an image said to be deterministic is walked as the machine its steps
-     * write, which answers the same, rather than its runs being made whatever they come to.
+     * are past what is allowed, a deterministic image is walked as the sets of states its steps lead
+     * to, which answers the same, rather than its runs being made whatever they come to.
      */
     @Test
     void anImageWhoseRunsArePastWhatIsAllowedIsWalkedAsItsSteps() {
+        String image = manyClassesImage(0x10001);
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            StringPattern run = StringPattern.of(List.of(image));
+            assertEquals(StringPattern.Way.SETS_KEPT, run.way());
+            assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10001).appendCodePoint(0x10000)
+                    .toString()));
+            assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10001)
+                    .toString()));
+        });
+    }
+
+    /**
+     * Whether an image is one that is read is never a matter of what a walk over it is given to walk
+     * faster on: one said to be deterministic that steps two ways is refused however large it is,
+     * and past every table and run it could be walked by.
+     */
+    @Test
+    void anImageSteppingTwoWaysIsRefusedHoweverLarge() {
+        assertThrows(IllegalArgumentException.class, () -> StringPattern.of(List.of(manyClassesImage(0x10000))));
+        StringPattern.of(List.of(manyClassesImage(0x10001)));
+    }
+
+    /**
+     * An image of a wide set every state steps over and as many characters of their own as are too
+     * many for a table, the first state stepping over each; {@code firstSingle} is where those
+     * characters begin, beside or inside the wide set.
+     */
+    private static String manyClassesImage(int firstSingle) {
         int runs = 200_000;
         int singles = 600;
         int states = 1_000;
@@ -151,11 +179,9 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
             image.append(',').append(0x10000 + 2 * i).append(',').append(0x10000 + 2 * i);
         }
         for (int i = 0; i < singles; i++) {
-            image.append(",1,").append(0x10001 + 2 * i).append(',').append(0x10001 + 2 * i);
+            image.append(",1,").append(firstSingle + 2 * i).append(',').append(firstSingle + 2 * i);
         }
         image.append(',').append(states);
-        // The first state steps over each character of its own as well; every state steps over the
-        // wide set to the next, and every one may be stopped at.
         image.append(",1,").append(1 + singles).append(",0,1");
         for (int i = 0; i < singles; i++) {
             image.append(',').append(1 + i).append(",0");
@@ -164,14 +190,7 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
         for (int state = 1; state < states; state++) {
             image.append(",1,1,0,").append((state + 1) % states).append(",0");
         }
-        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
-            StringPattern run = StringPattern.of(List.of(image.toString()));
-            assertEquals(StringPattern.Way.SETS_KEPT, run.way());
-            assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10001).appendCodePoint(0x10000)
-                    .toString()));
-            assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10001)
-                    .toString()));
-        });
+        return image.toString();
     }
 
     /**

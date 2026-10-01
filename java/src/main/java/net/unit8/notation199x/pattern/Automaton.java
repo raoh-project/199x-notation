@@ -75,7 +75,12 @@ public final class Automaton {
     /**
      * Where each class leads from each state of a deterministic, complete machine.
      *
-     * @param classes the classes the symbols are put in
+     * <p>The classes are the ones the machine's own labels cut the symbols into, and never the ones
+     * of whatever it was made from: one machine holds the same rows however it came to be, and a
+     * canonical machine's are as narrow as its language. Made only by {@link #oneWay}, which is
+     * where that is held.
+     *
+     * @param classes the classes the machine's labels cut the symbols into
      * @param next    for each state, at each class, the state it leads to
      */
     private record Rows(SymbolPartition classes, int[][] next) {}
@@ -344,6 +349,12 @@ public final class Automaton {
             here = closure(next);
         }
         return here.intersects(accepting);
+    }
+
+    /** How many classes a walk one state at a time looks a symbol up among, or -1 where this is not
+     *  a machine walked that way: for a check that they are the machine's own. */
+    int classesWalked() {
+        return rows == null ? -1 : rows.classes().count();
     }
 
     /**
@@ -630,8 +641,8 @@ public final class Automaton {
         }
         try {
             Meter.Making making = meter.making();
-            Alphabet alphabet = alphabet(making);
-            Rows oneWay = oneWay(alphabet, making);
+            Alphabet alphabet = alphabet(steps, making);
+            Rows oneWay = oneWay(steps, free, alphabet, making);
             if (oneWay != null) {
                 return turnedOver(oneWay);
             }
@@ -643,7 +654,6 @@ public final class Automaton {
             Meter.Making building = meter.making();
             List<List<Step>> steps = new ArrayList<>();
             List<int[]> free = new ArrayList<>();
-            List<int[]> next = new ArrayList<>();
             BitSet accepting = new BitSet();
             for (int at = 0; at < subsets.count(); at++) {
                 if (!building.state()) {
@@ -658,11 +668,9 @@ public final class Automaton {
                 for (int over = 0; over < row.length; over++) {
                     steps.get(at).add(new Step(classes.get(over), row[over]));
                 }
-                next.add(row);
             }
             // Deterministic and complete, as what the subsets are always is.
-            return new Automaton(steps, free, accepting,
-                    new Rows(alphabet.classes(), next.toArray(new int[0][])));
+            return new Automaton(steps, free, accepting, rowsOf(steps, free, building));
         } catch (TooMany _) {
             return null;
         }
@@ -687,7 +695,8 @@ public final class Automaton {
      * the states and nothing more. A state's row is charged for before it is looked at, as the rows
      * of the subsets are.
      */
-    private @Nullable Rows oneWay(Alphabet alphabet, Meter.Making making) {
+    private static @Nullable Rows oneWay(List<List<Step>> steps, List<int[]> free,
+                                         Alphabet alphabet, Meter.Making making) {
         for (int[] each : free) {
             if (each.length > 0) {
                 return null;
@@ -721,6 +730,16 @@ public final class Automaton {
             next[at] = row;
         }
         return new Rows(alphabet.classes(), next);
+    }
+
+    /** The {@link Rows} of a machine its construction made deterministic and complete. */
+    private static Rows rowsOf(List<List<Step>> steps, List<int[]> free, Meter.Making making) {
+        Rows out = oneWay(steps, free, alphabet(steps, making), making);
+        if (out == null) {
+            throw new IllegalStateException("a machine made deterministic and complete leads every"
+                    + " symbol one way");
+        }
+        return out;
     }
 
     /**
@@ -764,7 +783,7 @@ public final class Automaton {
     public @Nullable Automaton canonical(Meter meter) {
         try {
             Meter.Making making = meter.making();
-            Subsets subsets = new Subsets(making, alphabet(making));
+            Subsets subsets = new Subsets(making, alphabet(steps, making));
             List<int[]> table = new ArrayList<>();
             BitSet accepting = new BitSet();
             for (int at = 0; at < subsets.count(); at++) {
@@ -959,7 +978,6 @@ public final class Automaton {
         }
         List<List<Step>> steps = new ArrayList<>();
         List<int[]> free = new ArrayList<>();
-        List<int[]> next = new ArrayList<>();
         Map<List<Integer>, CodePoints> labels = new HashMap<>();
         BitSet stops = new BitSet();
         for (int at = 0; at < order.size(); at++) {
@@ -971,11 +989,9 @@ public final class Automaton {
                 stops.set(at);
             }
             // Gathered by where they lead, so that what a step is over is as wide as it can be.
-            int[] to = new int[row.length];
             java.util.TreeMap<Integer, List<Integer>> leading = new java.util.TreeMap<>();
             for (int over = 0; over < row.length; over++) {
-                to[over] = renamed[block[row[over]]];
-                leading.computeIfAbsent(to[over], _ -> new ArrayList<>()).add(over);
+                leading.computeIfAbsent(renamed[block[row[over]]], _ -> new ArrayList<>()).add(over);
             }
             List<Step> out = new ArrayList<>();
             for (Map.Entry<Integer, List<Integer>> each : leading.entrySet()) {
@@ -1001,9 +1017,10 @@ public final class Automaton {
             }
             steps.add(out);
             free.add(new int[0]);
-            next.add(to);
         }
-        return new Automaton(steps, free, stops, new Rows(classes, next.toArray(new int[0][])));
+        // Where each class leads, over the classes of these labels and not of the subsets': the
+        // states no string tells apart were put together, and so may the classes no step does.
+        return new Automaton(steps, free, stops, rowsOf(steps, free, making));
     }
 
     /**
@@ -1466,7 +1483,7 @@ public final class Automaton {
      * <p>A label is read once however many steps are over it, since a set is held once however many
      * steps are over it ({@link Automaton}); and the runs of the labels read are charged for.
      */
-    private Alphabet alphabet(Meter.Making making) {
+    private static Alphabet alphabet(List<List<Step>> steps, Meter.Making making) {
         List<CodePoints> labels = new ArrayList<>();
         List<int[]> sets = new ArrayList<>();
         Set<CodePoints> read = Collections.newSetFromMap(new IdentityHashMap<>());

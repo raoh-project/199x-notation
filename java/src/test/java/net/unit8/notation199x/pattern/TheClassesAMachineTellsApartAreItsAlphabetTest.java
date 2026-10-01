@@ -149,6 +149,26 @@ class TheClassesAMachineTellsApartAreItsAlphabetTest {
         assertTrue(not.walks(""));
     }
 
+    /**
+     * A deterministic machine is walked over the classes its own labels tell apart, and not those of
+     * whatever it was made from: one language written two ways comes to one machine, and to one
+     * walk over it. Characters written as a choice of each are classes of their own to the pattern
+     * and one class to the machine.
+     */
+    @Test
+    void aMachineIsWalkedOverItsOwnClasses() {
+        Automaton chosen = Objects.requireNonNull(Held.canonical(
+                ((PatternRead.Read) PatternParser.read("(あ|い|う|え|お)*")).meaning(), Held.roomy()));
+        Automaton classed = Objects.requireNonNull(Held.canonical(
+                ((PatternRead.Read) PatternParser.read("[あいうえお]*")).meaning(), Held.roomy()));
+        assertTrue(chosen.sameAs(classed));
+        assertEquals(2, chosen.classesWalked());
+        assertEquals(2, classed.classesWalked());
+        Automaton not = Objects.requireNonNull(chosen.not(Held.roomy()));
+        assertEquals(2, not.classesWalked());
+        assertTrue(not.walks("か") && !not.walks("あい"));
+    }
+
     /** Steps over equal sets are over one set, however the machine was written out. */
     @Test
     void equalSetsInAMachineAreOneSet() {
