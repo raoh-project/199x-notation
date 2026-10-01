@@ -3,29 +3,26 @@ package net.unit8.notation199x.pattern;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
- * The symbols a machine's steps tell apart, put into classes: two symbols are in one class where
- * every set a step is over holds both or neither. A walk asks which class a character is in and
- * then where that class leads, so a state's steps are one row as wide as the classes, and not a
- * search of its sets.
+ * The classes a machine's steps tell apart ({@link SymbolPartition}), as tables a character of a
+ * string is looked up in. A walk asks which class a character is in and then where that class
+ * leads, so a state's steps are one row as wide as the classes, and not a search of its sets.
  *
  * <p>A character of the Basic Multilingual Plane is two lookups, one for the block of 256 it is in
  * and one inside that block, and blocks that hold the same classes are held once. A character past
  * it is a search of where the classes change there, which is short for every set the database
  * writes.
  *
- * <p>No set a step is over holds a surrogate, so the surrogates are in a class with the symbols no
- * set holds, and from every state it leads nowhere: half a surrogate pair needs no rule of its own
- * past being looked up.
+ * <p>A surrogate is in no class. Half a surrogate pair is found as it is looked up ({@link #at}),
+ * and needs no rule of its own past that.
  *
- * <p>Working the classes out looks at each piece of the symbols each set covers, which for sets
- * nested in one another is as many as the sets times the pieces. So it is counted on a
- * {@link Meter}, as making a machine deterministic is, and given up where that runs out: the classes
- * are a way to walk faster and decide no answer, and a machine without them is walked by its sets.
+ * <p>Making the tables is counted on a {@link Meter}, as working the classes out is, and given up
+ * where that runs out: the classes are a way to walk faster and decide no answer, and a machine
+ * without them is walked by its sets. Each class is held as a {@code char}, which is a limit of
+ * these tables ({@link #MOST}) and not of the classes.
  */
 final class SymbolClasses {
 
@@ -74,83 +71,30 @@ final class SymbolClasses {
     }
 
     /**
-     * The classes {@code sets} cut the symbols into, or null where they are more than
-     * {@link #MOST} or working them out is more than {@code making} allows.
+     * The tables {@code partition} is looked up in, or null where its classes are more than
+     * {@link #MOST} or making the tables is more than {@code making} allows.
      *
-     * @param sets   each set a step is over, as ascending {@code from, to} pairs of scalar values
-     * @param making what working them out may look at, counted before it is looked at
+     * @param partition the classes a machine's sets cut the symbols into
+     * @param making    what making the tables may look at, counted before it is looked at
      */
-    static @Nullable SymbolClasses of(Collection<int[]> sets, Meter.Making making) {
-        // The symbols are first cut wherever a set begins or ends, and the pieces are then put
-        // together where no set tells them apart.
-        long bounds = 2;
-        for (int[] ranges : sets) {
-            bounds += ranges.length;
-        }
-        if (!making.work(bounds)) {
-            return null;
-        }
-        int[] cuts = cuts(sets);
-        int pieces = cuts.length - 1;
-        int[] classOf = new int[pieces];
-        int classes = 1;
-        int[] splitInto = new int[pieces + 1];
-        int[] splitBy = new int[pieces + 1];
-        Arrays.fill(splitBy, -1);
-        int set = 0;
-        for (int[] ranges : sets) {
-            // Each set moves the pieces it holds out of the class they were in, into a class made
-            // for what it took from that one.
-            for (int at = 0; at < ranges.length; at += 2) {
-                int piece = Arrays.binarySearch(cuts, ranges[at]);
-                for (; cuts[piece] <= ranges[at + 1]; piece++) {
-                    if (!making.work(1)) {
-                        return null;
-                    }
-                    int was = classOf[piece];
-                    if (splitBy[was] != set) {
-                        splitBy[was] = set;
-                        if (classes == splitInto.length) {
-                            splitInto = Arrays.copyOf(splitInto, classes * 2);
-                            int grown = splitBy.length;
-                            splitBy = Arrays.copyOf(splitBy, classes * 2);
-                            Arrays.fill(splitBy, grown, splitBy.length, -1);
-                        }
-                        splitInto[was] = classes++;
-                    }
-                    classOf[piece] = splitInto[was];
-                }
-            }
-            set++;
-        }
-        // What is left is looked at a few times over each piece and each class, and once over the
-        // plane, whatever the sets are.
-        if (!making.work(6L * pieces + 4L * classes + BMP)) {
-            return null;
-        }
-        // A class every piece was moved out of holds nothing, and the rest are numbered again in
-        // the order their first symbol comes in.
-        int[] renumbered = new int[classes];
-        Arrays.fill(renumbered, -1);
-        int count = 0;
-        for (int piece = 0; piece < pieces; piece++) {
-            if (renumbered[classOf[piece]] < 0) {
-                renumbered[classOf[piece]] = count++;
-            }
-            classOf[piece] = renumbered[classOf[piece]];
-        }
+    static @Nullable SymbolClasses of(SymbolPartition partition, Meter.Making making) {
+        int count = partition.count();
         if (count > MOST) {
             return null;
         }
+        int pieces = partition.pieces();
+        // Looked at a few times over each piece and each class, and once over the plane, whatever
+        // the sets are.
+        if (!making.work(4L * pieces + 2L * count + BMP)) {
+            return null;
+        }
         int[] some = new int[count];
-        Arrays.fill(some, -1);
-        for (int piece = 0; piece < pieces; piece++) {
-            if (some[classOf[piece]] < 0) {
-                some[classOf[piece]] = cuts[piece];
-            }
+        for (int each = 0; each < count; each++) {
+            some[each] = partition.least(each);
         }
         // A block that one class fills is held once for that class, and any other block once for
-        // what it holds.
+        // what it holds. What the surrogates are put in is never read: a surrogate is looked up as
+        // half of a pair, and not in these.
         char[] index = new char[BMP / BLOCK];
         Map<Integer, Character> filled = new HashMap<>();
         Map<String, Character> held = new HashMap<>();
@@ -159,25 +103,26 @@ final class SymbolClasses {
         int piece = 0;
         for (int each = 0; each < index.length; each++) {
             int begins = each * BLOCK;
-            while (cuts[piece + 1] <= begins) {
+            while (partition.from(piece + 1) <= begins) {
                 piece++;
             }
             Character at;
-            if (cuts[piece + 1] >= begins + BLOCK) {
-                at = filled.get(classOf[piece]);
+            if (partition.from(piece + 1) >= begins + BLOCK) {
+                char of = held(partition.classOf(piece));
+                at = filled.get((int) of);
                 if (at == null) {
-                    Arrays.fill(block, (char) classOf[piece]);
+                    Arrays.fill(block, of);
                     at = (char) blocks.length();
-                    filled.put(classOf[piece], at);
+                    filled.put((int) of, at);
                     blocks.append(block);
                 }
             } else {
                 int inside = piece;
                 for (int unit = 0; unit < BLOCK; unit++) {
-                    while (cuts[inside + 1] <= begins + unit) {
+                    while (partition.from(inside + 1) <= begins + unit) {
                         inside++;
                     }
-                    block[unit] = (char) classOf[inside];
+                    block[unit] = held(partition.classOf(inside));
                 }
                 String written = new String(block);
                 at = held.get(written);
@@ -197,14 +142,14 @@ final class SymbolClasses {
         char[] beyond = new char[pieces];
         int runs = 0;
         for (piece = 0; piece < pieces; piece++) {
-            if (cuts[piece + 1] <= BMP) {
+            if (partition.from(piece + 1) <= BMP) {
                 continue;
             }
-            if (runs > 0 && beyond[runs - 1] == classOf[piece]) {
+            if (runs > 0 && beyond[runs - 1] == partition.classOf(piece)) {
                 continue;
             }
-            beyondFrom[runs] = Math.max(cuts[piece], BMP);
-            beyond[runs++] = (char) classOf[piece];
+            beyondFrom[runs] = Math.max(partition.from(piece), BMP);
+            beyond[runs++] = (char) partition.classOf(piece);
         }
         long[] low = new long[count];
         long[] high = new long[count];
@@ -216,18 +161,18 @@ final class SymbolClasses {
             }
         }
         // A class's runs past ASCII, pieces of it beside each other taken as one, of which the two
-        // longest are kept.
+        // longest are kept. The surrogates are in no class, so no run goes across them.
         char[] runFrom = new char[count * 2];
         char[] runTo = new char[count * 2];
         Arrays.fill(runFrom, (char) 1);
         for (piece = 0; piece < pieces; ) {
-            int begins = Math.max(cuts[piece], ASCII);
-            int of = classOf[piece];
-            while (piece < pieces && classOf[piece] == of) {
+            int begins = Math.max(partition.from(piece), ASCII);
+            int of = partition.classOf(piece);
+            while (piece < pieces && partition.classOf(piece) == of) {
                 piece++;
             }
-            int ends = Math.min(cuts[piece], BMP) - 1;
-            if (ends < begins) {
+            int ends = Math.min(partition.from(piece), BMP) - 1;
+            if (of < 0 || ends < begins) {
                 continue;
             }
             int longest = of * 2;
@@ -246,31 +191,9 @@ final class SymbolClasses {
                 runFrom, runTo);
     }
 
-    /** Every symbol where a set begins or where one ends before the last, ascending, between
-     *  nought and one past the last symbol. */
-    private static int[] cuts(Collection<int[]> sets) {
-        int size = 2;
-        for (int[] ranges : sets) {
-            size += ranges.length;
-        }
-        int[] cuts = new int[size];
-        int count = 0;
-        cuts[count++] = 0;
-        cuts[count++] = Character.MAX_CODE_POINT + 1;
-        for (int[] ranges : sets) {
-            for (int at = 0; at < ranges.length; at += 2) {
-                cuts[count++] = ranges[at];
-                cuts[count++] = ranges[at + 1] + 1;
-            }
-        }
-        Arrays.sort(cuts, 0, count);
-        int distinct = 0;
-        for (int at = 0; at < count; at++) {
-            if (distinct == 0 || cuts[at] != cuts[distinct - 1]) {
-                cuts[distinct++] = cuts[at];
-            }
-        }
-        return Arrays.copyOf(cuts, distinct);
+    /** What a piece's class is held as in the tables: the surrogates, in none, as the first. */
+    private static char held(int of) {
+        return (char) Math.max(of, 0);
     }
 
     /** How many classes there are. */

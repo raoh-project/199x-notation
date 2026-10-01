@@ -230,7 +230,7 @@ public final class StringPattern implements Predicate<String> {
         this.free = free;
         this.live = live(accepting, target, free);
         this.classes = budget.classWork() > 0
-                ? SymbolClasses.of(distinct(over), new Meter(1, 1, budget.classWork()).making())
+                ? classes(distinct(over), new Meter(1, 1, budget.classWork()).making())
                 : null;
         this.table = deterministic && classes != null ? table(runs, live, classes, budget) : null;
         this.ascii = deterministic && table == null ? ascii(runs, live, budget) : null;
@@ -247,6 +247,14 @@ public final class StringPattern implements Predicate<String> {
             return ascii != null ? Way.ASCII_AND_RUNS : Way.RUNS;
         }
         return subsets != null ? Way.SETS_KEPT : Way.EVERY_STATE;
+    }
+
+    /** The tables the classes {@code sets} cut the symbols into are looked up in, or null where
+     *  working them out or making the tables is past {@code making}. Worked out from this machine's
+     *  own sets, so a machine has the same classes however it was come to. */
+    private static @Nullable SymbolClasses classes(List<int[]> sets, Meter.Making making) {
+        SymbolPartition partition = SymbolPartition.of(sets, making);
+        return partition == null ? null : SymbolClasses.of(partition, making);
     }
 
     /** Each set the steps are over, once however many steps are over it. */

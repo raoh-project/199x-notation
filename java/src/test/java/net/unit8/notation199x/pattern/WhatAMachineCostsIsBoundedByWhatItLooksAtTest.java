@@ -44,13 +44,34 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
     }
 
     /**
-     * A class written wide and repeated is within every state limit and a great deal of work to make
-     * deterministic: each state's row is as wide as the class cuts the symbols. It is refused on
-     * that work, as a machine larger than one may be, and refused early.
+     * A class written wide and repeated is two classes however many runs it cuts the symbols into:
+     * the characters in it and the rest. Its rows are as wide as that, so making it deterministic
+     * costs its states, and the runs are read once.
      */
     @Test
-    void aWideClassRepeatedIsRefusedOnTheWorkItsRowsTake() {
+    void aWideClassRepeatedIsMadeDeterministicOverTheTwoClassesItTellsApart() {
         PatternMeaning meaning = meaning(wideClass(3000) + "{2000}");
+        assertTimeoutPreemptively(Duration.ofSeconds(30), () -> {
+            Meter meter = Held.roomy();
+            assertTrue(Held.canonical(meaning, meter) != null);
+            assertNull(meter.stoppedBy());
+            assertTrue(PatternMachine.of(meaning).deterministic() != null,
+                    "within what a faster run is worth");
+        });
+    }
+
+    /**
+     * A chain of characters each of its own is as many classes as it is long, and its rows are as
+     * wide as that: the work of making it deterministic is the square of its length. It is refused
+     * on that work, as a machine larger than one may be, and refused early.
+     */
+    @Test
+    void aChainOfCharactersEachOfItsOwnIsRefusedOnTheWorkItsRowsTake() {
+        StringBuilder chain = new StringBuilder();
+        for (int i = 0; i < 8000; i++) {
+            chain.appendCodePoint(0x20000 + i);
+        }
+        PatternMeaning meaning = meaning(chain.toString());
         Meter meter = Held.roomy();
         assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
                 assertNull(Held.canonical(meaning, meter)));

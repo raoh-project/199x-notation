@@ -632,6 +632,7 @@ public final class Automaton {
         }
         try {
             Subsets subsets = new Subsets(meter.making());
+            List<CodePoints> classes = subsets.symbols().classes();
             Meter.Making making = meter.making();
             List<List<Step>> steps = new ArrayList<>();
             List<int[]> free = new ArrayList<>();
@@ -645,8 +646,9 @@ public final class Automaton {
                 if (!subsets.acceptingAt(at)) {
                     accepting.set(at);
                 }
-                for (Subsets.Move each : subsets.movesFrom(at)) {
-                    steps.get(at).add(new Step(each.over(), each.to()));
+                int[] row = subsets.rowFrom(at);
+                for (int over = 0; over < row.length; over++) {
+                    steps.get(at).add(new Step(classes.get(over), row[over]));
                 }
             }
             // Deterministic and complete, as what the subsets are always is.
@@ -734,22 +736,16 @@ public final class Automaton {
     public @Nullable Automaton canonical(Meter meter) {
         try {
             Subsets subsets = new Subsets(meter.making());
-            List<CodePoints> alphabet = subsets.alphabet();
             List<int[]> table = new ArrayList<>();
             BitSet accepting = new BitSet();
             for (int at = 0; at < subsets.count(); at++) {
                 if (subsets.acceptingAt(at)) {
                     accepting.set(at);
                 }
-                int[] row = new int[alphabet.size()];
-                List<Subsets.Move> out = subsets.movesFrom(at);
-                for (int over = 0; over < row.length; over++) {
-                    row[over] = out.get(over).to();
-                }
-                table.add(row);
+                table.add(subsets.rowFrom(at));
             }
-            return numbered(table, smallest(table, accepting), accepting, alphabet,
-                    meter.making());
+            return numbered(table, smallest(table, accepting), accepting,
+                    subsets.symbols().classes(), meter.making());
         } catch (TooMany _) {
             return null;
         }
@@ -905,7 +901,7 @@ public final class Automaton {
      * the order the subsets happened to be built in would make one language two machines.
      */
     private static Automaton numbered(List<int[]> table, int[] block, BitSet accepting,
-                                      List<CodePoints> alphabet, Meter.Making making) {
+                                      List<CodePoints> classes, Meter.Making making) {
         int[] renamed = new int[block.length];
         java.util.Arrays.fill(renamed, -1);
         int[] first = new int[block.length];
@@ -940,7 +936,7 @@ public final class Automaton {
             java.util.TreeMap<Integer, List<CodePoints.Range>> leading = new java.util.TreeMap<>();
             for (int over = 0; over < row.length; over++) {
                 leading.computeIfAbsent(renamed[block[row[over]]], to -> new ArrayList<>())
-                        .addAll(alphabet.get(over).ranges());
+                        .addAll(classes.get(over).ranges());
             }
             List<Step> out = new ArrayList<>();
             leading.forEach((to, runs) -> out.add(new Step(new CodePoints(runs), to)));
@@ -1238,24 +1234,21 @@ public final class Automaton {
      * that ends outside the language, and a machine that simply had no step there would leave every
      * reader to remember what a missing step means.
      *
-     * <p>What a step is over is worked out once. The labels of a machine cut the symbols into runs
-     * none of which any label splits, so one symbol out of each run answers for the whole of it —
-     * and a deterministic machine over a million symbols has as many steps as the pattern has
-     * distinct classes.
+     * <p>Made over the classes the labels cut the symbols into ({@link SymbolPartition}), so a row
+     * is as wide as what the machine tells apart: a deterministic machine over a million symbols, or
+     * over a class of thousands of scattered characters, has as many steps out of a state as the
+     * pattern has distinct classes. What it costs to read the labels' ranges is paid once, in working
+     * the classes out, and not again for every state.
      */
     private final class Subsets {
 
-        private final List<CodePoints> alphabet = new ArrayList<>();
-
-        /** Where each run of the alphabet begins, in order: every run is one range, since the
-         *  alphabet is cut at both ends of the hole the surrogates leave. */
-        private int[] starts;
+        private final SymbolPartition symbols;
+        /** For each label, the classes it holds, found once however many steps are over it. */
+        private final Map<CodePoints, int[]> held = new IdentityHashMap<>();
         private final List<BitSet> subsets = new ArrayList<>();
         private final java.util.Map<BitSet, Integer> known = new java.util.HashMap<>();
-        private final List<List<Move>> moves = new ArrayList<>();
-
-        /** One step of the deterministic machine. */
-        record Move(CodePoints over, int to) {}
+        /** For each subset, the subset each class leads to, at that class. */
+        private final List<int @Nullable []> rows = new ArrayList<>();
 
         /** What making these deterministic states is charged to. Its own, because the subsets are
          *  a machine — one this throws away, and one whose states were made all the same. */
@@ -1278,7 +1271,7 @@ public final class Automaton {
                 found = found || each.length > 0;
             }
             this.anyFree = found;
-            cutTheAlphabet();
+            this.symbols = partition();
             at(reached(only(START)));
         }
 
@@ -1304,87 +1297,75 @@ public final class Automaton {
             return subsets.size();
         }
 
-        /** The runs of symbols this machine tells apart, in the order a step out of a state
-         *  answers for them. */
-        List<CodePoints> alphabet() {
-            return alphabet;
+        /** The classes of symbols this machine tells apart, which a row is as wide as. */
+        SymbolPartition symbols() {
+            return symbols;
         }
 
         boolean acceptingAt(int state) {
             return subsets.get(state).intersects(accepting);
         }
 
-        /** The steps out of {@code state}, worked out the first time they are asked for. */
-        List<Move> movesFrom(int state) {
-            List<Move> said = moves.get(state);
+        /** Where each class leads out of {@code state}, at that class, worked out the first time it
+         *  is asked for. Not to be written to. */
+        int[] rowFrom(int state) {
+            int[] said = rows.get(state);
             if (said != null) {
                 return said;
             }
-            List<Move> out = new ArrayList<>();
             BitSet here = subsets.get(state);
-            // A row: every run of the alphabet, and for each step out of the subset the runs its
-            // label covers. Asked for before any of it is looked at, as a state is.
-            long look = alphabet.size();
+            // A row: every class, and for each step out of the subset the classes its label holds.
+            // Asked for before any of it is looked at, as a state is.
+            long look = symbols.count();
             for (int one = here.nextSetBit(0); one >= 0; one = here.nextSetBit(one + 1)) {
                 for (Step each : steps.get(one)) {
-                    for (CodePoints.Range range : each.over().ranges()) {
-                        look += 1 + firstRunFrom(range.to() + 1) - firstRunFrom(range.from());
-                    }
+                    look += 1 + classesOf(each.over()).length;
                 }
             }
             if (!making.work(look)) {
                 throw new TooMany();
             }
-            // Where each run leads, found from the labels rather than by asking every label about
-            // every run: a run no label covers leads where nothing does, which is one subset for
+            // Where each class leads, found from the labels rather than by asking every label about
+            // every class: a class no label holds leads where nothing does, which is one subset for
             // the whole row.
-            BitSet[] next = new BitSet[alphabet.size()];
+            BitSet[] next = new BitSet[symbols.count()];
             for (int one = here.nextSetBit(0); one >= 0; one = here.nextSetBit(one + 1)) {
                 for (Step each : steps.get(one)) {
-                    for (CodePoints.Range range : each.over().ranges()) {
-                        int past = firstRunFrom(range.to() + 1);
-                        for (int run = firstRunFrom(range.from()); run < past; run++) {
-                            if (next[run] == null) {
-                                next[run] = new BitSet();
-                            }
-                            next[run].set(each.to());
+                    for (int over : classesOf(each.over())) {
+                        if (next[over] == null) {
+                            next[over] = new BitSet();
                         }
+                        next[over].set(each.to());
                     }
                 }
             }
+            int[] row = new int[next.length];
             int nowhere = -1;
-            for (int run = 0; run < next.length; run++) {
-                if (next[run] == null) {
+            for (int over = 0; over < next.length; over++) {
+                if (next[over] == null) {
                     if (nowhere < 0) {
                         nowhere = at(reached(new BitSet()));
                     }
-                    out.add(new Move(alphabet.get(run), nowhere));
+                    row[over] = nowhere;
                 } else {
                     // Finding the subset already met is a look at a set as wide as the machine.
-                    if (!making.work(1L + (next[run].length() >> 6))) {
+                    if (!making.work(1L + (next[over].length() >> 6))) {
                         throw new TooMany();
                     }
-                    out.add(new Move(alphabet.get(run), at(reached(next[run]))));
+                    row[over] = at(reached(next[over]));
                 }
             }
-            moves.set(state, out);
-            return out;
+            rows.set(state, row);
+            return row;
         }
 
-        /** The first run of the alphabet beginning at or after {@code symbol}, or how many runs
-         *  there are where none does. */
-        private int firstRunFrom(int symbol) {
-            int low = 0;
-            int high = starts.length;
-            while (low < high) {
-                int mid = (low + high) >>> 1;
-                if (starts[mid] < symbol) {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
+        /** The classes {@code label} holds, every label of the machine having been read. */
+        private int[] classesOf(CodePoints label) {
+            int[] out = held.get(label);
+            if (out == null) {
+                throw new IllegalStateException("every label of the machine is read before a row is");
             }
-            return low;
+            return out;
         }
 
         private int at(BitSet subset) {
@@ -1400,57 +1381,48 @@ public final class Automaton {
             }
             int made = subsets.size();
             subsets.add(subset);
-            moves.add(null);
+            rows.add(null);
             known.put(subset, made);
             return made;
         }
 
         /**
-         * The runs of symbols no label of this machine tells apart.
-         *
-         * <p>Cut at every place a label begins or ends, and at each end of the universe's runs.
-         * Inside a run every symbol is over exactly the same steps, so one of them answers for all
-         * of them — which is what makes a deterministic machine over the whole of Unicode a small
-         * thing. What lies between the universe's runs is the surrogates, which are no symbol, and
-         * no run of the alphabet is cut there.
+         * The classes the labels of this machine cut the symbols into, and which of them each
+         * label holds.
          *
          * <p>A label is read once however many steps are over it. A repetition is built as copies
          * that share the set they step over, so reading it per step would be reading one class as
          * many times as it was repeated; and the runs of the labels read are charged for.
          */
-        private void cutTheAlphabet() {
-            java.util.TreeSet<Integer> cuts = new java.util.TreeSet<>();
-            List<CodePoints.Range> labels = new ArrayList<>(CodePoints.EVERYTHING.ranges());
+        private SymbolPartition partition() {
+            List<CodePoints> labels = new ArrayList<>();
+            List<int[]> sets = new ArrayList<>();
             Set<CodePoints> read = Collections.newSetFromMap(new IdentityHashMap<>());
             for (List<Step> out : steps) {
                 for (Step each : out) {
                     if (read.add(each.over())) {
-                        if (!making.work(1L + each.over().ranges().size())) {
+                        List<CodePoints.Range> ranges = each.over().ranges();
+                        if (!making.work(1L + ranges.size())) {
                             throw new TooMany();
                         }
-                        labels.addAll(each.over().ranges());
+                        int[] pairs = new int[ranges.size() * 2];
+                        for (int at = 0; at < ranges.size(); at++) {
+                            pairs[at * 2] = ranges.get(at).from();
+                            pairs[at * 2 + 1] = ranges.get(at).to();
+                        }
+                        labels.add(each.over());
+                        sets.add(pairs);
                     }
                 }
             }
-            for (CodePoints.Range run : labels) {
-                cuts.add(run.from());
-                if (run.to() < CodePoints.LAST) {
-                    cuts.add(run.to() + 1);
-                }
+            SymbolPartition out = SymbolPartition.of(sets, making);
+            if (out == null) {
+                throw new TooMany();
             }
-            List<Integer> starts = new ArrayList<>(cuts);
-            for (int i = 0; i < starts.size(); i++) {
-                int from = starts.get(i);
-                if (CodePoints.isSurrogate(from)) {
-                    continue;
-                }
-                int to = i + 1 < starts.size() ? starts.get(i + 1) - 1 : CodePoints.LAST;
-                alphabet.add(CodePoints.between(from, to));
+            for (int at = 0; at < labels.size(); at++) {
+                held.put(labels.get(at), out.classesOf(at));
             }
-            this.starts = new int[alphabet.size()];
-            for (int run = 0; run < alphabet.size(); run++) {
-                this.starts[run] = alphabet.get(run).least();
-            }
+            return out;
         }
     }
 

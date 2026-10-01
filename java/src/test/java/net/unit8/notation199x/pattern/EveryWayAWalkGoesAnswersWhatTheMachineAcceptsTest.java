@@ -80,7 +80,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             int ascii = random.nextInt(120);
             sets.add(new int[] {ascii, ascii + random.nextInt(8)});
         }
-        SymbolClasses classes = SymbolClasses.of(sets, new Meter(1, 1, 5_000_000).making());
+        SymbolClasses classes = classes(sets, new Meter(1, 1, 5_000_000).making());
         for (int trial = 0; trial < 500; trial++) {
             List<Integer> chosen = new ArrayList<>();
             for (int each = 0; each < 1 + random.nextInt(8); each++) {
@@ -202,8 +202,8 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             regex.append(String.format("[\\x{%X}-\\x{%X}]", from, to));
             text.append((char) (0x4E00 + sets));
         }
-        assertEquals(null, SymbolClasses.of(nested, new Meter(1, 1, 5_000_000).making()));
-        assertTrue(SymbolClasses.of(nested.subList(0, 100), new Meter(1, 1, 5_000_000).making()) != null);
+        assertEquals(null, SymbolPartition.of(nested, new Meter(1, 1, 5_000_000).making()));
+        assertTrue(classes(nested.subList(0, 100), new Meter(1, 1, 5_000_000).making()) != null);
 
         Automaton shaped = Automaton.of(((PatternRead.Read) PatternParser.read(regex.toString())).meaning(),
                 Held.roomy());
@@ -273,13 +273,21 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             }
             sets.add(pairs);
         }
-        SymbolClasses classes = SymbolClasses.of(sets, new Meter(1, 1, 5_000_000).making());
+        SymbolClasses classes = classes(sets, new Meter(1, 1, 5_000_000).making());
         for (int symbol = 0; symbol <= Character.MAX_CODE_POINT; symbol++) {
+            if (CodePoints.isSurrogate(symbol)) {
+                continue;
+            }
             int some = classes.some(classes.of(symbol));
             for (int[] set : sets) {
                 assertEquals(holds(set, some), holds(set, symbol), "U+" + Integer.toHexString(symbol));
             }
         }
+    }
+
+    private static SymbolClasses classes(List<int[]> sets, Meter.Making making) {
+        SymbolPartition partition = SymbolPartition.of(sets, making);
+        return partition == null ? null : SymbolClasses.of(partition, making);
     }
 
     private static boolean holds(int[] pairs, int symbol) {
