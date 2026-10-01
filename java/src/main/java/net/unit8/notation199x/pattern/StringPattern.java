@@ -115,6 +115,20 @@ public final class StringPattern implements Predicate<String> {
      */
     record Budget(long classWork, int tableEntries, int asciiEntries, int subsets, long remembered) {
 
+        /** The most sets a budget may keep: the places they are looked up in are four times as
+         *  many, and are made with the pattern. */
+        static final int MOST_SUBSETS = 1 << 20;
+
+        /** Holds every part to being none or some, and the sets kept to what can be looked up. */
+        Budget {
+            if (classWork < 0 || tableEntries < 0 || asciiEntries < 0 || subsets < 0 || remembered < 0) {
+                throw new IllegalArgumentException("a budget allows nothing or something of each part");
+            }
+            if (subsets > MOST_SUBSETS) {
+                throw new IllegalArgumentException("a budget keeps at most " + MOST_SUBSETS + " sets");
+            }
+        }
+
         /**
          * What a pattern is given. The tables are held for as long as the pattern is: the machines
          * of the formats people write take a few hundred entries, and the sets kept come to at most
@@ -901,8 +915,12 @@ public final class StringPattern implements Predicate<String> {
             this.next = new Subset[classes];
         }
 
-        /** Adds class {@code each} of {@code classes} to what a walk stays here on, whichever
-         *  other walks add theirs at once. */
+        /**
+         * Adds class {@code each} of {@code classes} to what a walk stays here on, whichever other
+         * walks add theirs, or the same, at once ({@link SymbolClasses.Stay#with}). A try is gone
+         * round again only where another walk added one first, which each walk does at most once
+         * for each class.
+         */
         void staysOn(SymbolClasses classes, int each) {
             SymbolClasses.Stay was;
             do {

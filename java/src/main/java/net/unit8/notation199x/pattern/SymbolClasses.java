@@ -330,25 +330,46 @@ final class SymbolClasses {
         /** Characters a walk stays on none of. */
         static final Stay NONE = new Stay(0, 0, (char) 1, (char) 0, (char) 1, (char) 0);
 
-        /** These and the ASCII characters of class {@code each} of {@code classes}, with the two
-         *  longest runs of the four these and that class have. */
+        /**
+         * These and the characters of class {@code each} of {@code classes}: the ASCII ones of both,
+         * and of the runs of both, the two that come first, a longer run before a shorter and of
+         * two as long the one that begins first.
+         *
+         * <p>So what a walk stays on is the same for the same classes, in whatever order they are
+         * added and however often one is: taking the first two of all the runs of some classes is
+         * taking the first two of the first two of each. Walks on many threads add classes to one
+         * set at once ({@link StringPattern}), each to what the others added, and come to the one
+         * answer whichever adds last.
+         */
         Stay with(SymbolClasses classes, int each) {
             char[] froms = {from, otherFrom, classes.runFrom[each * 2], classes.runFrom[each * 2 + 1]};
             char[] tos = {to, otherTo, classes.runTo[each * 2], classes.runTo[each * 2 + 1]};
-            int first = 0;
-            for (int at = 1; at < 4; at++) {
-                if (tos[at] - froms[at] > tos[first] - froms[first]) {
-                    first = at;
-                }
-            }
-            int second = first == 0 ? 1 : 0;
+            int first = -1;
+            int second = -1;
             for (int at = 0; at < 4; at++) {
-                if (at != first && tos[at] - froms[at] > tos[second] - froms[second]) {
+                if (tos[at] < froms[at]) {
+                    continue;
+                }
+                if (first < 0 || before(froms, tos, at, first)) {
+                    if (first >= 0 && (froms[first] != froms[at] || tos[first] != tos[at])) {
+                        second = first;
+                    }
+                    first = at;
+                } else if ((froms[first] != froms[at] || tos[first] != tos[at])
+                        && (second < 0 || before(froms, tos, at, second))) {
                     second = at;
                 }
             }
-            return new Stay(low | classes.low[each], high | classes.high[each], froms[first],
-                    tos[first], froms[second], tos[second]);
+            return new Stay(low | classes.low[each], high | classes.high[each],
+                    first < 0 ? (char) 1 : froms[first], first < 0 ? (char) 0 : tos[first],
+                    second < 0 ? (char) 1 : froms[second], second < 0 ? (char) 0 : tos[second]);
+        }
+
+        /** Whether run {@code one} comes before run {@code other}: it is longer, or as long and
+         *  begins first. */
+        private static boolean before(char[] froms, char[] tos, int one, int other) {
+            int longer = (tos[one] - froms[one]) - (tos[other] - froms[other]);
+            return longer > 0 || (longer == 0 && froms[one] < froms[other]);
         }
 
         /** How far from {@code at} the characters of {@code value} keep a walk where it is. */

@@ -65,6 +65,77 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         }
     }
 
+    /**
+     * What a walk stays where it is on is the same for the same classes, in whatever order they are
+     * added and however often one is: walks on many threads add them to one set at once, each to
+     * what the others added.
+     */
+    @Test
+    void whatAWalkStaysOnIsTheSameForTheSameClassesHoweverAdded() {
+        List<int[]> sets = new ArrayList<>();
+        Random random = new Random(18);
+        for (int each = 0; each < 40; each++) {
+            int from = 0x80 + random.nextInt(0xD000);
+            sets.add(new int[] {from, from + random.nextInt(3000)});
+            int ascii = random.nextInt(120);
+            sets.add(new int[] {ascii, ascii + random.nextInt(8)});
+        }
+        SymbolClasses classes = SymbolClasses.of(sets, new Meter(1, 1, 5_000_000).making());
+        for (int trial = 0; trial < 500; trial++) {
+            List<Integer> chosen = new ArrayList<>();
+            for (int each = 0; each < 1 + random.nextInt(8); each++) {
+                chosen.add(random.nextInt(classes.count()));
+            }
+            SymbolClasses.Stay once = SymbolClasses.Stay.NONE;
+            for (int each : new java.util.TreeSet<>(chosen)) {
+                once = once.with(classes, each);
+            }
+            List<Integer> shuffled = new ArrayList<>(chosen);
+            shuffled.addAll(chosen.subList(0, random.nextInt(chosen.size() + 1)));
+            java.util.Collections.shuffle(shuffled, random);
+            SymbolClasses.Stay again = SymbolClasses.Stay.NONE;
+            for (int each : shuffled) {
+                again = again.with(classes, each);
+            }
+            assertEquals(once, again, chosen + " added as " + shuffled);
+        }
+    }
+
+    /**
+     * A walk over a deterministic machine asks once before each character it reads, whichever way it
+     * goes, and goes over no character without asking: the runs it goes over without looking each up
+     * are for a walk that does not ask.
+     */
+    @Test
+    void aDeterministicWalkAsksOnceACharacterWhicheverWayItGoes() {
+        PatternMachine machine = PatternMachine.of(((PatternRead.Read) PatternParser.read("[a-zぁ-ん😀]*,\\d+"))
+                .meaning());
+        Automaton deterministic = machine.deterministic();
+        String subject = "abcあいう😀😀xyz".repeat(20) + ",123";
+        int characters = subject.codePointCount(0, subject.length());
+        for (StringPattern run : everyWay(deterministic, true)) {
+            long[] asked = {0};
+            assertEquals(new net.unit8.notation199x.Outcome.Answered<>(true),
+                    run.matches(subject, () -> ++asked[0] > 0), run.way().toString());
+            assertEquals(characters, asked[0], run.way().toString());
+        }
+    }
+
+    /** A budget allows nothing or something of each part, and no more sets than it can look up. */
+    @Test
+    void aBudgetIsNoneOrSomeOfEachPart() {
+        StringPattern.Budget given = StringPattern.Budget.DEFAULT;
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> given.keeping(-1));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> given.keeping(StringPattern.Budget.MOST_SUBSETS + 1));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> new StringPattern.Budget(-1, 0, 0, 0, 0));
+        assertEquals(StringPattern.Way.EVERY_STATE, StringPattern.of(Automaton.of(
+                ((PatternRead.Read) PatternParser.read("a*")).meaning(), Held.roomy()), false,
+                new StringPattern.Budget(0, 0, 0, 0, 0)).way());
+    }
+
     /** {@code machine} run each way a walk may go over it, as budgets that run out where each does
      *  choose, each held to be the way it says. */
     private static List<StringPattern> everyWay(Automaton machine, boolean deterministic) {
@@ -143,35 +214,45 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
     }
 
     /**
-     * The sets a pattern keeps are found by whichever thread gets to one first and read by all of
+     * What a pattern keeps for a faster walk, its sets and the characters each set or state stays
+     * on, is found by whichever thread gets to it first and read by all of
      * them, and every thread answers what the machine accepts.
      */
     @Test
     void walksOnManyThreadsAtOnceAnswerAsOneWould() throws Exception {
-        Automaton shaped = PatternMachine.of(((PatternRead.Read) PatternParser.read(".*a.{12}")).meaning())
-                .shaped();
-        for (int round = 0; round < 5; round++) {
-            StringPattern shared = StringPattern.of(shaped, false);
-            ExecutorService threads = Executors.newFixedThreadPool(8);
-            try {
-                List<Future<?>> done = new ArrayList<>();
-                for (int thread = 0; thread < 8; thread++) {
-                    int seed = round * 8 + thread;
-                    done.add(threads.submit(() -> {
-                        Random random = new Random(seed);
-                        for (int each = 0; each < 300; each++) {
-                            String subject = subject(random);
-                            assertEquals(shaped.accepts(subject, Held.roomy()), shared.matches(subject),
-                                    shown(subject));
-                        }
-                    }));
+        for (String pattern : List.of(".*a.{12}", "[^,]*,[a-zぁ-ん]*", "(a|é|あ|😀)*x")) {
+            PatternMachine machine = PatternMachine.of(((PatternRead.Read) PatternParser.read(pattern)).meaning());
+            Automaton shaped = machine.shaped();
+            for (int round = 0; round < 3; round++) {
+                // Made anew each round, so that what each walk keeps is found by the threads at once.
+                List<StringPattern> runs = new ArrayList<>(everyWay(shaped, false));
+                if (machine.deterministic() != null) {
+                    runs.addAll(everyWay(machine.deterministic(), true));
                 }
-                for (Future<?> each : done) {
-                    each.get();
+                ExecutorService threads = Executors.newFixedThreadPool(8);
+                try {
+                    List<Future<?>> done = new ArrayList<>();
+                    for (int thread = 0; thread < 8; thread++) {
+                        int seed = round * 8 + thread;
+                        done.add(threads.submit(() -> {
+                            Random random = new Random(seed);
+                            for (int each = 0; each < 200; each++) {
+                                String subject = subject(random);
+                                Boolean accepted = shaped.accepts(subject, Held.roomy());
+                                for (StringPattern run : runs) {
+                                    assertEquals(accepted, run.matches(subject),
+                                            pattern + " " + run.way() + " " + shown(subject));
+                                }
+                            }
+                        }));
+                    }
+                    for (Future<?> each : done) {
+                        each.get();
+                    }
+                } finally {
+                    threads.shutdown();
+                    assertTrue(threads.awaitTermination(1, TimeUnit.MINUTES));
                 }
-            } finally {
-                threads.shutdown();
-                assertTrue(threads.awaitTermination(1, TimeUnit.MINUTES));
             }
         }
     }
