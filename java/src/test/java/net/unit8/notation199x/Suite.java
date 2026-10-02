@@ -12,7 +12,8 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * The vectors in {@code suite/} every implementation runs, read as {@code suite/README.md} states
+ * The vectors in {@code suite/} every implementation runs, and the fixtures of an image format in
+ * {@code image/} every implementation that reads it runs, read as {@code suite/README.md} states
  * them: a line of fields separated by {@code ;}, a text as its scalar values in hex, and before the
  * first line of vectors the sources every field is held to.
  *
@@ -63,6 +64,40 @@ public final class Suite {
         /** The field at {@code index} as the text it writes. */
         public String text(int index) {
             return Suite.text(take(index), where);
+        }
+
+        /**
+         * The field at {@code index} as the text it writes the way {@link #shown} does, without the
+         * quotes: printable ASCII other than a space as itself, and any other scalar value as
+         * {@code <U+XXXX>}. For a field that is mostly ASCII and has to hold what a line cannot,
+         * as {@code image/p1.txt} writes an image with a space or a line break at either end.
+         */
+        public String textAsShown(int index) {
+            String field = take(index);
+            StringBuilder text = new StringBuilder();
+            int at = 0;
+            while (at < field.length()) {
+                char each = field.charAt(at);
+                if (each == '<') {
+                    int end = field.indexOf('>', at);
+                    String named = end < 0 ? "" : field.substring(at + 1, end);
+                    if (!named.matches("U\\+[0-9A-F]{4,6}")) {
+                        throw wrong(index, "printable ASCII and <U+XXXX>");
+                    }
+                    int scalar = Integer.parseInt(named.substring(2), 16);
+                    if (scalar > 0x10FFFF || scalar >= 0xD800 && scalar <= 0xDFFF) {
+                        throw wrong(index, "printable ASCII and <U+XXXX> of a scalar value");
+                    }
+                    text.appendCodePoint(scalar);
+                    at = end + 1;
+                } else if (each > 0x20 && each < 0x7F) {
+                    text.append(each);
+                    at++;
+                } else {
+                    throw wrong(index, "printable ASCII other than a space, and <U+XXXX>");
+                }
+            }
+            return text.toString();
         }
 
         /** The field at {@code index} as the one scalar value it writes. */
@@ -140,8 +175,21 @@ public final class Suite {
      * @return the file and line of each wrong answer, with what was wrong
      */
     public static List<String> wrong(String name, int fields, Function<Line, @Nullable String> check) {
+        return wrong(Path.of("..", "suite", name), fields, check);
+    }
+
+    /**
+     * {@link #wrong(String, int, Function)} over {@code file}, a path from {@code java/}, for the
+     * fixtures of an image format, which are read as the suite is and are not in it.
+     *
+     * @param file   the file, {@code ../image/p1.txt}
+     * @param fields how many fields a line of it has
+     * @param check  what is wrong with the implementation on a line, or null where nothing is
+     * @return the file and line of each wrong answer, with what was wrong
+     */
+    public static List<String> wrong(Path file, int fields, Function<Line, @Nullable String> check) {
         List<String> wrong = new ArrayList<>();
-        for (Line line : read(name, fields)) {
+        for (Line line : read(file, fields)) {
             String said = check.apply(line);
             line.readWhole();
             if (said != null) {
@@ -151,8 +199,8 @@ public final class Suite {
         return wrong;
     }
 
-    private static List<Line> read(String name, int fields) {
-        Path file = Path.of("..", "suite", name);
+    private static List<Line> read(Path file, int fields) {
+        String name = file.getFileName().toString();
         if (!Files.exists(file)) {
             throw new IllegalStateException(file.toAbsolutePath() + " is missing: the tests run in java/");
         }
