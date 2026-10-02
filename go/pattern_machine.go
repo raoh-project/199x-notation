@@ -1,7 +1,6 @@
 package notation199x
 
 import (
-	"slices"
 	"sync"
 	"unicode/utf8"
 )
@@ -141,14 +140,23 @@ func buildsNoState(m *meaning) bool {
 // of many states that is in few of them costs the few.
 //
 // Each state's place is held in sparse for as long as it is in the set, which is what has asks
-// of. So nothing outside these methods writes to either list.
+// of. So nothing outside these methods writes to either list. As each state is put in, the set's
+// hash and whether it accepts are kept with it, so neither is worked out again by going over the
+// set.
 type stateSet struct {
 	dense  []int32
 	sparse []int32
+	// accept is the state a walk may stop at.
+	accept int32
+	// hash is the sum of scatter over the states in the set, the same in whatever order they were
+	// put in.
+	hash uint32
+	// accepting is whether accept is in the set.
+	accepting bool
 }
 
-func newStateSet(size int) *stateSet {
-	return &stateSet{dense: make([]int32, 0, size), sparse: make([]int32, size)}
+func newStateSet(size int, accept int32) *stateSet {
+	return &stateSet{dense: make([]int32, 0, size), sparse: make([]int32, size), accept: accept}
 }
 
 func (s *stateSet) has(q int32) bool {
@@ -160,20 +168,24 @@ func (s *stateSet) has(q int32) bool {
 func (s *stateSet) add(q int32) {
 	s.sparse[q] = int32(len(s.dense))
 	s.dense = append(s.dense, q)
+	s.hash += scatter(q)
+	s.accepting = s.accepting || q == s.accept
 }
 
-func (s *stateSet) clear() { s.dense = s.dense[:0] }
+func (s *stateSet) clear() {
+	s.dense = s.dense[:0]
+	s.hash = 0
+	s.accepting = false
+}
 
-// states is the states of the set, in the order they were put in it or, after sort, ascending.
-// The slice is the set's own and is read only.
+// states is the states of the set, in the order they were put in it, which says nothing about the
+// set. The slice is the set's own and is read only.
 func (s *stateSet) states() []int32 { return s.dense }
 
-// sort puts the states in ascending order, writing each one's place again.
-func (s *stateSet) sort() {
-	slices.Sort(s.dense)
-	for i, q := range s.dense {
-		s.sparse[q] = int32(i)
-	}
+// scatter is a state's part of the hash of a set it is in.
+func scatter(q int32) uint32 {
+	mixed := uint32(q) * 0x9E3779B9
+	return mixed ^ mixed>>15
 }
 
 // walk is the room one match works in: the sets of states it moves between, the sets it has
@@ -204,7 +216,7 @@ func (m *machine) matches(subject string) bool {
 
 // newWalk is a walk of m that has kept no sets.
 func (m *machine) newWalk() *walk {
-	w := &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states))}
+	w := &walk{now: newStateSet(len(m.states), m.accept), next: newStateSet(len(m.states), m.accept)}
 	w.known.forget()
 	return w
 }
@@ -237,7 +249,7 @@ func (m *machine) matchesIn(w *walk, subject string) bool {
 	if w.in != nil {
 		return w.in.accepts
 	}
-	return w.now.has(m.accept)
+	return w.now.accepting
 }
 
 // begin puts the walk in the state it starts in, with every state the steps for nothing reach
@@ -272,8 +284,8 @@ func (m *machine) take(w *walk, r rune) bool {
 // advance moves the set the walk is in, w.now, over one symbol: from each state, each step over r,
 // and the states the steps for nothing reach from where those lead. It is the one place states
 // are moved, and its work is the steps out of the set and the states it comes to, at most the
-// machine's. Keeping a set it has not kept before is work of the same size besides
-// (knownSets.keep), so a checkpoint added to a match later asks in both.
+// machine's. Keeping a set it has not kept before is work of the same size besides, in the loops
+// knownSets names, so a checkpoint added to a match later asks in those and here.
 func (m *machine) advance(w *walk, r rune) {
 	w.next.clear()
 	for _, q := range w.now.states() {
