@@ -9,8 +9,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * The rules ask nothing of the PHP they run on that answers for a Unicode version or for a parser
  * of its own: no mbstring, no intl, no iconv, no date parsing, and PCRE only to be told whether
- * bytes are UTF-8, which follows no Unicode version. CI runs the tests without mbstring and intl
- * as well; this holds the sources to it where those extensions are loaded.
+ * bytes are UTF-8, which follows no Unicode version. CI runs the tests without intl as well.
+ * PHPUnit needs mbstring, so this is what holds the sources to not asking it.
  */
 final class HostTest extends TestCase
 {
