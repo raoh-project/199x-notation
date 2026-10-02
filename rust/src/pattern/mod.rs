@@ -54,7 +54,8 @@ impl Pattern {
     /// text is at most 250,000.
     ///
     /// What one match keeps is dropped when it ends. A caller that matches the pattern again and
-    /// again keeps it between them with a [`Matcher`].
+    /// again keeps it between them with a [`Matcher`], which borrows the pattern, or an
+    /// [`OwnedMatcher`], which holds it.
     pub fn matches(&self, subject: &str) -> bool {
         self.matcher().matches(subject)
     }
@@ -62,6 +63,16 @@ impl Pattern {
     /// A [`Matcher`] of this pattern, which keeps what its matches work out for the next.
     pub fn matcher(&self) -> Matcher<'_> {
         Matcher {
+            pattern: self,
+            cache: walk::Cache::new(),
+        }
+    }
+
+    /// An [`OwnedMatcher`] of this pattern, which holds the pattern and keeps what its matches
+    /// work out for the next: what a caller keeps where the pattern cannot be borrowed for as long,
+    /// as a value that holds both does.
+    pub fn into_matcher(self) -> OwnedMatcher {
+        OwnedMatcher {
             pattern: self,
             cache: walk::Cache::new(),
         }
@@ -107,6 +118,37 @@ impl Matcher<'_> {
     /// [`Pattern::matches`] answers.
     pub fn matches(&mut self, subject: &str) -> bool {
         walk::matches(&self.pattern.machine, &mut self.cache, subject)
+    }
+}
+
+/// A [`Pattern`] and what its matches have worked out, as a [`Matcher`] keeps them, holding the
+/// pattern rather than borrowing it, so that it can be kept wherever the pattern is: in a value
+/// that is to match again and again, for instance. What is kept changes how fast a match is and
+/// never what it answers.
+///
+/// An `OwnedMatcher` is not shared any more than a [`Matcher`] is: a caller that matches from
+/// several threads keeps one for each, or takes turns at one.
+pub struct OwnedMatcher {
+    pattern: Pattern,
+    cache: walk::Cache,
+}
+
+impl OwnedMatcher {
+    /// Whether the whole of `subject` is one of the strings the pattern accepts, as
+    /// [`Pattern::matches`] answers.
+    pub fn matches(&mut self, subject: &str) -> bool {
+        walk::matches(&self.pattern.machine, &mut self.cache, subject)
+    }
+
+    /// The pattern.
+    pub fn pattern(&self) -> &Pattern {
+        &self.pattern
+    }
+}
+
+impl core::fmt::Debug for OwnedMatcher {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OwnedMatcher").finish_non_exhaustive()
     }
 }
 
