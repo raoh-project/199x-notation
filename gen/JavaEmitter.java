@@ -65,7 +65,8 @@ final class JavaEmitter {
 
         for (String[] each : new String[][] {{"LOWER", "lowercase"}, {"UPPER", "uppercase"}}) {
             UcdModel.CodePointMapping mapping = each[0].equals("LOWER") ? casing.lower() : casing.upper();
-            out.append("    /** Unicode 18.0.0's untailored full ").append(each[1]).append(" mapping (")
+            out.append("    /** Unicode ").append(version).append("'s untailored full ").append(each[1])
+                    .append(" mapping (")
                     .append(mapping.entries().size())
                     .append(" code points with a non-identity mapping; every other code point maps to itself). */\n");
             out.append("    static final Mapping ").append(each[0]).append(" = decodeMapping(\"")
@@ -74,10 +75,10 @@ final class JavaEmitter {
 
         out.append("    /** Code points whose {@link #LOWER} mapping is the untailored default, overridden by this\n");
         out.append("     *  mapping's result when the code point sits at the end of a cased run (Unicode's\n");
-        out.append("     *  {@code Final_Sigma} condition) — Unicode 18.0.0 states exactly one such entry, Greek\n");
-        out.append("     *  capital sigma, mapping to one code point, but nothing here assumes that arity: this\n");
-        out.append("     *  is the same {@link Mapping} shape {@link #LOWER}/{@link #UPPER} use, read the same way,\n");
-        out.append("     *  so a future Unicode version's wider Final_Sigma entry needs only regeneration. */\n");
+        out.append("     *  {@code Final_Sigma} condition), as Unicode ").append(version).append(" states it (")
+                .append(codePoints(casing.finalSigma().entries().size())).append("). A mapping here may be\n");
+        out.append("     *  of any length; it is the same {@link Mapping} shape {@link #LOWER}/{@link #UPPER} use,\n");
+        out.append("     *  read the same way. */\n");
         out.append("    static final Mapping FINAL_SIGMA = decodeMapping(\"").append(mapping(casing.finalSigma()))
                 .append("\");\n\n");
 
@@ -389,6 +390,11 @@ final class JavaEmitter {
             sb.append(UcdModel.hex(r[0])).append('-').append(UcdModel.hex(r[1]));
         }
         return sb.toString();
+    }
+
+    /** {@code count} code points, in words. */
+    private static String codePoints(int count) {
+        return count + (count == 1 ? " code point" : " code points");
     }
 
     private static String hexList(Iterable<Integer> values) {
