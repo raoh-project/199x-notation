@@ -319,6 +319,10 @@ class APatternIsReadAsWhatItAcceptsTest {
         assertEquals("&&", refusal("[a-z&&b]").construct());
         assertEquals("\\uD800", refusal("x\\uD800").construct());
         assertEquals(1, refusal("x\\uD800").from());
+        String grinning = new String(Character.toChars(0x1F600));
+        assertEquals("(?" + grinning, refusal("x(?" + grinning + ")").construct(),
+                "the refusal quotes the whole character after `(?` and not half of it");
+        assertEquals(1, refusal("x(?" + grinning + ")").from());
         assertEquals("", refusal("(ab").construct(), "the text ended where a `)` was wanted");
     }
 
