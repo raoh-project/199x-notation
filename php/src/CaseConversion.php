@@ -78,8 +78,8 @@ final class CaseConversion
     /**
      * The mapped text, and null where it is longer than $longest; a negative $longest is no bound.
      *
-     * The one loop every form of the conversion runs, a step at a time: a step is a run of bytes
-     * no table names, gone past whole, or one character, mapped. The text is read where it is:
+     * Every form of the conversion runs this, a step at a time: a step is a run of bytes no table
+     * names, gone past whole, or one character, mapped. The text is read where it is:
      * Final_Sigma looks either side of a sigma for as many Case_Ignorable code points as there are,
      * and looks at them in the text. What is bounded is what is written: each character's mapping
      * is measured before any of it is, so the answer never holds more than $longest, nor part of a
@@ -87,6 +87,13 @@ final class CaseConversion
      *
      * Text that maps to itself is answered with itself. Otherwise what maps to itself is copied a
      * run at a time, from $kept, and the answer is made only once a character that changes is met.
+     *
+     * What a conversion does that grows with the text is done in these loops and in no call to
+     * PHP, so a checkpoint added later asks in each of them: map() over the text, and
+     * isFinalSigma() either side of a sigma, as far as the text goes.
+     *
+     * LoopsTest holds this list to every loop a conversion reaches, apart from those it says are
+     * bounded whatever the text, and holds what a conversion calls of PHP to a list.
      */
     private static function map(string $s, bool $lower, int $longest): ?string
     {
