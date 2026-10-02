@@ -25,7 +25,7 @@ final class Composing
     private const N_COUNT = self::V_COUNT * self::T_COUNT;
     private const S_COUNT = self::L_COUNT * self::N_COUNT;
 
-    /** How many marks a run may hold before they are put in order by a sort rather than by insertion, which is quadratic in the run. */
+    /** How many marks a run may hold before they are put in order by counting rather than by insertion, which is quadratic in the run. */
     private const FEW_MARKS = 32;
 
     /**
@@ -38,7 +38,10 @@ final class Composing
 
     private string $out;
     private ?string $starter = null;
-    /** @var list<string> */
+    /**
+     * @var array<int, string> the marks held after the starter, from 0 up to their count and in
+     *      that order: order writes them into place by number, as Machine's rows are written
+     */
     private array $marks = [];
 
     public function __construct(
@@ -162,16 +165,31 @@ final class Composing
     }
 
     /**
-     * Puts the held marks in canonical order: stable, by combining class.
+     * Puts the held marks in canonical order: stable, by combining class. A run of more marks than
+     * FEW_MARKS, which may be as long as the text, is counted into place as Go's is: how many marks
+     * there are of each class, where each class begins, and each mark written where its class has
+     * come to. The two loops over the run are this method's own and no sort of PHP's; the one over
+     * the 256 classes is as long whatever the text. What is held besides the run is the ordered
+     * run, filled once with array_fill, and the 257 counts.
      */
     private function order(): void
     {
         $marks = $this->marks;
         if (count($marks) > self::FEW_MARKS) {
-            // PHP's sort is stable.
-            usort($marks, static fn (string $a, string $b): int =>
-                NormalizationTables::COMBINING_CLASSES[$a] <=> NormalizationTables::COMBINING_CLASSES[$b]);
-            $this->marks = $marks;
+            $starts = array_fill(0, 257, 0);
+            foreach ($marks as $mark) {
+                $starts[NormalizationTables::COMBINING_CLASSES[$mark] + 1]++;
+            }
+            for ($class = 1; $class < 257; $class++) {
+                $starts[$class] += $starts[$class - 1];
+            }
+            // Every place from 0 to the count is written over once, in the order array_fill made
+            // them, so the marks are gone over in the order they were put.
+            $ordered = array_fill(0, count($marks), '');
+            foreach ($marks as $mark) {
+                $ordered[$starts[NormalizationTables::COMBINING_CLASSES[$mark]]++] = $mark;
+            }
+            $this->marks = $ordered;
             return;
         }
         // Each mark goes after every mark before it of a class no higher than its own.

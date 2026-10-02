@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Raoh\Notation199x\Internal\Pattern;
 
 use Raoh\Notation199x\Internal\Utf8;
-use Raoh\Notation199x\ScalarValues;
 
 /**
  * The strings a pattern accepts, as states to walk between: an automaton with steps that cost a
@@ -71,10 +70,15 @@ final class Machine
     // The sets of states a walk has been in, by number: the sets a deterministic machine would
     // have, made only as a walk comes to them, and where the characters read from each lead.
 
-    /** @var array<string, int> each kept set, by its states in order */
-    private array $index = [];
-    /** @var list<list<int>> the states of each kept set, ascending, every step for nothing taken */
+    /**
+     * @var array<int, int> each kept set at its hash or past it, -1 where a slot is empty: a power
+     *      of two of them and at least twice as many as are kept, or none before a set is kept
+     */
+    private array $slots = [];
+    /** @var list<list<int>> the states of each kept set, in the order the walk entered them, every step for nothing taken */
     private array $keptStates = [];
+    /** @var list<int> the hash of each kept set, as hashOf sums it */
+    private array $keptHashes = [];
     /** @var list<bool> */
     private array $keptAccepts = [];
     /** @var list<array<string, int>> where each character read from each kept set leads, by its UTF-8 bytes */
@@ -159,34 +163,42 @@ final class Machine
      *
      * Where the set the walk is in is kept, a character whose step from it is known is taken here,
      * as one lookup. Every other character is taken by take.
+     *
+     * What a walk does that grows with the subject, the machine or the sets kept is done in these
+     * loops and in no call to PHP, so a checkpoint added to a match later asks in each of them:
+     * matches() over the subject; advanceStates() and advanceSet() over the states and their
+     * steps, and enter() over the steps for nothing; hashOf(), same() and keep() over a set; find() and free() over the slots;
+     * and grow() over the sets kept.
+     *
+     * LoopsTest holds this list to every loop a match reaches, apart from those it says are
+     * bounded whatever the subject and the machine, and holds what a match calls of PHP to a list.
      */
     public function matches(string $subject): bool
     {
-        if (ScalarValues::invalidUtf8At($subject) !== null) {
-            return false;
-        }
         $now = [];
         $in = $this->begin($now);
         $length = strlen($subject);
         for ($at = 0; $at < $length;) {
-            // A run of ASCII characters each of which leads from the set the walk is in back to
-            // it, gone past in one call: the walk is in the same set after it, and only a step
-            // already worked out is taken so. A checkpoint added to a match later bounds the run
-            // by strspn's length.
-            if ($in >= 0 && $this->keptLoop[$in] !== '') {
-                $run = strspn($subject, $this->keptLoop[$in], $at);
-                if ($run > 0) {
-                    $at += $run;
-                    $this->read = self::grown($this->read, $run);
-                    continue;
-                }
-            }
-            $width = Utf8::width(ord($subject[$at]));
-            $character = $width === 1 ? $subject[$at] : substr($subject, $at, $width);
-            $at += $width;
             if ($in >= 0) {
+                // A run of ASCII characters each of which leads from the set the walk is in back
+                // to it, gone past in one call: the walk is in the same set after it, and only a
+                // step already worked out is taken so. A checkpoint added to a match later bounds
+                // the run by strspn's length.
+                if ($this->keptLoop[$in] !== '') {
+                    $run = strspn($subject, $this->keptLoop[$in], $at, $length - $at);
+                    if ($run > 0) {
+                        $at += $run;
+                        $this->read = self::grown($this->read, $run);
+                        continue;
+                    }
+                }
+                // A character is looked up by its bytes, and only a character take has read is
+                // there, so bytes that are not UTF-8 are never found and go on to take, which asks.
+                $width = Utf8::width(ord($subject[$at]));
+                $character = $width === 1 ? $subject[$at] : substr($subject, $at, $width);
                 $next = $this->keptNext[$in][$character] ?? -1;
                 if ($next >= 0) {
+                    $at += $width;
                     $in = $next;
                     $this->read = self::grown($this->read, 1);
                     if ($this->keptStates[$next] === []) {
@@ -195,7 +207,7 @@ final class Machine
                     continue;
                 }
             }
-            if (!$this->take($in, $now, $character)) {
+            if (!$this->take($in, $now, $subject, $at)) {
                 return false;
             }
         }
@@ -233,33 +245,45 @@ final class Machine
     }
 
     /**
-     * Moves the walk over one character, and is false where it is in no state after it. Where the
-     * set it is in is kept, where the character leads from it is worked out and kept; otherwise
-     * the set in $now is moved by advance. Every step a walk takes that does work growing with the
-     * machine is taken here.
+     * Moves the walk over the character at $at, and past it, and is false where it is in no state
+     * after it or the bytes there are not UTF-8. Where the set it is in is kept, where the
+     * character leads from it is worked out and kept, from its states by advanceStates; otherwise
+     * the set in $now is moved by advanceSet. Every step a walk takes that does work growing with the machine is taken here, and
+     * each character a step is worked out for is read here and asked whether it is UTF-8.
      *
      * @param array<int, true> $now
      */
-    private function take(int &$in, array &$now, string $character): bool
+    private function take(int &$in, array &$now, string $subject, int &$at): bool
     {
-        $symbol = Utf8::decode($character);
+        // ASCII is read here, without asking: every byte below 0x80 is a character.
+        $character = $subject[$at];
+        $symbol = ord($character);
+        $width = 1;
+        if ($symbol >= 0x80) {
+            [$symbol, $width] = Utf8::scalarAt($subject, $at);
+            if ($symbol < 0) {
+                return false;
+            }
+            $character = substr($subject, $at, $width);
+        }
+        $at += $width;
         if ($in < 0) {
-            $now = $this->advance(array_keys($now), $symbol);
+            $now = $this->advanceSet($now, $symbol);
             // The one place a walk without kept sets steps, so what such walks walk is counted
             // here, whether keeping sets was given up on before the walk or during it.
-            $this->walkedAlone(strlen($character));
+            $this->walkedAlone($width);
             return $now !== [];
         }
         $this->read = self::grown($this->read, 1);
         $from = $in;
-        $now = $this->advance($this->keptStates[$from], $symbol);
+        $now = $this->advanceStates($this->keptStates[$from], $symbol);
         [$next, $forgot] = $this->keep($now);
         // $from was forgotten to make room where $forgot, and is not looked up again. Where an
         // ASCII character leads is room every set is charged for when it is kept; where another
         // leads is kept only where there is room for it.
-        if ($next >= 0 && !$forgot && (strlen($character) === 1 || $this->charge(self::STEP_BYTES))) {
+        if ($next >= 0 && !$forgot && ($width === 1 || $this->charge(self::STEP_BYTES))) {
             $this->keptNext[$from][$character] = $next;
-            if ($next === $from && strlen($character) === 1) {
+            if ($next === $from && $width === 1) {
                 $this->keptLoop[$from] .= $character;
             }
         }
@@ -272,15 +296,21 @@ final class Machine
 
     /**
      * The set the states $from come to over $symbol: from each state, each step over it, and the
-     * states the steps for nothing reach from where those lead. The one place states are moved,
-     * and its work is the steps out of the set and the states it comes to, at most the machine's.
-     * Keeping a set not kept before is work of the same size besides (keep), so a checkpoint added
-     * to a match later asks in both.
+     * states the steps for nothing reach from where those lead. One of the two places states are
+     * moved, with advanceSet, and its work is the steps out of the set and the states it comes to,
+     * at most the machine's. Keeping a set not kept before is work of the same size besides
+     * (keep), so a checkpoint added to a match later asks in each.
+     *
+     * $from is a kept set's states, as a list, which takes half the room a set keyed by its states
+     * does. advanceSet moves a walk's own set, keyed by its states, and is this but for how it goes
+     * over them: one loop that went over either was measured 2 to 3 percent slower on walks of
+     * small sets, and copying a walk's set into a list costs a pass over it. MachineTest holds the
+     * two to the same steps.
      *
      * @param list<int> $from
      * @return array<int, true>
      */
-    private function advance(array $from, int $symbol): array
+    private function advanceStates(array $from, int $symbol): array
     {
         $next = [];
         foreach ($from as $q) {
@@ -291,9 +321,38 @@ final class Machine
                 }
                 // Most sets are one range, asked here without a search.
                 $set = $this->stepOver[$i];
-                $from = $this->setStart[$set];
-                $holds = $this->setStart[$set + 1] - $from === 2
-                    ? $this->setRanges[$from] <= $symbol && $symbol <= $this->setRanges[$from + 1]
+                $range = $this->setStart[$set];
+                $holds = $this->setStart[$set + 1] - $range === 2
+                    ? $this->setRanges[$range] <= $symbol && $symbol <= $this->setRanges[$range + 1]
+                    : $this->sets->holds($set, $symbol);
+                if ($holds) {
+                    $this->enter($next, $to);
+                }
+            }
+        }
+        return $next;
+    }
+
+    /**
+     * advanceStates of the set a walk without kept sets is in, keyed by its states.
+     *
+     * @param array<int, true> $from
+     * @return array<int, true>
+     */
+    private function advanceSet(array $from, int $symbol): array
+    {
+        $next = [];
+        foreach ($from as $q => $_) {
+            for ($i = $this->stepStart[$q], $end = $this->stepStart[$q + 1]; $i < $end; $i++) {
+                $to = $this->stepTo[$i];
+                if (isset($next[$to])) {
+                    continue;
+                }
+                // Most sets are one range, asked here without a search.
+                $set = $this->stepOver[$i];
+                $range = $this->setStart[$set];
+                $holds = $this->setStart[$set + 1] - $range === 2
+                    ? $this->setRanges[$range] <= $symbol && $symbol <= $this->setRanges[$range + 1]
                     : $this->sets->holds($set, $symbol);
                 if ($holds) {
                     $this->enter($next, $to);
@@ -347,15 +406,14 @@ final class Machine
      */
     private function keep(array $now): array
     {
-        // A set is the same set in any order, and its key is written of its states in order.
-        $states = array_keys($now);
-        sort($states);
-        $key = implode(',', $states);
-        $set = $this->index[$key] ?? -1;
+        $hash = $this->hashOf($now);
+        $set = $this->find($now, $hash);
         if ($set >= 0) {
             return [$set, false];
         }
-        $cost = 2 * strlen($key) + self::NUMBER_BYTES * count($states) + 128 * self::STEP_BYTES + 128;
+        // The set's states, its hash, where it leads for each ASCII character, and its part of the
+        // slots.
+        $cost = self::NUMBER_BYTES * (count($now) + 3) + 128 * self::STEP_BYTES + 128;
         $forgot = false;
         if (!$this->charge($cost)) {
             $gaveUp = $this->read < 10 * $this->made || $cost > self::$knownBytes;
@@ -372,13 +430,107 @@ final class Machine
             $this->charge($cost);
         }
         $set = count($this->keptStates);
+        if (($set + 1) * 2 > count($this->slots)) {
+            $this->grow();
+        }
+        $states = [];
+        foreach ($now as $q => $_) {
+            $states[] = $q;
+        }
         $this->keptStates[] = $states;
+        $this->keptHashes[] = $hash;
         $this->keptAccepts[] = isset($now[$this->accept]);
         $this->keptNext[] = [];
         $this->keptLoop[] = '';
-        $this->index[$key] = $set;
+        $this->slots[$this->free($hash)] = $set;
         $this->made++;
         return [$set, $forgot];
+    }
+
+    /**
+     * The hash a set is looked up by: a sum over its states that is the same in whatever order the
+     * walk entered them, so the set is never put in order. It is summed where a set is looked up
+     * and not as each state is entered, which a walk without kept sets does too.
+     *
+     * Each state is scattered by a multiplication and a shift, held to 32 bits; their sum is held
+     * to 32 bits once at the end, since 250,000 of them stay far within an int.
+     *
+     * @param array<int, true> $now
+     */
+    private function hashOf(array $now): int
+    {
+        $hash = 0;
+        foreach ($now as $q => $_) {
+            $mixed = ($q * 0x9E3779B9) & 0xFFFFFFFF;
+            $hash += $mixed ^ ($mixed >> 15);
+        }
+        return $hash & 0xFFFFFFFF;
+    }
+
+    /**
+     * The kept set that is the set $now holds, whose hash is $hash, or -1 where it is not kept:
+     * the slots from $hash on are probed until an empty one.
+     *
+     * @param array<int, true> $now
+     */
+    private function find(array $now, int $hash): int
+    {
+        if ($this->slots === []) {
+            return -1;
+        }
+        $mask = count($this->slots) - 1;
+        for ($at = $hash & $mask; ($held = $this->slots[$at]) >= 0; $at = ($at + 1) & $mask) {
+            if ($this->keptHashes[$held] === $hash && $this->same($held, $now)) {
+                return $held;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Whether the kept set $held is the set $now holds: as many states, each of which $now has,
+     * asked one at a time. Sets with the same hash are told apart here, so a hash shared by two
+     * sets changes no answer.
+     *
+     * @param array<int, true> $now
+     */
+    private function same(int $held, array $now): bool
+    {
+        $states = $this->keptStates[$held];
+        if (count($states) !== count($now)) {
+            return false;
+        }
+        foreach ($states as $q) {
+            if (!isset($now[$q])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The first empty slot from $hash on.
+     */
+    private function free(int $hash): int
+    {
+        $mask = count($this->slots) - 1;
+        $at = $hash & $mask;
+        while ($this->slots[$at] >= 0) {
+            $at = ($at + 1) & $mask;
+        }
+        return $at;
+    }
+
+    /**
+     * Makes twice the slots, or sixteen, and puts each kept set in them again by its hash. What is
+     * gone over is the sets kept, at most what $knownBytes holds.
+     */
+    private function grow(): void
+    {
+        $this->slots = array_fill(0, max(16, 2 * count($this->slots)), -1);
+        foreach ($this->keptHashes as $set => $hash) {
+            $this->slots[$this->free($hash)] = $set;
+        }
     }
 
     /**
@@ -441,8 +593,9 @@ final class Machine
      */
     private function forget(): void
     {
-        $this->index = [];
+        $this->slots = [];
         $this->keptStates = [];
+        $this->keptHashes = [];
         $this->keptAccepts = [];
         $this->keptNext = [];
         $this->keptLoop = [];

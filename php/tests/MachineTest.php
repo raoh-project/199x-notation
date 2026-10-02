@@ -9,8 +9,10 @@ use Raoh\Notation199x\Internal\Pattern\Machine;
 use Raoh\Notation199x\Pattern;
 
 /**
- * A machine that gave up keeping sets tries again, as Go's and Rust's do: a pattern may be held for
- * long, and one that gave up for good would walk every later subject a state at a time.
+ * What a machine keeps changes how fast it walks and no answer. A machine that gave up keeping
+ * sets tries again, as Go's and Rust's do: a pattern may be held for long, and one that gave up
+ * for good would walk every later subject a state at a time. Sets that share a hash are told
+ * apart, and the two loops that move states take the same steps.
  */
 final class MachineTest extends TestCase
 {
@@ -127,6 +129,85 @@ final class MachineTest extends TestCase
         $m = self::machine();
         $this->untilGivenUp($m);
         self::assertGreaterThan(1000, self::get($m, 'offWork'));
+    }
+
+    /**
+     * Two sets with the same hash are told apart by their states, so a hash two sets share changes
+     * no answer: {1, 1352} and {4, 1349} sum to the same hash, and each is kept as a set of its
+     * own and found again as itself, whichever was kept first and in whatever order its states
+     * were entered.
+     */
+    public function testSetsWithTheSameHashAreToldApart(): void
+    {
+        $read = Pattern::read('a{1400}');
+        self::assertInstanceOf(Pattern::class, $read);
+        $read->matches('');
+        $m = (new \ReflectionProperty(Pattern::class, 'machine'))->getValue($read);
+        self::assertInstanceOf(Machine::class, $m);
+        $hashOf = new \ReflectionMethod(Machine::class, 'hashOf');
+        $find = new \ReflectionMethod(Machine::class, 'find');
+        $keep = new \ReflectionMethod(Machine::class, 'keep');
+        $one = [1 => true, 1352 => true];
+        $other = [4 => true, 1349 => true];
+        $hash = $hashOf->invoke($m, $one);
+        self::assertSame($hash, $hashOf->invoke($m, $other), 'the two sets do not share a hash');
+        $kept = $keep->invoke($m, $one);
+        self::assertIsArray($kept);
+        $kept = $kept[0];
+        self::assertSame(-1, $find->invoke($m, $other, $hash), '{4, 1349} is taken for {1, 1352}');
+        $beside = $keep->invoke($m, $other);
+        self::assertIsArray($beside);
+        $beside = $beside[0];
+        self::assertNotSame($kept, $beside);
+        self::assertSame($kept, $find->invoke($m, $one, $hash));
+        self::assertSame($beside, $find->invoke($m, $other, $hash));
+        self::assertSame([$kept, false], $keep->invoke($m, [1352 => true, 1 => true]));
+        self::assertSame([$beside, false], $keep->invoke($m, [1349 => true, 4 => true]));
+    }
+
+    /**
+     * advanceStates and advanceSet take the same steps, and differ only in how they go over the
+     * states they are handed: a list of them, or a set keyed by them. Each is written out for
+     * speed, so this holds the one to the other.
+     */
+    public function testBothAdvancesTakeTheSameSteps(): void
+    {
+        $bodies = [];
+        foreach (['advanceStates', 'advanceSet'] as $name) {
+            $method = new \ReflectionMethod(Machine::class, $name);
+            $file = $method->getFileName();
+            self::assertIsString($file);
+            $lines = file($file);
+            self::assertIsArray($lines);
+            $start = $method->getStartLine();
+            $end = $method->getEndLine();
+            self::assertIsInt($start);
+            self::assertIsInt($end);
+            $body = array_slice($lines, $start, $end - $start);
+            $bodies[$name] = array_values(array_filter($body, static fn (string $line): bool => !str_contains($line, 'foreach ($from as')));
+        }
+        self::assertSame($bodies['advanceStates'], $bodies['advanceSet']);
+        // And they answer alike, over a set held both ways.
+        $read = Pattern::read('(?:a|b|é)*a(?:[ab]|é){3}');
+        self::assertInstanceOf(Pattern::class, $read);
+        $read->matches('');
+        $m = (new \ReflectionProperty(Pattern::class, 'machine'))->getValue($read);
+        self::assertInstanceOf(Machine::class, $m);
+        $states = (new \ReflectionProperty(Machine::class, 'keptStates'))->getValue($m);
+        self::assertIsArray($states);
+        $first = $states[0];
+        self::assertIsArray($first);
+        foreach ([0x61, 0x62, 0xE9, 0x63] as $symbol) {
+            $set = [];
+            foreach ($first as $q) {
+                self::assertIsInt($q);
+                $set[$q] = true;
+            }
+            self::assertSame(
+                (new \ReflectionMethod(Machine::class, 'advanceStates'))->invoke($m, $first, $symbol),
+                (new \ReflectionMethod(Machine::class, 'advanceSet'))->invoke($m, $set, $symbol),
+            );
+        }
     }
 
     /**

@@ -58,6 +58,15 @@ final class Normalization
      * a starter that composes with nothing before it and blocks every mark after it from composing
      * with a starter before it. That code point is normalized with the rest, since what follows it
      * may compose with it.
+     *
+     * What a normalization does that grows with the text is done in these loops and in no call to
+     * PHP, so a checkpoint added later asks in each of them: normalizeCore() over the text below
+     * the trivial limit; normalizeFrom() over the rest, a character at a time; Composing::settle()
+     * and Composing::order() over a combining run, which may be as long as the text; and
+     * Composing::write() over the marks of a run it writes.
+     *
+     * LoopsTest holds this list to every loop a normalization reaches, apart from those it says are
+     * bounded whatever the text, and holds what a normalization calls of PHP to a list.
      */
     private static function normalizeCore(NormalizationForm $form, string $s, int $longest): ?string
     {
@@ -73,8 +82,8 @@ final class Normalization
         $read = 0;
         for ($at = 0; $at < $length;) {
             // A run of ASCII, which is below every form's limit (NormalizationTest holds the
-            // tables to that).
-            $run = strspn($s, self::ASCII, $at);
+            // tables to that). A checkpoint added later bounds the run by strspn's length.
+            $run = strspn($s, self::ASCII, $at, $length - $at);
             if ($run > 0) {
                 $last = $at + $run - 1;
                 $beforeLast = $read + $run - 1;
@@ -109,8 +118,7 @@ final class Normalization
      * the next starter arrives is settled as the whole text's algorithm would settle it. What is
      * held at once is one run's marks, never the decomposition of the whole text.
      *
-     * The one loop every form of normalization past its trivial limit runs: a step is one
-     * character of the text, decomposed and taken.
+     * A step of its loop is one character of the text, decomposed and taken.
      */
     private static function normalizeFrom(NormalizationForm $form, string $s, int $from, int $kept, int $longest): ?string
     {
