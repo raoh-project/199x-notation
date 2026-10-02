@@ -45,7 +45,9 @@ pub use pattern::{
     PatternRefusal, PatternRefused, read_pattern,
 };
 pub use temporal::{
-    INSTANT_MAX, INSTANT_MIN, TemporalKind, TemporalRefusal, YEAR_MAX, YEAR_MIN, check_temporal,
+    INSTANT_MAX, INSTANT_MIN, TemporalDate, TemporalDateTime, TemporalInstant, TemporalKind,
+    TemporalOffsetDateTime, TemporalRefusal, TemporalTime, YEAR_MAX, YEAR_MIN, check_temporal,
+    read_date, read_date_time, read_instant, read_offset_date_time, read_time,
 };
 pub use text::{compare, scalar_count};
 pub use white_space::is_white_space;

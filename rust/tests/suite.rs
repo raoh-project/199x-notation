@@ -151,6 +151,36 @@ fn temporal_text_answers_every_line_of_the_suite() {
     });
 }
 
+/// The readers are this crate's own, so the suite holds no value they give; on every line, the
+/// reader of the kind admits what `check_temporal` admits and refuses with the same refusal.
+#[test]
+fn temporal_readers_admit_what_the_check_admits_on_every_line_of_the_suite() {
+    each_line("suite/temporal.txt", 3, |line| {
+        let kind = match line.one_of(
+            0,
+            &["DATE", "TIME", "DATETIME", "OFFSET_DATETIME", "INSTANT"],
+        ) {
+            "DATE" => TemporalKind::Date,
+            "TIME" => TemporalKind::Time,
+            "DATETIME" => TemporalKind::DateTime,
+            "OFFSET_DATETIME" => TemporalKind::OffsetDateTime,
+            _ => TemporalKind::Instant,
+        };
+        let text = line.text(1);
+        line.one_of(2, &["ADMITTED", "REFUSED"]);
+        let read = match kind {
+            TemporalKind::Date => read_date(&text).map(drop),
+            TemporalKind::Time => read_time(&text).map(drop),
+            TemporalKind::DateTime => read_date_time(&text).map(drop),
+            TemporalKind::OffsetDateTime => read_offset_date_time(&text).map(drop),
+            TemporalKind::Instant => read_instant(&text).map(drop),
+        };
+        let checked = check_temporal(kind, &text);
+        (read != checked)
+            .then(|| format!("{} as {kind:?} reads {read:?}, checks {checked:?}", shown(&text)))
+    });
+}
+
 fn limit_named(name: &str) -> PatternLimit {
     match name {
         "REPETITION_COUNT" => PatternLimit::RepetitionCount,
