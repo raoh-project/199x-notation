@@ -233,3 +233,40 @@ fn patterns_accept_what_every_line_of_the_suite_says() {
         })
     });
 }
+
+/// Owned matchers sharing one pattern answer every line as the pattern does, and answer it again
+/// the same after matching the other subjects of the suite, so what one keeps from a match never
+/// changes the answer of another match, or of another matcher.
+#[test]
+fn an_owned_matcher_answers_every_line_as_the_pattern_does() {
+    let mut subjects = Vec::new();
+    each_line("suite/pattern-match.txt", 3, |line| {
+        let _ = (line.text(0), line.yes_or_no(2));
+        subjects.push(line.text(1));
+        None
+    });
+    each_line("suite/pattern-match.txt", 3, |line| {
+        let pattern = line.text(0);
+        let _ = (line.text(1), line.yes_or_no(2));
+        let PatternRead::Pattern(read) = read_pattern(&pattern) else {
+            return None;
+        };
+        let expected: Vec<bool> = subjects.iter().map(|s| read.matches(s)).collect();
+        let shared = std::sync::Arc::new(read);
+        let mut alone = OwnedMatcher::new(std::sync::Arc::clone(&shared));
+        let mut other = OwnedMatcher::new(std::sync::Arc::clone(&shared));
+        for round in 0..2 {
+            for (subject, &want) in subjects.iter().zip(&expected) {
+                if alone.matches(subject) != want || other.matches(subject) != want {
+                    return Some(format!(
+                        "{} accepts {} in round {round}: {}",
+                        shown(&pattern),
+                        shown(subject),
+                        !want
+                    ));
+                }
+            }
+        }
+        None
+    });
+}

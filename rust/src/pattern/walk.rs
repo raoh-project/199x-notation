@@ -8,6 +8,17 @@ use super::subject::read_classes;
 /// starts again.
 const KNOWN_BYTES: usize = 2 << 20;
 
+/// How much walking a state at a time is done after keeping sets is given up on, before keeping
+/// them is tried again: counted as one for each match, for the set it starts in, and one for each
+/// byte of the subject walked. Each time a try ends in giving up again the wait doubles, so what
+/// the tries cost stays a part of that walking that gets smaller.
+///
+/// It is what was walked and not what was handed in that is counted. A subject that is empty is
+/// walked too, from the set a match starts in, and so many of them lead to a try as surely as long
+/// ones do; a long subject turned away at its first character counts that character, not its
+/// length.
+const RETRY_WORK: usize = 16 * KNOWN_BYTES;
+
 /// Where a class leads from a kept set before that has been worked out.
 const UNKNOWN: u32 = u32::MAX;
 /// The kept set no state is in, from which no string is accepted.
@@ -22,9 +33,13 @@ const EMPTY: u32 = u32::MAX;
 ///
 /// Where they would be more, they are forgotten and worked out again as they are come to. Where what
 /// was worked out since they were last forgotten was looked up again less than once in ten, keeping
-/// them saves nothing: the walk goes on without them, a state at a time, and so does every later
-/// match with this cache. A machine whose sets are large, or subjects that keep coming to new ones,
-/// are walked a state at a time as without them.
+/// them saves nothing: the walk goes on without them, a state at a time, and so do the matches with
+/// this cache after it, until they have walked [`RETRY_WORK`]. Then keeping sets is tried
+/// again, as a cache that has kept none: what was looked up too seldom then says nothing about the
+/// subjects a matcher that is kept for long reads later. A try that gives up again waits twice as
+/// long before the next, and one that keeps sets long enough to forget them waits again as long as
+/// the first. A machine whose sets are large, or subjects that keep coming to new ones, are walked a
+/// state at a time as without them, but for the tries.
 ///
 /// A set is the same set in whatever order its states were come to, so it is found by a hash that
 /// does not turn on the order, summed as its states are entered ([`Walk::enter`]), and told apart
@@ -53,6 +68,12 @@ pub(crate) struct Cache {
     read: usize,
     /// Whether keeping sets was given up on.
     off: bool,
+    /// What has been walked a state at a time since keeping sets was given up on, counted as
+    /// [`RETRY_WORK`] says, and how much is walked before it is tried again.
+    off_work: usize,
+    off_for: usize,
+    /// Whether keeping sets is being tried again, so that giving up waits longer.
+    retrying: bool,
     walk: Walk,
 }
 
@@ -69,6 +90,9 @@ impl Cache {
             made: 0,
             read: 0,
             off: false,
+            off_work: 0,
+            off_for: RETRY_WORK,
+            retrying: false,
             walk: Walk {
                 entered: Vec::new(),
                 generation: 0,
@@ -79,6 +103,55 @@ impl Cache {
                 accepting: false,
             },
         }
+    }
+
+    /// Walks the matches after this a state at a time, until [`Cache::off_for`] bytes are read.
+    fn give_up(&mut self) {
+        if self.retrying {
+            self.off_for = self.off_for.saturating_mul(2);
+        }
+        self.retrying = false;
+        self.off = true;
+        self.off_work = 0;
+    }
+
+    /// Whether the next match walks a state at a time: keeping sets was given up on and is not to
+    /// be tried again yet. It is tried again, as by a cache that has kept none, once what has been
+    /// walked since is [`Cache::off_for`].
+    fn walks_alone(&mut self) -> bool {
+        if !self.off {
+            return false;
+        }
+        if self.off_work < self.off_for {
+            return true;
+        }
+        self.off = false;
+        self.retrying = true;
+        false
+    }
+
+    /// Whether the walk, from the set it is in, accepts `rest` walked a state at a time, keeping no
+    /// sets; the one way a walk goes on without them, whether keeping them was given up on before
+    /// the match or during it. What it walks counts toward trying to keep sets again, as
+    /// [`RETRY_WORK`] says: one for the set it walks from and one for each byte of `rest` walked.
+    fn walk_alone(&mut self, machine: &Machine, rest: &str) -> bool {
+        let walk = &mut self.walk;
+        // Where the walk stopped, as a byte of `rest`, read once at the end rather than counted
+        // character by character.
+        let mut stopped = None;
+        for (at, c) in rest.char_indices() {
+            if walk.next.is_empty() {
+                stopped = Some(at);
+                break;
+            }
+            core::mem::swap(&mut walk.now, &mut walk.next);
+            let from = core::mem::take(&mut walk.now);
+            walk.advance(machine, &from, c);
+            walk.now = from;
+        }
+        let walked = stopped.unwrap_or(rest.len());
+        self.off_work = self.off_work.saturating_add(walked).saturating_add(1);
+        stopped.is_none() && walk.accepting
     }
 
     /// Forgets every kept set. What is dropped is at most what [`KNOWN_BYTES`] holds.
@@ -120,9 +193,13 @@ impl Cache {
             let gave_up = self.read < 10 * self.made || cost > KNOWN_BYTES;
             self.forget();
             if gave_up {
-                self.off = true;
+                self.give_up();
                 return None;
             }
+            // The sets were looked up often enough to be worth keeping, so a later give-up waits
+            // as long as the first.
+            self.off_for = RETRY_WORK;
+            self.retrying = false;
             forgot = true;
         }
         let kept = self.sets.len();
@@ -277,18 +354,18 @@ impl Walk {
 /// character whose class has been read from it before is one lookup, in [`run_known`]. A class not
 /// read from it before is worked out by moving each state of the set ([`Walk::advance`]), at most
 /// the machine's, and the set it comes to is looked for among the kept ones, or kept
-/// ([`Cache::keep`]). Where sets are not kept, every character is worked out so ([`walk_on`]).
+/// ([`Cache::keep`]). Where sets are not kept, every character is worked out so ([`Cache::walk_alone`]).
 ///
 /// The loops whose count turns on the subject, the machine or the kept sets are these, and no other:
-/// [`run_known`] and [`walk_on`] over the subject; [`Walk::advance`] and [`Walk::enter`] over the
+/// [`run_known`] and [`Cache::walk_alone`] over the subject; [`Walk::advance`] and [`Walk::enter`] over the
 /// steps and free steps of the states they move; [`Cache::keep`] over the slots it looks in and the
 /// row it makes, [`Cache::same`] over a kept set, and [`Cache::grow`] over the kept sets; and
 /// [`Walk::next_set`], over every state, once in four billion sets.
 pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bool {
     let classes = machine.classes.count();
-    if cache.off {
+    if cache.walks_alone() {
         cache.walk.begin(machine);
-        return walk_on(machine, &mut cache.walk, subject.chars());
+        return cache.walk_alone(machine, subject);
     }
     let mut at = match cache.start {
         Some(start) => start,
@@ -299,7 +376,7 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
                     cache.start = Some(start);
                     start
                 }
-                None => return walk_on(machine, &mut cache.walk, subject.chars()),
+                None => return cache.walk_alone(machine, subject),
             }
         }
     };
@@ -330,7 +407,7 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
                 at = next;
             }
             // The walk goes on a state at a time from the set it came to, in `next`.
-            None => return walk_on(machine, &mut cache.walk, subject[i..].chars()),
+            None => return cache.walk_alone(machine, &subject[i..]),
         }
     }
 }
@@ -367,20 +444,6 @@ fn run_known(
                 .expect("a character begins here"),
         )
     })
-}
-
-/// The rest of a match a state at a time, from the set the walk has just come to, in `walk.next`.
-fn walk_on(machine: &Machine, walk: &mut Walk, chars: core::str::Chars<'_>) -> bool {
-    for c in chars {
-        if walk.next.is_empty() {
-            return false;
-        }
-        core::mem::swap(&mut walk.now, &mut walk.next);
-        let from = core::mem::take(&mut walk.now);
-        walk.advance(machine, &from, c);
-        walk.now = from;
-    }
-    walk.accepting
 }
 
 #[cfg(test)]
@@ -485,5 +548,120 @@ mod tests {
             assert_eq!(matcher.matches(&subject), expected);
         }
         assert!(matcher.cache.off, "the cache gave up keeping sets");
+    }
+
+    /// A cache that gave up keeping sets tries again once it has read what it waits for, keeps sets
+    /// for subjects whose sets are looked up again, and waits twice as long after a try that gives
+    /// up again; the answers are the same throughout.
+    #[test]
+    fn a_cache_that_gave_up_tries_again_and_waits_longer_after_each_try_that_fails() {
+        let pattern = pattern("(?:a|b)*a(?:a|b){16}");
+        let mut matcher = pattern.matcher();
+        let mut numbers = Numbers(7);
+        let mut random = |n: usize| -> String {
+            (0..n)
+                .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
+                .collect()
+        };
+        let check = |matcher: &mut crate::Matcher<'_>, subject: &str| {
+            let expected = subject.len() >= 17 && subject.as_bytes()[subject.len() - 17] == b'a';
+            assert_eq!(matcher.matches(subject), expected);
+        };
+        while !matcher.cache.off {
+            check(&mut matcher, &random(20_000));
+        }
+        let first = matcher.cache.off_for;
+        assert_eq!(first, RETRY_WORK);
+        // Waited for, so that the test reads less than the constant says.
+        // A match of 800 bytes walks 801, as RETRY_WORK counts. What the match that gave up walked
+        // after is counted too; the count starts from nought here.
+        matcher.cache.off_for = 1_000;
+        matcher.cache.off_work = 0;
+        check(&mut matcher, &"ab".repeat(400));
+        assert!(
+            matcher.cache.off,
+            "it waits until it has walked what it waits for"
+        );
+        check(&mut matcher, &"ab".repeat(400));
+        assert!(
+            matcher.cache.off,
+            "the match that walks past what it waits for still walks alone"
+        );
+        check(&mut matcher, &"ab".repeat(400));
+        assert!(!matcher.cache.off, "it tries again once it has");
+        // Subjects that come to new sets all the time make it give up again, and wait longer.
+        while !matcher.cache.off {
+            check(&mut matcher, &random(20_000));
+        }
+        assert_eq!(matcher.cache.off_for, 2_000);
+        // Subjects whose sets are looked up again keep it keeping them.
+        matcher.cache.off_work = matcher.cache.off_for;
+        for _ in 0..1_000 {
+            check(&mut matcher, &"ab".repeat(20));
+        }
+        assert!(!matcher.cache.off);
+    }
+
+    /// A match that gives up keeping sets part of the way through counts what it walks after,
+    /// as one that had given up before it does: the wait before trying again bounds every walk a
+    /// state at a time, wherever it began.
+    #[test]
+    fn a_match_that_gives_up_on_its_way_counts_what_it_walks_after() {
+        let pattern = pattern("(?:a|b)*a(?:a|b){16}");
+        let mut matcher = pattern.matcher();
+        let mut numbers = Numbers(7);
+        loop {
+            let subject: String = (0..20_000)
+                .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
+                .collect();
+            matcher.matches(&subject);
+            if matcher.cache.off {
+                break;
+            }
+        }
+        assert!(
+            matcher.cache.off_work > 1_000,
+            "the match that gave up counted {} of what it walked after",
+            matcher.cache.off_work
+        );
+    }
+
+    /// What a match walks a state at a time is what counts toward trying again: an empty subject
+    /// counts the set it starts in, so empty subjects alone lead to a try, and a long subject
+    /// turned away at once counts the little that was walked of it, not its length.
+    #[test]
+    fn what_counts_toward_trying_again_is_what_was_walked() {
+        let pattern = pattern("(?:a|b)*a(?:a|b){16}");
+        let mut matcher = pattern.matcher();
+        let mut numbers = Numbers(7);
+        while !matcher.cache.off {
+            let subject: String = (0..20_000)
+                .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
+                .collect();
+            matcher.matches(&subject);
+        }
+        matcher.cache.off_for = 100;
+        matcher.cache.off_work = 0;
+        for _ in 0..100 {
+            assert!(matcher.cache.off, "empty subjects led to a try too soon");
+            assert!(!matcher.matches(""));
+        }
+        assert!(!matcher.matches(""));
+        assert!(!matcher.cache.off, "empty subjects alone lead to a try");
+
+        while !matcher.cache.off {
+            let subject: String = (0..20_000)
+                .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
+                .collect();
+            matcher.matches(&subject);
+        }
+        let before = matcher.cache.off_work;
+        let turned_away = alloc::format!("c{}", "a".repeat(100_000));
+        assert!(!matcher.matches(&turned_away));
+        assert!(
+            matcher.cache.off_work - before <= 3,
+            "a subject turned away at once counted {}",
+            matcher.cache.off_work - before
+        );
     }
 }

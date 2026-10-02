@@ -1,6 +1,7 @@
 package notation199x
 
 import (
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -247,5 +248,150 @@ func TestWhatAWalkKeepsChangesNoAnswer(t *testing.T) {
 				t.Fatalf("%q answers %v with nothing kept and %v otherwise, for %q", pattern.String(), answers[0], these, subjects)
 			}
 		}
+	}
+}
+
+// A room that gave up keeping sets tries again once it has read what it waits for, keeps sets for
+// subjects whose sets are looked up again, and waits twice as long after a try that gives up
+// again; the answers are the same throughout. A room is kept between matches in the machine's
+// pool, so one that gave up for good would walk every later subject a state at a time.
+func TestAGivenUpRoomTriesAgainAndWaitsLongerAfterEachTryThatFails(t *testing.T) {
+	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	m := read.compiled.machine
+	w := m.newWalk()
+	rng := uint32(7)
+	random := func(n int) string {
+		var b strings.Builder
+		for range n {
+			rng = rng*1664525 + 1013904223
+			b.WriteByte("ab"[rng>>31])
+		}
+		return b.String()
+	}
+	check := func(subject string) {
+		t.Helper()
+		want := len(subject) >= 17 && subject[len(subject)-17] == 'a'
+		if got := m.matchesIn(w, subject); got != want {
+			t.Fatalf("%q... is %v, not %v", subject[:min(20, len(subject))], got, want)
+		}
+	}
+	for !w.known.off {
+		check(random(20_000))
+	}
+	if w.known.wait() != retryWork {
+		t.Fatalf("the first give-up waits %d, not %d", w.known.wait(), retryWork)
+	}
+	// Waited for, so that the test walks less than the constant says. A walk of 800 bytes walks
+	// 801, as retryWork counts, and what has been walked is asked before a walk.
+	w.known.offFor = 1000
+	// What the walk that gave up walked after is counted too; the count starts from nought here.
+	w.known.offWork = 0
+	check(strings.Repeat("ab", 400))
+	check(strings.Repeat("ab", 400))
+	if !w.known.off {
+		t.Fatal("it tried again before it walked what it waits for")
+	}
+	check(strings.Repeat("ab", 400))
+	if w.known.off {
+		t.Fatal("it did not try again once it had")
+	}
+	for !w.known.off {
+		check(random(20_000))
+	}
+	if w.known.wait() != 2000 {
+		t.Fatalf("a try that gave up again waits %d, not 2000", w.known.wait())
+	}
+	w.known.offWork = w.known.wait()
+	for range 1000 {
+		check(strings.Repeat("ab", 20))
+	}
+	if w.known.off {
+		t.Fatal("subjects whose sets are looked up again made it give up")
+	}
+}
+
+// What a walk without kept sets walks is what counts toward trying again: an empty subject counts
+// the set it starts in, so empty subjects alone lead to a try, and a long subject turned away at
+// once counts the little that was walked of it, not its length.
+func TestWhatCountsTowardTryingAgainIsWhatWasWalked(t *testing.T) {
+	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	m := read.compiled.machine
+	w := m.newWalk()
+	rng := uint32(7)
+	random := func(n int) string {
+		var b strings.Builder
+		for range n {
+			rng = rng*1664525 + 1013904223
+			b.WriteByte("ab"[rng>>31])
+		}
+		return b.String()
+	}
+	for !w.known.off {
+		m.matchesIn(w, random(20_000))
+	}
+	w.known.offFor = 100
+	w.known.offWork = 0
+	for range 100 {
+		if !w.known.off {
+			t.Fatal("empty subjects led to a try too soon")
+		}
+		if m.matchesIn(w, "") {
+			t.Fatal("the empty subject is accepted")
+		}
+	}
+	m.matchesIn(w, "")
+	if w.known.off {
+		t.Fatal("empty subjects alone did not lead to a try")
+	}
+	for !w.known.off {
+		m.matchesIn(w, random(20_000))
+	}
+	before := w.known.offWork
+	if m.matchesIn(w, "c"+strings.Repeat("a", 100_000)) {
+		t.Fatal("a subject with a c is accepted")
+	}
+	if counted := w.known.offWork - before; counted > 3 {
+		t.Fatalf("a subject turned away at once counted %d", counted)
+	}
+}
+
+// A count of what is read is held at the most an int holds, so that on a 32-bit platform it does
+// not go round to a negative that would make a room give up keeping sets it uses.
+func TestCountsThatOnlyGrowAreHeldAtTheMostAnIntHolds(t *testing.T) {
+	if got := grown(math.MaxInt-1, 5); got != math.MaxInt {
+		t.Fatalf("grown(MaxInt-1, 5) is %d", got)
+	}
+	if got := grown(2, 3); got != 5 {
+		t.Fatalf("grown(2, 3) is %d", got)
+	}
+	var k knownSets
+	k.offFor, k.retrying = math.MaxInt/2+1, true
+	k.giveUp()
+	if k.offFor != math.MaxInt {
+		t.Fatalf("a wait doubled past the most an int holds is %d", k.offFor)
+	}
+}
+
+// A walk that gives up keeping sets part of the way through counts what it walks after, as one
+// that had given up before it does: the wait before trying again bounds every walk without kept
+// sets, wherever it began.
+func TestAWalkThatGivesUpOnItsWayCountsWhatItWalksAfter(t *testing.T) {
+	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	m := read.compiled.machine
+	w := m.newWalk()
+	rng := uint32(7)
+	for !w.known.off {
+		var b strings.Builder
+		for range 20_000 {
+			rng = rng*1664525 + 1013904223
+			b.WriteByte("ab"[rng>>31])
+		}
+		m.matchesIn(w, b.String())
+	}
+	if w.known.offWork <= 1000 {
+		t.Fatalf("the walk that gave up counted %d of what it walked after", w.known.offWork)
 	}
 }

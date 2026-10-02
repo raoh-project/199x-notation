@@ -28,6 +28,18 @@ fn every_line_of(fixtures: &str) {
         };
         let outcome = line.one_of(2, &["ACCEPTED", "NOT_ACCEPTED", "REFUSED"]);
         let read = Pattern::from_image(&image);
+        // An owned matcher of the image answers as the pattern does, P1 and P2 alike.
+        if let Ok(owned) = Pattern::from_image(&image) {
+            let mut owned = owned.into_matcher();
+            let answer = read.as_ref().is_ok_and(|p| p.matches(&subject));
+            if owned.matches(&subject) != answer || owned.matches(&subject) != answer {
+                return Some(format!(
+                    "{} with {}: an owned matcher answers otherwise",
+                    shown(&image),
+                    shown(&subject)
+                ));
+            }
+        }
         match (outcome, &read) {
             ("REFUSED", Err(NotAnImage)) => None,
             ("ACCEPTED", Ok(pattern)) if pattern.matches(&subject) => None,
