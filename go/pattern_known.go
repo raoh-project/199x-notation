@@ -61,12 +61,10 @@ const utf8RuneSelf = 0x80
 // ones, are walked a state at a time as without them, but for the tries.
 //
 // A set is looked up in slots by its hash, a sum over its states that is the same in whatever
-// order the walk put them in, so the set is never put in order. What goes over a set, or over the
-// sets kept, is each a loop of its own: summing the hash (hashOf), probing the slots (find), asking
-// of each state of a kept set with the same hash whether the walk is in it (same), copying the set
-// to keep it (keep), and putting the kept sets in slots twice as many (grow). A character that comes to a set not kept costs these
-// besides moving the states (advance), and a checkpoint added to a match later asks in these loops
-// too.
+// order the walk put them in, so the set is never put in order. The hash is summed where a set is
+// looked up (hashOf) and not as each state is put in, which a walk without kept sets does too.
+// What goes over a set, over the slots or over the sets kept is a loop of its own, among those
+// walk lists.
 type knownSets struct {
 	// slots holds each kept set at its hash or past it, a power of two of them and at least twice
 	// as many as are kept, or none before a set is kept.
@@ -117,11 +115,7 @@ func (k *knownSets) after(m *machine, w *walk, from *knownSet, r rune) *knownSet
 	} else if next, ok := from.other[r]; ok {
 		return next
 	}
-	w.now.clear()
-	for _, q := range from.states {
-		w.now.add(q)
-	}
-	m.advance(w, r)
+	m.advance(w, from.states, r)
 	next, forgot := k.keep(m, w)
 	if next == nil || forgot {
 		// from was forgotten to make room, and is not looked up again.

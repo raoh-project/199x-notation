@@ -203,6 +203,23 @@ func BenchmarkAMatchOfAFewStates(b *testing.B) {
 	}
 }
 
+// A walk that has kept no sets comes to a new one at most characters, and keeps each: what a
+// character costs where its set is not kept yet, besides moving the states.
+func BenchmarkAMatchThatKeepsANewSetAtMostCharacters(b *testing.B) {
+	read := ReadPattern("(?:a|b)*a(?:a|b){8}").(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	m := read.compiled.machine
+	var subject strings.Builder
+	rng := uint32(9)
+	for range 400 {
+		rng = rng*1664525 + 1013904223
+		subject.WriteByte("ab"[rng>>31])
+	}
+	for range b.N {
+		m.matchesIn(m.newWalk(), subject.String())
+	}
+}
+
 // Which sets a walk keeps, and whether it keeps any, changes how fast it is and no answer: every
 // pattern accepts the same subjects with nothing kept, with so little kept that it is forgotten
 // every few characters, and with the room a walk is given.
