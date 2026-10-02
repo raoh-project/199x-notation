@@ -166,9 +166,12 @@ final class Machine
      *
      * What a walk does that grows with the subject, the machine or the sets kept is done in these
      * loops and in no call to PHP, so a checkpoint added to a match later asks in each of them:
-     * matches over the subject; advance over the states and their steps, and enter over the steps
-     * for nothing; hashOf, same and keep over a set; find and free over the slots; and grow over
-     * the sets kept. LoopsTest holds this list to the methods with a loop in them.
+     * matches() over the subject; advanceStates() and advanceSet() over the states and their
+     * steps, and enter() over the steps for nothing; hashOf(), same() and keep() over a set; find() and free() over the slots;
+     * and grow() over the sets kept.
+     *
+     * LoopsTest holds this list to every loop a match reaches, apart from those it says are
+     * bounded whatever the subject and the machine, and holds what a match calls of PHP to a list.
      */
     public function matches(string $subject): bool
     {
@@ -244,22 +247,28 @@ final class Machine
     /**
      * Moves the walk over the character at $at, and past it, and is false where it is in no state
      * after it or the bytes there are not UTF-8. Where the set it is in is kept, where the
-     * character leads from it is worked out and kept; otherwise the set in $now is moved by
-     * advance. Every step a walk takes that does work growing with the machine is taken here, and
+     * character leads from it is worked out and kept, from its states by advanceStates; otherwise
+     * the set in $now is moved by advanceSet. Every step a walk takes that does work growing with the machine is taken here, and
      * each character a step is worked out for is read here and asked whether it is UTF-8.
      *
      * @param array<int, true> $now
      */
     private function take(int &$in, array &$now, string $subject, int &$at): bool
     {
-        [$symbol, $width] = Utf8::scalarAt($subject, $at);
-        if ($symbol < 0) {
-            return false;
+        // ASCII is read here, without asking: every byte below 0x80 is a character.
+        $character = $subject[$at];
+        $symbol = ord($character);
+        $width = 1;
+        if ($symbol >= 0x80) {
+            [$symbol, $width] = Utf8::scalarAt($subject, $at);
+            if ($symbol < 0) {
+                return false;
+            }
+            $character = substr($subject, $at, $width);
         }
-        $character = $width === 1 ? $subject[$at] : substr($subject, $at, $width);
         $at += $width;
         if ($in < 0) {
-            $now = $this->advance($now, $symbol, true);
+            $now = $this->advanceSet($now, $symbol);
             // The one place a walk without kept sets steps, so what such walks walk is counted
             // here, whether keeping sets was given up on before the walk or during it.
             $this->walkedAlone($width);
@@ -267,7 +276,7 @@ final class Machine
         }
         $this->read = self::grown($this->read, 1);
         $from = $in;
-        $now = $this->advance($this->keptStates[$from], $symbol, false);
+        $now = $this->advanceStates($this->keptStates[$from], $symbol);
         [$next, $forgot] = $this->keep($now);
         // $from was forgotten to make room where $forgot, and is not looked up again. Where an
         // ASCII character leads is room every set is charged for when it is kept; where another
@@ -287,23 +296,53 @@ final class Machine
 
     /**
      * The set the states $from come to over $symbol: from each state, each step over it, and the
-     * states the steps for nothing reach from where those lead. The one place states are moved,
-     * and its work is the steps out of the set and the states it comes to, at most the machine's.
-     * Keeping a set not kept before is work of the same size besides (keep), so a checkpoint added
-     * to a match later asks in both.
+     * states the steps for nothing reach from where those lead. One of the two places states are
+     * moved, with advanceSet, and its work is the steps out of the set and the states it comes to,
+     * at most the machine's. Keeping a set not kept before is work of the same size besides
+     * (keep), so a checkpoint added to a match later asks in each.
      *
-     * $from holds the states as its keys where $keyed, as the set a walk without kept sets is in
-     * holds them, and otherwise as its values, as a kept set holds them, in half the room. Both are
-     * gone over here, so neither is copied into the other.
+     * $from is a kept set's states, as a list, which takes half the room a set keyed by its states
+     * does. advanceSet moves a walk's own set, keyed by its states, and is this but for how it goes
+     * over them: one loop that went over either was measured 2 to 3 percent slower on walks of
+     * small sets, and copying a walk's set into a list costs a pass over it. MachineTest holds the
+     * two to the same steps.
      *
-     * @param array<int, int|true> $from
+     * @param list<int> $from
      * @return array<int, true>
      */
-    private function advance(array $from, int $symbol, bool $keyed): array
+    private function advanceStates(array $from, int $symbol): array
     {
         $next = [];
-        foreach ($from as $key => $value) {
-            $q = $keyed ? $key : $value;
+        foreach ($from as $q) {
+            for ($i = $this->stepStart[$q], $end = $this->stepStart[$q + 1]; $i < $end; $i++) {
+                $to = $this->stepTo[$i];
+                if (isset($next[$to])) {
+                    continue;
+                }
+                // Most sets are one range, asked here without a search.
+                $set = $this->stepOver[$i];
+                $range = $this->setStart[$set];
+                $holds = $this->setStart[$set + 1] - $range === 2
+                    ? $this->setRanges[$range] <= $symbol && $symbol <= $this->setRanges[$range + 1]
+                    : $this->sets->holds($set, $symbol);
+                if ($holds) {
+                    $this->enter($next, $to);
+                }
+            }
+        }
+        return $next;
+    }
+
+    /**
+     * advanceStates of the set a walk without kept sets is in, keyed by its states.
+     *
+     * @param array<int, true> $from
+     * @return array<int, true>
+     */
+    private function advanceSet(array $from, int $symbol): array
+    {
+        $next = [];
+        foreach ($from as $q => $_) {
             for ($i = $this->stepStart[$q], $end = $this->stepStart[$q + 1]; $i < $end; $i++) {
                 $to = $this->stepTo[$i];
                 if (isset($next[$to])) {

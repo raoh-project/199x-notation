@@ -164,6 +164,51 @@ final class MachineTest extends TestCase
     }
 
     /**
+     * advanceStates and advanceSet take the same steps, and differ only in how they go over the
+     * states they are handed: a list of them, or a set keyed by them. Each is written out for
+     * speed, so this holds the one to the other.
+     */
+    public function testBothAdvancesTakeTheSameSteps(): void
+    {
+        $bodies = [];
+        foreach (['advanceStates', 'advanceSet'] as $name) {
+            $method = new \ReflectionMethod(Machine::class, $name);
+            $file = $method->getFileName();
+            self::assertIsString($file);
+            $lines = file($file);
+            self::assertIsArray($lines);
+            $start = $method->getStartLine();
+            $end = $method->getEndLine();
+            self::assertIsInt($start);
+            self::assertIsInt($end);
+            $body = array_slice($lines, $start, $end - $start);
+            $bodies[$name] = array_values(array_filter($body, static fn (string $line): bool => !str_contains($line, 'foreach ($from as')));
+        }
+        self::assertSame($bodies['advanceStates'], $bodies['advanceSet']);
+        // And they answer alike, over a set held both ways.
+        $read = Pattern::read('(?:a|b|é)*a(?:[ab]|é){3}');
+        self::assertInstanceOf(Pattern::class, $read);
+        $read->matches('');
+        $m = (new \ReflectionProperty(Pattern::class, 'machine'))->getValue($read);
+        self::assertInstanceOf(Machine::class, $m);
+        $states = (new \ReflectionProperty(Machine::class, 'keptStates'))->getValue($m);
+        self::assertIsArray($states);
+        $first = $states[0];
+        self::assertIsArray($first);
+        foreach ([0x61, 0x62, 0xE9, 0x63] as $symbol) {
+            $set = [];
+            foreach ($first as $q) {
+                self::assertIsInt($q);
+                $set[$q] = true;
+            }
+            self::assertSame(
+                (new \ReflectionMethod(Machine::class, 'advanceStates'))->invoke($m, $first, $symbol),
+                (new \ReflectionMethod(Machine::class, 'advanceSet'))->invoke($m, $set, $symbol),
+            );
+        }
+    }
+
+    /**
      * A count that only grows is held at the most an int holds, and a wait doubled past it is that.
      */
     public function testCountsThatOnlyGrowAreHeldAtTheMostAnIntHolds(): void
