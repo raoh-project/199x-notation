@@ -1,6 +1,7 @@
 package net.unit8.notation199x.pattern;
 
 import net.unit8.notation199x.Outcome;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -50,9 +51,10 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             Automaton shaped = machine.shaped();
             List<StringPattern> runs = new ArrayList<>(List.of(machine.pattern()));
             runs.addAll(everyWay(shaped, false));
-            if (machine.deterministic() != null) {
-                runs.addAll(everyWay(machine.deterministic(), true));
-                runs.addAll(everyWayOfP2(machine.deterministic()));
+            Automaton deterministic = deterministic(machine);
+            if (deterministic != null) {
+                runs.addAll(everyWay(deterministic, true));
+                runs.addAll(everyWayOfP2(deterministic));
             }
             for (int each = 0; each < 400; each++) {
                 String subject = subject(random);
@@ -111,7 +113,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
     void aDeterministicWalkAsksOnceACharacterWhicheverWayItGoes() {
         PatternMachine machine = PatternMachine.of(((PatternRead.Read) PatternParser.read("[a-zぁ-ん😀]*,\\d+"))
                 .meaning());
-        Automaton deterministic = machine.deterministic();
+        Automaton deterministic = java.util.Objects.requireNonNull(deterministic(machine));
         String subject = "abcあいう😀😀xyz".repeat(20) + ",123";
         int characters = subject.codePointCount(0, subject.length());
         List<StringPattern> every = new ArrayList<>(everyWay(deterministic, true));
@@ -141,6 +143,13 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         assertEquals(StringPattern.Way.EVERY_STATE, StringPattern.of(Automaton.of(
                 ((PatternRead.Read) PatternParser.read("a*")).meaning(), Held.roomy()), false,
                 new StringPattern.Budget(0, 0, 0, 0, 0, 0)).way());
+    }
+
+    /** The deterministic machine {@code machine}'s rows were taken from, made again from its shape
+     *  within what it was made in: a machine runs and keeps only the rows, and the walks over steps
+     *  are held here to the same machine. Null where it has none. */
+    private static @Nullable Automaton deterministic(PatternMachine machine) {
+        return machine.rows() == null ? null : machine.shaped().canonical(PatternMachine.deterministicRun());
     }
 
     /** {@code machine} run each way a walk may go over it, as budgets that run out where each does
@@ -266,8 +275,9 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             for (int round = 0; round < 3; round++) {
                 // Made anew each round, so that what each walk keeps is found by the threads at once.
                 List<StringPattern> runs = new ArrayList<>(everyWay(shaped, false));
-                if (machine.deterministic() != null) {
-                    runs.addAll(everyWay(machine.deterministic(), true));
+                Automaton deterministic = deterministic(machine);
+                if (deterministic != null) {
+                    runs.addAll(everyWay(deterministic, true));
                 }
                 ExecutorService threads = Executors.newFixedThreadPool(8);
                 try {

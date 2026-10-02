@@ -253,7 +253,14 @@ public final class StringPattern implements Predicate<String> {
      * @param steps for each state and kind, at {@code state * kinds + kind}, the state it leads to,
      *              or -1 where it leads nowhere or to a state from which no walk is accepted
      */
-    private record Ascii(byte[] kind, int kinds, int[] steps) {}
+    private record Ascii(byte[] kind, int kinds, int[] steps) {
+
+        /** Where ASCII character {@code unit} leads from {@code state}, or -1 where it leads nowhere
+         *  or to a state from which no walk is accepted. */
+        int next(int state, char unit) {
+            return steps[state * kinds + kind[unit]];
+        }
+    }
 
     /** The sets of states a walk has been found to be in, for a machine walked as sets of states:
      *  one that is not deterministic, or one that is and has neither a {@link #table} nor
@@ -1137,7 +1144,7 @@ public final class StringPattern implements Predicate<String> {
         while (at < length) {
             ask(checkpoint);
             char unit = value.charAt(at);
-            int each = unit < ASCII ? classes.ascii(unit) : classes.at(value, at);
+            int each = classes.at(value, at);
             if (each < 0) {
                 return false;
             }
@@ -1177,7 +1184,7 @@ public final class StringPattern implements Predicate<String> {
             ask(checkpoint);
             char unit = value.charAt(at);
             if (table != null && unit < ASCII) {
-                state = table.steps()[state * table.kinds() + table.kind()[unit]];
+                state = table.next(state, unit);
                 at++;
             } else {
                 if (!live[state]) {
@@ -1215,13 +1222,13 @@ public final class StringPattern implements Predicate<String> {
             }
             char unit = value.charAt(at);
             if (table != null && unit < ASCII) {
-                state = table.steps()[state * table.kinds() + table.kind()[unit]];
+                state = table.next(state, unit);
                 at++;
                 continue;
             }
             int each;
             if (known != null) {
-                each = unit < ASCII ? known.ascii(unit) : known.at(value, at);
+                each = known.at(value, at);
                 if (each < 0) {
                     return false;
                 }
@@ -1287,7 +1294,7 @@ public final class StringPattern implements Predicate<String> {
         while (at < length) {
             ask(checkpoint);
             char unit = value.charAt(at);
-            int each = unit < ASCII ? classes.ascii(unit) : classes.at(value, at);
+            int each = classes.at(value, at);
             if (each < 0) {
                 return false;
             }

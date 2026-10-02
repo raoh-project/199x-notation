@@ -7,6 +7,7 @@ mod image;
 mod machine;
 mod read;
 mod states;
+mod subject;
 mod symbols;
 mod tree;
 mod walk;

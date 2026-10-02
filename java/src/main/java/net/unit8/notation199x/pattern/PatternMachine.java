@@ -25,12 +25,13 @@ import org.jspecify.annotations.Nullable;
 public final class PatternMachine {
 
     private final Automaton shaped;
-    private final @Nullable Automaton deterministic;
+    /** The deterministic machine as its classes and rows, or null where making it was past
+     *  {@link #deterministicRun}. The machine they were taken from is not kept: its rows, as wide
+     *  as its classes, are what these hold in spans. */
     private final @Nullable ClassRows rows;
 
     private PatternMachine(Automaton shaped, @Nullable Automaton deterministic) {
         this.shaped = shaped;
-        this.deterministic = deterministic;
         this.rows = deterministic == null ? null : ClassRows.of(deterministic);
     }
 
@@ -128,15 +129,16 @@ public final class PatternMachine {
         return shaped;
     }
 
-    /** The deterministic machine, or null where making it was past {@link #deterministicRun}. */
-    @Nullable Automaton deterministic() {
-        return deterministic;
+    /** The rows the deterministic machine is run and written as, or null where making it was past
+     *  {@link #deterministicRun}. */
+    @Nullable ClassRows rows() {
+        return rows;
     }
 
     @Override
     public String toString() {
-        return deterministic != null
-                ? "a deterministic machine of " + deterministic.size() + " states"
+        return rows != null
+                ? "a deterministic machine of " + rows.states() + " states"
                 : "a machine of " + shaped.size() + " states";
     }
 }

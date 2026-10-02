@@ -2,6 +2,8 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use super::subject::read_classes;
+
 /// The most entries a table of where each class leads from each state may hold, as many as Java
 /// gives one: a machine past it is walked over its spans.
 const MOST_ENTRIES: usize = 1 << 18;
@@ -31,7 +33,7 @@ pub(crate) struct ClassRows {
     ends: Vec<u32>,
     to: Vec<u32>,
     /// The class of each ASCII character.
-    ascii: Box<[u32; 128]>,
+    ascii: Box<[usize; 128]>,
     /// Whether a walk from each state can still end at one that accepts.
     live: Vec<bool>,
     /// Where class `k` leads from the state whose row begins at `r` is `table[r + k]`: the place
@@ -58,7 +60,7 @@ impl ClassRows {
             while lasts[piece] < c as u32 {
                 piece += 1;
             }
-            *class = classes[piece];
+            *class = classes[piece] as usize;
         }
         let live = live(&accepting, &starts, &to);
         let mut rows = ClassRows {
@@ -99,71 +101,49 @@ impl ClassRows {
         rows
     }
 
-    /// The class of `c`: by its byte where it is ASCII, and otherwise that of the first piece that
-    /// ends at it or after.
-    fn class(&self, c: char) -> u32 {
-        if c.is_ascii() {
-            self.ascii[c as usize]
-        } else {
-            self.classes[self.lasts.partition_point(|&last| last < u32::from(c))]
-        }
+    /// The class of `c`, which is past ASCII: that of the first piece that ends at it or after.
+    fn class_of(&self, c: char) -> usize {
+        self.classes[self.lasts.partition_point(|&last| last < u32::from(c))] as usize
     }
 
-    /// Whether the whole of `subject` is accepted: the one walk from state 0, a scalar value at a
-    /// time, which stops at a state no walk is accepted from.
+    /// Whether the whole of `subject` is accepted: the one walk from state 0, a class at a time,
+    /// which stops at a state no walk is accepted from. The subject is read as every walk reads one
+    /// ([`read_classes`]); where a class leads is a lookup in the [`ClassRows::table`] where there
+    /// is one, and otherwise a search of the state's spans.
     pub(crate) fn matches(&self, subject: &str) -> bool {
-        if !self.table.is_empty() {
-            return self.look(subject);
-        }
-        let mut q = 0;
-        for c in subject.chars() {
-            if !self.live[q] {
-                return false;
-            }
-            let class = self.class(c);
-            let (from, to) = (self.starts[q], self.starts[q + 1]);
-            let span = self.ends[from..to].partition_point(|&end| end < class);
-            q = self.to[from + span] as usize;
-        }
-        self.accepting[q]
-    }
-
-    /// [`ClassRows::matches`] over the [`ClassRows::table`]: a scalar value is a lookup of its class
-    /// and of where that leads. An ASCII character is its byte, four at a time where four are
-    /// ASCII, as a walk over the steps reads them; any other is decoded.
-    fn look(&self, subject: &str) -> bool {
         if !self.live[0] {
             return false;
         }
-        let (table, ascii) = (&self.table[..], &self.ascii[..]);
-        let mut row = 0u32;
-        let mut rest = subject;
-        loop {
-            if let Some(&[a, b, c, d]) = rest
-                .as_bytes()
-                .first_chunk::<4>()
-                .filter(|four| u32::from_ne_bytes(**four) & 0x8080_8080 == 0)
-            {
-                for byte in [a, b, c, d] {
-                    row = table[row as usize + ascii[usize::from(byte)] as usize];
-                    if row == DEAD {
-                        return false;
-                    }
-                }
-                rest = &rest[4..];
-                continue;
-            }
-            let mut chars = rest.chars();
-            let Some(c) = chars.next() else {
-                break;
-            };
-            rest = chars.as_str();
-            row = table[row as usize + self.class(c) as usize];
-            if row == DEAD {
-                return false;
-            }
+        let mut at = 0;
+        if self.table.is_empty() {
+            let mut q = 0;
+            let stopped = read_classes(
+                subject,
+                &mut at,
+                &self.ascii,
+                |c| self.class_of(c),
+                &mut q,
+                |q, class| {
+                    let (from, to) = (self.starts[q as usize], self.starts[q as usize + 1]);
+                    let span = self.ends[from..to].partition_point(|&end| (end as usize) < class);
+                    self.to[from + span]
+                },
+                |q| !self.live[q as usize],
+            );
+            return stopped.is_none() && self.accepting[q as usize];
         }
-        self.accepting[row as usize / self.width]
+        let table = &self.table[..];
+        let mut row = 0;
+        let stopped = read_classes(
+            subject,
+            &mut at,
+            &self.ascii,
+            |c| self.class_of(c),
+            &mut row,
+            |row, class| table[row as usize + class],
+            |row| row == DEAD,
+        );
+        stopped.is_none() && self.accepting[row as usize / self.width]
     }
 }
 

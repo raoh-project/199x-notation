@@ -60,7 +60,7 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
             Meter meter = Held.roomy();
             assertTrue(Held.canonical(meaning, meter) != null);
             assertNull(meter.stoppedBy());
-            assertTrue(PatternMachine.of(meaning).deterministic() != null,
+            assertTrue(PatternMachine.of(meaning).rows() != null,
                     "within what a faster run is worth");
         });
     }

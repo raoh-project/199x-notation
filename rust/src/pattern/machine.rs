@@ -76,10 +76,8 @@ pub(crate) struct Classes {
     /// Class `k` is the scalar values from `starts[k]` to the one before `starts[k + 1]`, or to the
     /// last where it is the last class. No class begins at a surrogate.
     starts: Vec<u32>,
-    /// The class of each ASCII character, by its byte. A byte past ASCII is the first of a character
-    /// of two bytes or more, whose class is found by searching `starts`; its place here is 0 and is
-    /// never read, and is here so that a byte looks its class up with no check of its own.
-    ascii: Box<[usize; 256]>,
+    /// The class of each ASCII character, by its byte.
+    ascii: Box<[usize; 128]>,
 }
 
 impl Classes {
@@ -103,7 +101,7 @@ impl Classes {
         starts.dedup();
         let mut classes = Classes {
             starts,
-            ascii: Box::new([0; 256]),
+            ascii: Box::new([0; 128]),
         };
         for c in 0..128u8 {
             classes.ascii[usize::from(c)] = classes.class_of(char::from(c));
@@ -111,9 +109,8 @@ impl Classes {
         classes
     }
 
-    /// The class of each ASCII character, by its byte; the places of the bytes past ASCII are not
-    /// classes.
-    pub(crate) fn ascii(&self) -> &[usize; 256] {
+    /// The class of each ASCII character, by its byte.
+    pub(crate) fn ascii(&self) -> &[usize; 128] {
         &self.ascii
     }
 
@@ -121,16 +118,8 @@ impl Classes {
         self.starts.len()
     }
 
-    /// The class of `c`.
-    pub(crate) fn class(&self, c: char) -> usize {
-        if c.is_ascii() {
-            self.ascii[c as usize]
-        } else {
-            self.class_of(c)
-        }
-    }
-
-    fn class_of(&self, c: char) -> usize {
+    /// The class of `c` found by searching where the classes begin, as a character past ASCII is.
+    pub(crate) fn class_of(&self, c: char) -> usize {
         self.starts.partition_point(|start| *start <= u32::from(c)) - 1
     }
 }
