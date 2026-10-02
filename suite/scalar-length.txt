@@ -1,0 +1,16 @@
+# The length of a text in Unicode scalar values.
+#
+# Source:
+#   Raoh catalog/operations.json — minLength, maxLength, length
+#   Souther specification.adoc — string-code-points
+#
+# text ; length
+ ; 0
+0061 ; 1
+00E9 ; 1
+0065 0301 ; 2
+FFFF ; 1
+10000 ; 1
+1F600 ; 1
+0061 1F600 0062 ; 3
+10FFFF 10FFFF ; 2

@@ -16,6 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * anything else. Every place the reader takes a character from that text is asked here, with each
  * half: a reader that checked only the escapes would hand the half on to a set of symbols, which
  * holds none and says so by throwing.
+ *
+ * <p>That a half written by its number is refused is in {@code suite/pattern-read.txt}. What is here
+ * is the half only a Java string holds as itself, and the refusal Java answers for either.
  */
 class HalfAPairInAPatternIsRefusedHoweverItIsWrittenTest {
 
@@ -66,16 +69,6 @@ class HalfAPairInAPatternIsRefusedHoweverItIsWrittenTest {
             PatternRead.Refused refused = assertInstanceOf(PatternRead.Refused.class,
                     PatternParser.read(pattern), pattern);
             assertEquals(PatternRead.Refusal.A_CHARACTER_NO_STRING_HOLDS, refused.why(), pattern);
-        }
-    }
-
-    @Test
-    void aWholePairIsOneCharacterHoweverItIsWritten() {
-        String pair = HIGH + LOW;
-        for (String pattern : List.of(pair, "[" + pair + "]", "\\uD800\\uDC00", "\\x{10000}")) {
-            Held held = Held.by(pattern);
-            assertEquals(true, held.has(pair), pattern);
-            assertEquals(false, held.has("a"), pattern);
         }
     }
 

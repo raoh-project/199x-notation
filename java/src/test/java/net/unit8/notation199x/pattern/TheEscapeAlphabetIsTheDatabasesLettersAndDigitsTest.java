@@ -6,37 +6,39 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * {@code pattern-escape-alphabet.txt} is an excerpt of {@code DerivedGeneralCategory.txt}, and the
- * excerpt is the file's: its header, and every line of the values it was cut to hold.
+ * The characters a pattern keeps a backslash before are the letters and the decimal digits
+ * {@code DerivedGeneralCategory.txt} states, every one of them and no other.
  */
 class TheEscapeAlphabetIsTheDatabasesLettersAndDigitsTest {
 
     private static final Set<String> KEPT = Set.of("Lu", "Ll", "Lt", "Lm", "Lo", "Nd");
 
     @Test
-    void theExcerptHoldsEveryLineOfItsValuesAndNoOther() throws IOException {
-        List<String> whole = Files.readAllLines(
-                Ucd.file("extracted/DerivedGeneralCategory.txt"), StandardCharsets.UTF_8);
-        List<String> excerpt;
-        try (var in = PatternAlphabet.class.getResourceAsStream("pattern-escape-alphabet.txt")) {
-            excerpt = new String(in.readAllBytes(), StandardCharsets.UTF_8).lines().toList();
+    void theAlphabetIsTheCategoriesAsTheDatabaseStatesThem() throws IOException {
+        Set<Integer> stated = new TreeSet<>();
+        for (String line : Files.readAllLines(
+                Ucd.file("extracted/DerivedGeneralCategory.txt"), StandardCharsets.UTF_8)) {
+            String data = line.replaceFirst("#.*", "").trim();
+            if (!data.contains(";") || !KEPT.contains(data.substring(data.indexOf(';') + 1).trim())) {
+                continue;
+            }
+            String range = data.substring(0, data.indexOf(';')).trim();
+            int dots = range.indexOf("..");
+            int from = Integer.parseInt(dots < 0 ? range : range.substring(0, dots), 16);
+            int to = dots < 0 ? from : Integer.parseInt(range.substring(dots + 2), 16);
+            IntStream.rangeClosed(from, to).forEach(stated::add);
         }
-        assertEquals(whole.get(0), excerpt.get(0));
+        Set<Integer> held = new TreeSet<>();
+        IntStream.rangeClosed(0, Character.MAX_CODE_POINT)
+                .filter(PatternAlphabet::isKeptAfterABackslash).forEach(held::add);
+        assertEquals(stated, held);
         assertEquals(Ucd.VERSION, PatternAlphabet.unicodeVersion());
-        assertEquals(dataLines(whole), dataLines(excerpt));
-    }
-
-    private static List<String> dataLines(List<String> lines) {
-        return lines.stream()
-                .map(line -> line.replaceFirst("#.*", "").trim())
-                .filter(line -> line.contains(";") && KEPT.contains(line.substring(line.indexOf(';') + 1).trim()))
-                .map(line -> line.replaceAll("\\s+", ""))
-                .toList();
     }
 }

@@ -7,9 +7,9 @@ package net.unit8.notation199x;
  *
  * <p>Generated from Unicode 18.0.0's {@code UnicodeData.txt}, {@code CompositionExclusions.txt}
  * and {@code DerivedNormalizationProps.txt}'s quick checks ({@code https://www.unicode.org/Public/18.0.0/ucd/})
- * by {@code gen/GenerateNormalizationTables.java}, checked against {@code DerivedNormalizationProps.txt}'s
+ * by {@code gen/Generate.java}, checked against {@code DerivedNormalizationProps.txt}'s
  * {@code Full_Composition_Exclusion} at generation time.
- * DO NOT EDIT — regenerate on a Unicode version bump with {@code java gen/GenerateNormalizationTables.java ucd/<version>},
+ * DO NOT EDIT — regenerate on a Unicode version bump with {@code java gen/Generate.java ucd/<version>},
  * which this file's source checksums let a reviewer confirm ran against the version it claims.
  *
  * <p>SHA-256, of the three input files as downloaded:

@@ -17,6 +17,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * so every row goes on being accepted and the answer is quietly wrong. The three places it is easy
  * to lose something are the arms of a choice, the ceiling of a repetition, and what a negated class
  * leaves — so those are what this is about.
+ *
+ * <p>What every implementation answers of the same patterns is in {@code suite/pattern-read.txt} and
+ * {@code suite/pattern-match.txt}. The refusals named here, and what each quotes from where, are
+ * Java's: the specifications say which text is refused and not which reason an implementation
+ * answers for it.
  */
 class APatternIsReadAsWhatItAcceptsTest {
 

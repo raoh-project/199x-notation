@@ -3,8 +3,8 @@ package net.unit8.notation199x;
 /**
  * The default case conversion tables {@link CaseConversion} reads: Unicode 18.0.0, untailored full mapping.
  *
- * <p>Generated from Unicode 18.0.0's {@code UnicodeData.txt}, {@code SpecialCasing.txt} and {@code DerivedCoreProperties.txt} ({@code https://www.unicode.org/Public/18.0.0/ucd/}) by {@code gen/GenerateCaseTables.java}. DO NOT EDIT — regenerate on a Unicode
- * version bump with {@code java gen/GenerateCaseTables.java ucd/<version>}, which this file's
+ * <p>Generated from Unicode 18.0.0's {@code UnicodeData.txt}, {@code SpecialCasing.txt} and {@code DerivedCoreProperties.txt} ({@code https://www.unicode.org/Public/18.0.0/ucd/}) by {@code gen/Generate.java}. DO NOT EDIT — regenerate on a Unicode
+ * version bump with {@code java gen/Generate.java ucd/<version>}, which this file's
  * source checksums let a reviewer confirm ran against the version it claims.
  *
  * <p>SHA-256, of the three input files as downloaded:
@@ -64,10 +64,9 @@ final class CaseTables {
 
     /** Code points whose {@link #LOWER} mapping is the untailored default, overridden by this
      *  mapping's result when the code point sits at the end of a cased run (Unicode's
-     *  {@code Final_Sigma} condition) — Unicode 18.0.0 states exactly one such entry, Greek
-     *  capital sigma, mapping to one code point, but nothing here assumes that arity: this
-     *  is the same {@link Mapping} shape {@link #LOWER}/{@link #UPPER} use, read the same way,
-     *  so a future Unicode version's wider Final_Sigma entry needs only regeneration. */
+     *  {@code Final_Sigma} condition), as Unicode 18.0.0 states it (1 code point). A mapping here may be
+     *  of any length; it is the same {@link Mapping} shape {@link #LOWER}/{@link #UPPER} use,
+     *  read the same way. */
     static final Mapping FINAL_SIGMA = decodeMapping("3A3:3C2");
 
     /** {@code Cased} (the property Unicode's {@code Final_Sigma}

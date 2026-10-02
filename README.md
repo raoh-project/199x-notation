@@ -12,8 +12,8 @@ the same way everywhere.
 ## Status
 
 The Java implementation is here, moved from Souther's runtime and compiler. Souther and raoh-java
-do not depend on it yet. The Rust, Go and PHP implementations and `suite/` are not here yet. See the
-issues.
+do not depend on it yet, and it is the first implementation held to `suite/`. The Rust, Go and PHP
+implementations are not here yet. See the issues.
 
 ## What belongs here
 
@@ -30,7 +30,14 @@ issues.
 The normative definitions are in the
 [Raoh Specification](https://github.com/raoh-project/raoh-specification) and the
 [Souther specification](https://github.com/souther-lang/souther/blob/develop/specification.adoc).
-This repository implements them and defines nothing of its own.
+This repository implements them and defines no rule about text of its own: which text is a date, a
+pattern or white space, and what a conversion answers, is theirs to say.
+
+What it does define is how its implementations are called, the same way in every language: the
+machines and images below, the checkpoints, and the bounded forms. For those, and only for those,
+this README is the source. A bounded case conversion or normalization takes the most scalar values
+its answer may hold, answers what the unbounded one does where that answer is no longer than the
+bound, and answers nothing where it is longer.
 
 ## What does not belong here
 
@@ -77,7 +84,7 @@ One directory per language, beside the data they are all generated from and chec
 | Directory | Contents |
 | --- | --- |
 | `ucd/` | The Unicode Character Database files of the pinned version, with their checksums |
-| `gen/` | The programs that generate the tables from `ucd/` |
+| `gen/` | The program that generates the tables from `ucd/` |
 | `suite/` | Test vectors every implementation runs |
 | `java/` | Maven artifact `net.unit8.199x:199x-notation`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
@@ -88,11 +95,19 @@ Tables are generated from `ucd/` and checked in. Generation is run by hand and n
 build: taking a later Unicode version is a change to the specifications, not a dependency update.
 
 ```sh
-java gen/GenerateCaseTables.java ucd/18.0.0
-java gen/GenerateNormalizationTables.java ucd/18.0.0
+java gen/Generate.java ucd/18.0.0
 ```
 
-The Java tests read `ucd/`, so they run in `java/`:
+The generator reads the database once into one model, where every table is derived and checked
+against the properties Unicode publishes, and writes each language's tables from that model with an
+emitter of its own. An emitter decides how its language holds the data and nothing about Unicode, so
+every language's tables are the same data. No table is written by hand or read from a resource at
+run time.
+
+The vectors in `suite/` are what every implementation is held to, in a format each language reads
+with its standard library; `suite/README.md` states it.
+
+The Java tests read `ucd/` and `suite/`, so they run in `java/`:
 
 ```sh
 cd java && mvn test
@@ -101,7 +116,7 @@ cd java && mvn test
 Both packages are `@NullMarked`, and NullAway checks the main sources against that on every
 compile. Nothing else of Error Prone runs.
 
-CI checks the files in `ucd/` against their checksums, runs the generators and fails if the
+CI checks the files in `ucd/` against their checksums, runs the generator and fails if the
 checked-in tables differ, and runs the tests.
 
 ## Releasing
