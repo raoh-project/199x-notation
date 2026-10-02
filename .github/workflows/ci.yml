@@ -5,6 +5,8 @@ on:
     branches: [develop, main]
     tags: ['v*', 'go/v*']
   pull_request:
+  # The PHP release runs all of this on the commit it releases before it publishes anything.
+  workflow_call:
 
 jobs:
   java:
@@ -102,6 +104,38 @@ jobs:
         env:
           NOTATION199X_REQUIRE_SUITE: '1'
         run: cargo test
+
+  php:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest PHP composer.json takes, and the newest.
+        php: ['8.2', '8.5']
+    steps:
+      - uses: actions/checkout@v5
+      # Without intl, so that a rule that asked it would fail here. PHPUnit needs mbstring and
+      # Composer needs it or iconv, so those stay, and HostTest holds the sources to not asking
+      # either.
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: :intl
+          coverage: none
+      - name: Validate composer.json
+        working-directory: php
+        run: composer validate --strict
+      - name: Install the tools
+        working-directory: php
+        run: composer install --no-progress
+      - name: PHPStan
+        working-directory: php
+        run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
+      # A checkout holds ucd/ and suite/, and a test that does not find them fails rather than skips.
+      - name: Test
+        working-directory: php
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: vendor/bin/phpunit
 
   # Java writes an image of each pattern of the suite, and Rust reads it and answers what the suite
   # says the pattern accepts. Apart from the rust job, so that what Rust answers alone is not held up
