@@ -33,6 +33,18 @@ final class Machine
      */
     public static int $knownBytes = 2 << 20;
 
+    /**
+     * How much walking without kept sets is done after keeping them is given up on, before keeping
+     * them is tried again: counted as one for each walk, for the set it starts in, and one for each
+     * byte of the subject walked. Each time a try ends in giving up again the wait doubles, so what
+     * the tries cost stays a part of that walking that gets smaller.
+     *
+     * It is what was walked and not what was handed in that is counted. An empty subject is walked
+     * too, from the set a walk starts in, and so many of them lead to a try as surely as long ones
+     * do; a long subject turned away at its first character counts that character, not its length.
+     */
+    public static int $retryWork = 16 * (2 << 20);
+
     /** About what one number in a list takes. */
     private const NUMBER_BYTES = 16;
     /** About what one step a kept set holds takes. */
@@ -80,6 +92,12 @@ final class Machine
     private int $read = 0;
     /** Whether keeping sets was given up on. */
     private bool $off = false;
+    /** What has been walked since keeping sets was given up on, counted as $retryWork says. */
+    private int $offWork = 0;
+    /** How much is walked before keeping sets is tried again, $retryWork where it is nought. */
+    private int $offFor = 0;
+    /** Whether keeping sets is being tried again, so that giving up waits longer. */
+    private bool $retrying = false;
 
     private function __construct()
     {
@@ -159,7 +177,7 @@ final class Machine
                 $run = strspn($subject, $this->keptLoop[$in], $at);
                 if ($run > 0) {
                     $at += $run;
-                    $this->read += $run;
+                    $this->read = self::grown($this->read, $run);
                     continue;
                 }
             }
@@ -170,7 +188,7 @@ final class Machine
                 $next = $this->keptNext[$in][$character] ?? -1;
                 if ($next >= 0) {
                     $in = $next;
-                    $this->read++;
+                    $this->read = self::grown($this->read, 1);
                     if ($this->keptStates[$next] === []) {
                         return false;
                     }
@@ -200,8 +218,15 @@ final class Machine
         }
         $now = [];
         $this->enter($now, 0);
+        // While keeping sets is given up on, it is tried again once what has been walked since is
+        // what it waits for.
         if ($this->off) {
-            return -1;
+            if ($this->offWork < $this->wait()) {
+                $this->walkedAlone(1);
+                return -1;
+            }
+            $this->off = false;
+            $this->retrying = true;
         }
         [$this->first] = $this->keep($now);
         return $this->first;
@@ -220,9 +245,12 @@ final class Machine
         $symbol = Utf8::decode($character);
         if ($in < 0) {
             $now = $this->advance(array_keys($now), $symbol);
+            // The one place a walk without kept sets steps, so what such walks walk is counted
+            // here, whether keeping sets was given up on before the walk or during it.
+            $this->walkedAlone(strlen($character));
             return $now !== [];
         }
-        $this->read++;
+        $this->read = self::grown($this->read, 1);
         $from = $in;
         $now = $this->advance($this->keptStates[$from], $symbol);
         [$next, $forgot] = $this->keep($now);
@@ -306,9 +334,13 @@ final class Machine
      * Which sets are kept, and whether any are, changes how fast a walk is and no answer. Where
      * they would be more than about $knownBytes, they are forgotten and worked out again as they
      * are come to. Where what was worked out since they were last forgotten was looked up again
-     * less than once in ten, keeping them saves nothing: the walk goes on without them, and so
-     * does every later walk of the machine. A machine whose sets are large, or subjects that keep
-     * coming to new ones, are walked a state at a time as without them.
+     * less than once in ten, keeping them saves nothing: the walk goes on without them, and so do
+     * the walks of the machine after it, until they have walked $retryWork. Then keeping sets is
+     * tried again, as by a machine that has kept none: a pattern may be held for long, and what was
+     * looked up too seldom then says nothing about the subjects read later. A try that gives up
+     * again waits twice as long before the next, and one that keeps sets long enough to forget them
+     * waits again as long as the first. A machine whose sets are large, or subjects that keep
+     * coming to new ones, are walked a state at a time as without them, but for the tries.
      *
      * @param array<int, true> $now
      * @return array{int, bool}
@@ -329,9 +361,13 @@ final class Machine
             $gaveUp = $this->read < 10 * $this->made || $cost > self::$knownBytes;
             $this->forget();
             if ($gaveUp) {
-                $this->off = true;
+                $this->giveUp();
                 return [-1, true];
             }
+            // The sets were looked up often enough to be worth keeping, so a later give-up waits
+            // as long as the first.
+            $this->offFor = 0;
+            $this->retrying = false;
             $forgot = true;
             $this->charge($cost);
         }
@@ -343,6 +379,46 @@ final class Machine
         $this->index[$key] = $set;
         $this->made++;
         return [$set, $forgot];
+    }
+
+    /**
+     * How much is walked without kept sets before keeping them is tried again.
+     */
+    private function wait(): int
+    {
+        return $this->offFor === 0 ? self::$retryWork : $this->offFor;
+    }
+
+    /**
+     * Walks the walks after this without kept sets, until wait() is walked.
+     */
+    private function giveUp(): void
+    {
+        if ($this->retrying) {
+            $this->offFor = self::grown($this->wait(), $this->wait());
+        }
+        $this->retrying = false;
+        $this->off = true;
+        // The walk that gave up goes on without kept sets from the set it is in, which counts one.
+        $this->offWork = 1;
+    }
+
+    /**
+     * Counts what a walk without kept sets walked toward trying to keep them again, as $retryWork
+     * says.
+     */
+    private function walkedAlone(int $work): void
+    {
+        $this->offWork = self::grown($this->offWork, $work);
+    }
+
+    /**
+     * $a + $b for counts that only grow, held at the most an int holds rather than becoming a
+     * float, which a typed property would refuse.
+     */
+    public static function grown(int $a, int $b): int
+    {
+        return $a > PHP_INT_MAX - $b ? PHP_INT_MAX : $a + $b;
     }
 
     /**

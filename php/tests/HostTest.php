@@ -42,6 +42,7 @@ final class HostTest extends TestCase
         'Raoh\\Notation199x\\CaseConversion::$stops' => 'two strings of the ASCII characters the tables name, 128 lookups each',
         'Raoh\\Notation199x\\Internal\\Composing::$decompositions' => 'the full decompositions asked for, no more than the tables hold',
         'Raoh\\Notation199x\\Internal\\Pattern\\Machine::$knownBytes' => 'the room a machine keeps sets in, which a test sets',
+        'Raoh\\Notation199x\\Internal\\Pattern\\Machine::$retryWork' => 'how much a machine walks before it tries keeping sets again, which a test may set',
     ];
 
     /**
