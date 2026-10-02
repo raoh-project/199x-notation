@@ -20,11 +20,10 @@ jobs:
       - name: Check the UCD files against their checksums
         working-directory: ucd/18.0.0
         run: sha256sum --check --strict SHA256SUMS
-      # The checked-in tables are what the generators write from those inputs.
+      # The checked-in tables are what the generator writes from those inputs.
       - name: Regenerate the tables
         run: |
-          java gen/GenerateCaseTables.java ucd/18.0.0
-          java gen/GenerateNormalizationTables.java ucd/18.0.0
+          java gen/Generate.java ucd/18.0.0
           git diff --exit-code
       - name: Test
         working-directory: java

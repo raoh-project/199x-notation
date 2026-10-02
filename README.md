@@ -77,7 +77,7 @@ One directory per language, beside the data they are all generated from and chec
 | Directory | Contents |
 | --- | --- |
 | `ucd/` | The Unicode Character Database files of the pinned version, with their checksums |
-| `gen/` | The programs that generate the tables from `ucd/` |
+| `gen/` | The program that generates the tables from `ucd/` |
 | `suite/` | Test vectors every implementation runs |
 | `java/` | Maven artifact `net.unit8.199x:199x-notation`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
@@ -88,8 +88,7 @@ Tables are generated from `ucd/` and checked in. Generation is run by hand and n
 build: taking a later Unicode version is a change to the specifications, not a dependency update.
 
 ```sh
-java gen/GenerateCaseTables.java ucd/18.0.0
-java gen/GenerateNormalizationTables.java ucd/18.0.0
+java gen/Generate.java ucd/18.0.0
 ```
 
 The Java tests read `ucd/`, so they run in `java/`:
