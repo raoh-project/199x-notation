@@ -481,7 +481,10 @@ mod tests {
         (t.hour, t.minute, t.second, t.nanosecond)
     }
 
-    fn offset(text: &str) -> ((i32, u8, u8), (u8, u8, u8, u32), i32) {
+    /// The date, the time and the offset read, as tuples.
+    type OffsetRead = ((i32, u8, u8), (u8, u8, u8, u32), i32);
+
+    fn offset(text: &str) -> OffsetRead {
         let o = read_offset_date_time(text).unwrap();
         let (d, t) = (o.date_time.date, o.date_time.time);
         (
