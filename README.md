@@ -266,9 +266,10 @@ first release is `php/v0.1.0`.
 
 1. Merge what is to be released into `main`, as for a Java release.
 2. Tag the commit on `main` `php/vX.Y.Z` and push the tag. The `PHP release` workflow fails a tag
-   that is not `php/` and a version, or that names a commit not on `main`. It runs the PHP tests on
-   the commit, writes the files git tracks under `php/` and the license as one commit on the
-   mirror's `main`, and tags it `vX.Y.Z` with a message naming the commit here it was written from.
+   that is not `php/` and a version, or that names a commit not on `main`. It runs the whole of CI
+   on the commit, and only once that passes writes the files git tracks under `php/` and the
+   license as one commit on the mirror's `main`, and tags it `vX.Y.Z` with a message naming the
+   commit here it was written from.
 3. Packagist takes the version from the mirror's tag, by the mirror's webhook.
 
 A tag that has been pushed is never moved, here or on the mirror: Packagist keeps the commit a

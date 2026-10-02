@@ -5,6 +5,8 @@ on:
     branches: [develop, main]
     tags: ['v*', 'go/v*']
   pull_request:
+  # The PHP release runs all of this on the commit it releases before it publishes anything.
+  workflow_call:
 
 jobs:
   java:

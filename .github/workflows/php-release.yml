@@ -19,13 +19,17 @@ defaults:
     shell: bash
 
 jobs:
-  publish:
+  tag:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: The tag is a version on main
+        id: version
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           version="${tag#php/}"
@@ -37,22 +41,24 @@ jobs:
             echo "::error::$tag names a commit that is not on main"
             exit 1
           fi
-          echo "TAG=$tag" >> "$GITHUB_ENV"
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
-          extensions: :intl
-          coverage: none
-      # What is released is what the tests pass on, at the commit the tag names.
-      - name: Test
-        working-directory: php
-        env:
-          NOTATION199X_REQUIRE_SUITE: '1'
-        run: |
-          composer validate --strict
-          composer install --no-progress
-          vendor/bin/phpunit
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Everything CI checks of a commit, on the commit the tag names: the checksums of ucd/, that the
+  # generator writes the tables that are checked in, PHPStan, and the tests of every implementation
+  # on the oldest and the newest PHP. What is published is a commit all of that passed on.
+  ci:
+    needs: tag
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [tag, ci]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+      VERSION: ${{ needs.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
       # Pinned to a commit, since it is handed the key.
       - uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
