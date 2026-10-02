@@ -209,3 +209,27 @@ fn pattern_states_are_counted_as_every_line_of_the_suite_says() {
         None
     });
 }
+
+#[test]
+fn patterns_accept_what_every_line_of_the_suite_says() {
+    each_line("suite/pattern-match.txt", 3, |line| {
+        let pattern = line.text(0);
+        let subject = line.text(1);
+        let accepted = line.yes_or_no(2);
+        let PatternRead::Pattern(read) = read_pattern(&pattern) else {
+            return Some(format!(
+                "{} is not read: {:?}",
+                shown(&pattern),
+                read_pattern(&pattern)
+            ));
+        };
+        (read.matches(&subject) != accepted).then(|| {
+            format!(
+                "{} accepts {}: {}",
+                shown(&pattern),
+                shown(&subject),
+                !accepted
+            )
+        })
+    });
+}

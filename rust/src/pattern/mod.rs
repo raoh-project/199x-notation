@@ -2,6 +2,7 @@
 //! the strings a pattern accepts.
 
 mod anchors;
+mod machine;
 mod read;
 mod states;
 mod symbols;
@@ -9,8 +10,8 @@ mod tree;
 
 use alloc::string::{String, ToString};
 
+use machine::Machine;
 use read::Reader;
-use tree::Tree;
 
 /// What came of reading a pattern.
 ///
@@ -34,10 +35,20 @@ pub enum PatternRead {
 
 /// A pattern that was read, as the strings it accepts.
 pub struct Pattern {
-    #[expect(dead_code, reason = "a match is built from it")]
-    tree: Tree,
-    #[expect(dead_code, reason = "a match is built from it")]
-    meaning: usize,
+    machine: Machine,
+}
+
+impl Pattern {
+    /// Whether the whole of `subject` is one of the strings the pattern accepts.
+    ///
+    /// The subject is read a scalar value at a time, once, and never gone back over: the machine the
+    /// pattern means is walked as the set of states it may be in, so for a pattern a match takes
+    /// time linear in the subject. The machine is built from the shape of the pattern, its
+    /// repetitions written out, and is not made deterministic, so each scalar value may cost as many
+    /// steps as the machine has states, which for a pattern read from text is at most 250,000.
+    pub fn matches(&self, subject: &str) -> bool {
+        self.machine.matches(subject)
+    }
 }
 
 impl core::fmt::Debug for Pattern {
@@ -187,5 +198,45 @@ pub fn read_pattern(text: &str) -> PatternRead {
             construct: text.to_string(),
         });
     }
-    PatternRead::Pattern(Pattern { tree, meaning })
+    PatternRead::Pattern(Pattern {
+        machine: machine::build(tree, meaning),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The machine a pattern's shape builds has no more states than the pattern is counted at, so a
+    /// pattern within the limit has a machine within it.
+    #[test]
+    fn a_machine_has_no_more_states_than_its_pattern_is_counted_at() {
+        for text in [
+            "",
+            "a",
+            "abc",
+            "a|b|",
+            "(a|b)*c",
+            "a{3,5}",
+            "(?:ab){2,}",
+            "(?:)*",
+            "(?:(?:)|a){4}",
+            "^a$",
+            "a^",
+            "(?:a|^b)",
+            "[^a]?.\\d",
+            "(?:a?){0,7}b+",
+        ] {
+            let mut reader = Reader::new(text);
+            let written = reader
+                .pattern()
+                .unwrap_or_else(|_| panic!("{text} is refused"));
+            let mut tree = reader.tree;
+            let counted = states::written_states(&tree, written);
+            let meaning = anchors::place_anchors(&mut tree, written)
+                .unwrap_or_else(|| panic!("{text}: no anchor placed"));
+            let built = machine::build(tree, meaning).states() as u64;
+            assert!(built <= counted, "{text}: built {built}, counted {counted}");
+        }
+    }
 }
