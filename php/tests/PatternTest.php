@@ -320,6 +320,49 @@ final class PatternTest extends TestCase
     }
 
     /**
+     * A run of ASCII characters that leads a kept set back to itself is gone past at once, which
+     * changes no answer: long subjects, where runs end in a character that leads elsewhere, at the
+     * end or partway, answer as a walk that keeps nothing and goes a character at a time.
+     */
+    public function testARunGonePastAtOnceChangesNoAnswer(): void
+    {
+        $patterns = ['[a-z ]*', '[a-z ]*x', 'a*b*', '(?:ab)*', '[^x]*x[^x]*', '(?:[a-z]+ )*[a-z]+', '.*é.*', '[ -~]{0,500}'];
+        $subjects = [
+            str_repeat('lorem ipsum ', 100),
+            str_repeat('lorem ipsum ', 100) . 'x',
+            str_repeat('a', 300) . str_repeat('b', 300),
+            str_repeat('ab', 300) . 'a',
+            str_repeat('y', 200) . 'x' . str_repeat('y', 200),
+            str_repeat('y', 200) . 'x' . str_repeat('y', 200) . 'x',
+            str_repeat('word ', 99) . 'word',
+            str_repeat('a', 250) . 'é' . str_repeat('a', 250),
+            str_repeat('~', 500),
+            str_repeat('~', 501),
+            '',
+        ];
+        $was = Machine::$knownBytes;
+        try {
+            foreach ($patterns as $pattern) {
+                $answers = [];
+                foreach ([0, 2 << 20] as $room) {
+                    Machine::$knownBytes = $room;
+                    $read = self::read($pattern);
+                    $these = [];
+                    for ($round = 0; $round < 2; $round++) {
+                        foreach ($subjects as $subject) {
+                            $these[] = $read->matches($subject);
+                        }
+                    }
+                    $answers[] = $these;
+                }
+                self::assertSame($answers[0], $answers[1], $pattern);
+            }
+        } finally {
+            Machine::$knownBytes = $was;
+        }
+    }
+
+    /**
      * A match takes time linear in the subject: a subject ten times as long takes about ten times
      * as long, for a pattern a backtracking engine takes exponential time on.
      */

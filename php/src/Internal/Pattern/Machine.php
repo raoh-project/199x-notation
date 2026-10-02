@@ -64,6 +64,11 @@ final class Machine
     private array $keptAccepts = [];
     /** @var list<array<string, int>> where each character read from each kept set leads, by its UTF-8 bytes */
     private array $keptNext = [];
+    /**
+     * @var array<int, string> for each kept set, the ASCII characters it has been seen to lead back to
+     *      itself by, so that a run of them is gone past at once
+     */
+    private array $keptLoop = [];
     /** The kept set a walk starts in, or -1 where it is not known. */
     private int $first = -1;
     private int $bytes = 0;
@@ -141,6 +146,18 @@ final class Machine
         $in = $this->begin($now);
         $length = strlen($subject);
         for ($at = 0; $at < $length;) {
+            // A run of ASCII characters each of which leads from the set the walk is in back to
+            // it, gone past in one call: the walk is in the same set after it, and only a step
+            // already worked out is taken so. A checkpoint added to a match later bounds the run
+            // by strspn's length.
+            if ($in >= 0 && $this->keptLoop[$in] !== '') {
+                $run = strspn($subject, $this->keptLoop[$in], $at);
+                if ($run > 0) {
+                    $at += $run;
+                    $this->read += $run;
+                    continue;
+                }
+            }
             $width = Utf8::width(ord($subject[$at]));
             $character = $width === 1 ? $subject[$at] : substr($subject, $at, $width);
             $at += $width;
@@ -209,6 +226,9 @@ final class Machine
         // leads is kept only where there is room for it.
         if ($next >= 0 && !$forgot && (strlen($character) === 1 || $this->charge(self::STEP_BYTES))) {
             $this->keptNext[$from][$character] = $next;
+            if ($next === $from && strlen($character) === 1) {
+                $this->keptLoop[$from] .= $character;
+            }
         }
         $in = $next;
         if ($next >= 0) {
@@ -311,6 +331,7 @@ final class Machine
         $this->keptStates[] = $states;
         $this->keptAccepts[] = isset($now[$this->accept]);
         $this->keptNext[] = [];
+        $this->keptLoop[] = '';
         $this->index[$key] = $set;
         $this->made++;
         return [$set, $forgot];
@@ -340,6 +361,7 @@ final class Machine
         $this->keptStates = [];
         $this->keptAccepts = [];
         $this->keptNext = [];
+        $this->keptLoop = [];
         $this->first = -1;
         $this->bytes = 0;
         $this->made = 0;

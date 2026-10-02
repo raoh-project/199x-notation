@@ -466,6 +466,12 @@ final class Reader
         if ($this->done()) {
             $this->refuse(PatternRefusal::SomethingUnclosed);
         }
+        // ASCII, which most of a pattern is, is its own scalar value and no surrogate.
+        $byte = ord($this->text[$this->at]);
+        if ($byte < 0x80) {
+            $this->at++;
+            return $byte;
+        }
         [$written, $width] = $this->characterHere();
         $this->at += $width;
         if ($written < 0) {
@@ -549,7 +555,7 @@ final class Reader
             $this->refuse(PatternRefusal::SomethingUnclosed);
         }
         $first = ord($this->text[$this->at]);
-        $this->at += $this->characterHere()[1];
+        $this->at += $first < 0x80 ? 1 : $this->characterHere()[1];
         return $first;
     }
 

@@ -89,26 +89,37 @@ final class Symbols
      */
     public static function normalized(array $given): array
     {
-        $runs = [];
-        for ($i = 0, $n = count($given); $i < $n; $i += 2) {
-            $runs[] = [$given[$i], $given[$i + 1]];
+        $count = count($given);
+        if ($count === 2) {
+            return $given;
         }
-        usort($runs, static fn (array $a, array $b): int => [$a[0], $a[1]] <=> [$b[0], $b[1]]);
+        // Each run as one number, its first code point above its last, which a code point's 21
+        // bits leave room for: sorted by sort() and not by a comparison PHP calls back into.
+        $runs = [];
+        for ($i = 0; $i < $count; $i += 2) {
+            $runs[] = ($given[$i] << 21) | $given[$i + 1];
+        }
+        sort($runs);
         $out = [];
-        // The run being joined, which is written out once a run apart from it comes.
-        $joining = null;
-        foreach ($runs as [$first, $last]) {
-            if ($joining !== null && $first <= $joining[1] + 1) {
-                $joining[1] = max($joining[1], $last);
+        $first = -1;
+        $last = -2;
+        foreach ($runs as $run) {
+            $from = $run >> 21;
+            $to = $run & 0x1FFFFF;
+            if ($from <= $last + 1) {
+                $last = max($last, $to);
                 continue;
             }
-            if ($joining !== null) {
-                array_push($out, ...$joining);
+            if ($first >= 0) {
+                $out[] = $first;
+                $out[] = $last;
             }
-            $joining = [$first, $last];
+            $first = $from;
+            $last = $to;
         }
-        if ($joining !== null) {
-            array_push($out, ...$joining);
+        if ($first >= 0) {
+            $out[] = $first;
+            $out[] = $last;
         }
         return $out;
     }
