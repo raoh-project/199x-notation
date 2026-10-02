@@ -64,9 +64,13 @@ caller takes. A caller that runs a pattern where it reads it takes the matcher. 
 machine elsewhere, as a compiler writing it into a class does, writes it out as an image, and what
 runs the class runs a match from the image: writing an image and running a match from one are two
 entry points, and an implementation may have either without the other. Only the image has a size of
-its own. An image begins with the format it is written in, and an implementation that runs a match
-from an image reads every format an earlier release wrote, so a class compiled against one release
-runs against a later one.
+its own. An image begins with the format it is written in. The formats are this repository's, one
+set whichever implementation writes or reads an image, and an implementation that runs a match from
+an image reads every format this repository has defined up to that implementation's release: an
+image in any of them runs on it, whichever implementation wrote it, so a class Souther compiled
+against one release runs against a later one. P1, the one format so far, is written down only in the
+Java implementation. Before another implementation runs a match from an image, it is written down
+apart from any implementation's code, so that each reads one definition.
 
 What a caller asks about the patterns it holds beyond that, and how much it is willing to spend on
 an answer, is the caller's. The operations on machines take their limits as an argument. Souther's
@@ -137,6 +141,9 @@ CI checks the files in `ucd/` against their checksums, runs the generator and fa
 checked-in tables differ, and runs the tests.
 
 ## Releasing
+
+These are the Java artifact's releases. Another implementation's are written beside them when it is
+first published (#11, #12).
 
 `develop` holds the next version as a snapshot, `X.Y.Z-SNAPSHOT`, and a release is that version
 without the suffix. A snapshot is deployed from anywhere with `cd java && mvn clean deploy`. A
