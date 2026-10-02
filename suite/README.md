@@ -4,8 +4,9 @@ The vectors every implementation runs. An implementation agrees with another bec
 every line here, and not because their code happens to. Each language has a test that reads these
 files with its standard library and holds the implementation to every line.
 
-Normalization is not here: it is held to `ucd/18.0.0/NormalizationTest.txt`, which Unicode publishes
-for that and which is read the same way.
+Normalization without a bound is not here: it is held to `ucd/18.0.0/NormalizationTest.txt`, which
+Unicode publishes for that and which is read the same way. Normalization in a bound is here, and the
+normalized text of each line is the one that file states.
 
 ## What a line holds
 
@@ -28,6 +29,7 @@ A field is added to a file once a source decides it, and not before.
 | File | A line | What is held |
 | --- | --- | --- |
 | `case.txt` | text ; direction ; bound ; outcome ; mapped | Default case conversion, with `Final_Sigma` and the bounded forms |
+| `normalization-bound.txt` | text ; form ; bound ; outcome ; normalized | Normalization in the four forms, in a bound |
 | `white-space.txt` | code point | The `White_Space` set, every member of it |
 | `scalar-length.txt` | text ; length | Length in scalar values |
 | `scalar-order.txt` | a ; b ; order | Order by scalar values |
@@ -55,7 +57,7 @@ Every file is UTF-8, and a line of vectors is ASCII.
   more spaces. The empty text is an empty field. A surrogate is no scalar value, so no text here holds
   one.
 - A number is unsigned decimal, and each file says what it counts: the length of a text and a bound
-  on a conversion count scalar values, and a pattern's states count states.
+  on a conversion or a normalization count scalar values, and a pattern's states count states.
 - Anything else, a direction, an outcome or a limit, is an upper case identifier the file's comment
   lists, and a yes or no is `true` or `false`.
 
