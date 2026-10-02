@@ -186,11 +186,11 @@ cd php && composer install && vendor/bin/phpunit
 
 A package made from `php/` holds only what is under it, so as for Go and Rust, the tests that read
 files outside it are skipped where the files are not there, and `NOTATION199X_REQUIRE_SUITE` makes
-that a failure. The package needs a 64-bit PHP 8.2 or later and no extension, and CI tests it on
-the oldest PHP it takes and the newest, without intl, and runs PHPStan at its highest level over
-it. PHPUnit needs mbstring, so a test holds the sources to asking neither mbstring nor iconv. A
-PHP string is bytes, so the question a caller asks before it takes text in is whether the string
-is UTF-8, and a pattern reader refuses one that is not.
+that a failure. The package needs a 64-bit PHP 8 from 8.2 on, as its `composer.json` requires, and
+no extension, and CI tests it on the oldest PHP it takes and the newest, without intl, and runs
+PHPStan at its highest level over it. PHPUnit needs mbstring, so a test holds the sources to asking
+neither mbstring nor iconv. A PHP string is bytes, so the question a caller asks before it takes
+text in is whether the string is UTF-8, and a pattern reader refuses one that is not.
 
 The limits on a pattern are not lowered by how PHP holds one. Nothing whose number grows with a
 pattern is a PHP array or object of its own: a pattern's tree, its sets of symbols and its machine
@@ -272,8 +272,8 @@ The package is `raoh/199x-notation`, and a release of it is a tag: nothing in `p
 version. Packagist reads `composer.json` at the root of a repository, and this one's is in `php/`,
 so a release is published to a mirror whose root is `php/`,
 [raoh-project/199x-notation-php](https://github.com/raoh-project/199x-notation-php), and Packagist
-reads the mirror. The mirror is written by CI and by nothing else: nobody commits to it, and an issue
-or a pull request there is sent here. As for Go, a tag here begins with the directory, so the
+reads the mirror. The mirror is written by CI and by nothing else: nobody commits to it, and an
+issue or a pull request there is sent here. As for Go, a tag here begins with the directory, so the
 package's version `vX.Y.Z` is the tag `php/vX.Y.Z` here and the tag `vX.Y.Z` on the mirror. The
 first release is `php/v0.1.0`.
 

@@ -15,9 +15,10 @@ writes on each release and nobody commits to. Issues and pull requests go to 199
 composer require raoh/199x-notation
 ```
 
-It needs a 64-bit PHP 8.2 or later, and no extension: no rule asks mbstring, intl, iconv or the date
-functions, whose answers follow the Unicode version and the parsers of the PHP they were built with.
-PCRE is asked only whether bytes are UTF-8.
+It needs a 64-bit PHP 8 from 8.2 on, as `composer.json` requires it (`"php-64bit": "^8.2"`): a
+PHP 9 is taken once it has been tested. It needs no extension: no rule asks mbstring, intl, iconv or
+the date functions, whose answers follow the Unicode version and the parsers of the PHP they were
+built with. PCRE is asked only whether bytes are UTF-8.
 
 ## What it has
 

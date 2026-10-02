@@ -14,27 +14,45 @@ namespace Raoh\Notation199x\Internal\Pattern;
  * writes a limit PHP has and the specifications do not. The tree and the machine built from it
  * name a set by the same number here, so building the machine copies no set.
  *
- * A set written more than once is held once, by a table of the sets seen so far that is only for
- * reading: seal() lets go of it, and what a pattern keeps holds the ranges and no table.
+ * A set of one code point, and each set the language names (., \d, \w, \s and their complements),
+ * is held once however often it is written, by a key that is the set and nothing less: the code
+ * point, or which named set it is. Any other set, which only a class writes, is held as it is
+ * written. Its ranges cost the text of the class that wrote them, so what they take grows with the
+ * text as the text itself does, and telling two classes alike would take a key made from their
+ * ranges: a string as large again as the sets, or a checksum, under which sets that differ share a
+ * key, and text written to make many of them share one makes every set added search through them.
+ *
+ * The table of the sets held once is only for reading: seal() lets go of it, and what a pattern
+ * keeps holds the ranges and no table.
  *
  * @internal
  */
 final class SymbolSets
 {
+    /** The sets the language names, each a key below every code point. */
+    private const NAMED = [
+        -1 => Symbols::DOT,
+        -2 => Symbols::DIGIT,
+        -3 => Symbols::WORD,
+        -4 => Symbols::SPACE,
+        -5 => Symbols::NOT_DIGIT,
+        -6 => Symbols::NOT_WORD,
+        -7 => Symbols::NOT_SPACE,
+    ];
+
     /** @var list<int> where each set's ranges begin in $ranges, and one more where the last one's end */
     public array $start = [0];
     /** @var list<int> every set's ranges, each its first and its last code point */
     public array $ranges = [];
     /**
-     * @var array<int, int>|null each set's number while sets are being added, by an integer: a set
-     *      of one code point by the code point, any other by a checksum of its ranges above every
-     *      code point; null once sealed. A number and not the ranges written out, which would take
-     *      as much room again as the sets.
+     * @var array<int, int>|null the number of each set held once, by its code point or by which
+     *      named set it is; null once sealed
      */
     private ?array $seen = [];
 
     /**
-     * The number of the set $held, as Symbols holds a set, added where it is not here yet.
+     * The number of the set $held, as Symbols holds a set: the one it already has where $held is a
+     * set held once and is here, and otherwise a new one.
      *
      * @param list<int> $held
      */
@@ -45,20 +63,40 @@ final class SymbolSets
         if ($this->seen === null) {
             throw new \LogicException('a set added once the sets were sealed');
         }
-        $key = count($held) === 2 && $held[0] === $held[1] ? $held[0] : 0x200000 + crc32(implode(',', $held));
-        $seen = $this->seen[$key] ?? null;
-        // A checksum two sets share is asked of the ranges, and a set that differs is held apart:
-        // holding a set once is what saves room, and holding it twice changes no answer.
-        if ($seen !== null && $this->held($seen) === $held) {
-            return $seen;
+        $key = self::keyOf($held);
+        if ($key !== null && isset($this->seen[$key])) {
+            return $this->seen[$key];
         }
         $set = count($this->start) - 1;
         foreach ($held as $bound) {
             $this->ranges[] = $bound;
         }
         $this->start[] = count($this->ranges);
-        $this->seen[$key] ??= $set;
+        if ($key !== null) {
+            $this->seen[$key] = $set;
+        }
         return $set;
+    }
+
+    /**
+     * The key $held is held once by, which is $held and nothing less, or null where it is held as
+     * written.
+     *
+     * @param list<int> $held
+     */
+    private static function keyOf(array $held): ?int
+    {
+        if (count($held) === 2 && $held[0] === $held[1]) {
+            return $held[0];
+        }
+        // A named set is asked of only where it has as many bounds, which most classes have not.
+        $count = count($held);
+        foreach (self::NAMED as $key => $named) {
+            if (count($named) === $count && $held === $named) {
+                return $key;
+            }
+        }
+        return null;
     }
 
     /**

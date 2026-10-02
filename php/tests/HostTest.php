@@ -21,6 +21,13 @@ final class HostTest extends TestCase
         'ucfirst', 'lcfirst', 'ucwords', 'ctype_', 'utf8_', 'html_entity_decode',
     ];
 
+    /**
+     * What the sources may not name either: a checksum or a hash. Where a set is held once, it is by
+     * a key that is the set (see SymbolSets); under a checksum, sets that differ share a key, and
+     * text written to make many of them share one makes every one added search through the rest.
+     */
+    private const NO_CHECKSUM = ['crc32', 'md5', 'sha1', 'hash'];
+
     /** The one PCRE call the sources make, and where. */
     private const PCRE_ASKED = ['ScalarValues.php' => 1];
 
@@ -91,7 +98,7 @@ final class HostTest extends TestCase
                     continue;
                 }
                 $name = strtolower(ltrim($token[1], '\\'));
-                foreach (self::ASKED_NOTHING as $prefix) {
+                foreach ([...self::ASKED_NOTHING, ...self::NO_CHECKSUM] as $prefix) {
                     if (str_starts_with($name, $prefix)) {
                         $named[] = $file->getFilename() . ': ' . $token[1];
                     }
