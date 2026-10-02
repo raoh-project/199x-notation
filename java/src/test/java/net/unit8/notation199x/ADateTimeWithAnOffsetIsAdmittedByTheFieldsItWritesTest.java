@@ -16,6 +16,7 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import net.unit8.notation199x.TemporalText.Kind;
+import net.unit8.notation199x.TemporalText.Refusal;
 
 /**
  * A date-time with an offset is a local date-time beside a displacement, admitted by the fields it
@@ -84,6 +85,31 @@ class ADateTimeWithAnOffsetIsAdmittedByTheFieldsItWritesTest {
         for (OffsetDateTime edge : new OffsetDateTime[] {OffsetDateTime.MIN, OffsetDateTime.MAX}) {
             assertEquals(Optional.empty(), TemporalText.refusal(Kind.OFFSET_DATETIME, edge.toString()));
         }
+    }
+
+    @Test
+    void itIsNotAnInstantWrittenAnotherWay() {
+        // The seconds may be left out, where an instant writes them.
+        assertEquals(Optional.empty(), TemporalText.refusal(Kind.OFFSET_DATETIME, "2026-09-30T12:34+09:00"));
+        assertEquals(Optional.of(Refusal.MALFORMED), TemporalText.refusal(Kind.INSTANT, "2026-09-30T12:34+09:00"));
+        // Hour 24 is the start of the next day only in an instant.
+        assertEquals(Optional.of(Refusal.MALFORMED),
+                TemporalText.refusal(Kind.OFFSET_DATETIME, "2026-09-30T24:00:00Z"));
+        // Second 60 is no second a clock shows, and is not told apart as a leap second here.
+        assertEquals(Optional.of(Refusal.MALFORMED),
+                TemporalText.refusal(Kind.OFFSET_DATETIME, "2016-12-31T23:59:60Z"));
+        // The last year of a date is admitted whatever the offset, and is past every instant.
+        assertEquals(Optional.empty(),
+                TemporalText.refusal(Kind.OFFSET_DATETIME, "+999999999-12-31T23:59:59-18:00"));
+        assertEquals(Optional.of(Refusal.MALFORMED),
+                TemporalText.refusal(Kind.OFFSET_DATETIME, "+1000000000-01-01T00:00:00Z"));
+        assertEquals(Optional.empty(), TemporalText.refusal(Kind.INSTANT, "+1000000000-01-01T00:00:00Z"));
+        // An offset is written, in hours and minutes at least, and Z is upper case.
+        for (String text : new String[] {"2026-09-30T12:34:56", "2026-09-30T12:34:56+09", "2026-09-30T12:34:56+0900",
+                "2026-09-30T12:34:56z", "2026-09-30t12:34:56Z", "2026-09-30T12:34:56+18:00:01"}) {
+            assertEquals(Optional.of(Refusal.MALFORMED), TemporalText.refusal(Kind.OFFSET_DATETIME, text), text);
+        }
+        assertEquals(Optional.empty(), TemporalText.refusal(Kind.OFFSET_DATETIME, "2026-09-30T12:34:56.5-00:00"));
     }
 
     /** A year as the forms write it: four digits unsigned from 0000 to 9999, signed past them. */

@@ -10,7 +10,8 @@ import java.util.List;
 
 /**
  * The vectors in {@code suite/} every implementation runs, read as {@code suite/README.md} states
- * them: a line of fields separated by {@code ;}, a text as its scalar values in hex.
+ * them: a line of fields separated by {@code ;}, a text as its scalar values in hex, and before the
+ * first line of vectors the sources every field is held to.
  */
 public final class Suite {
 
@@ -54,10 +55,17 @@ public final class Suite {
             throw new UncheckedIOException(e);
         }
         List<Line> read = new ArrayList<>();
+        boolean sourced = false;
         for (int i = 0; i < lines.size(); i++) {
             String line = lines.get(i);
+            if (line.equals("# Source:") && i + 1 < lines.size() && lines.get(i + 1).startsWith("#   ")) {
+                sourced = true;
+            }
             if (line.isEmpty() || line.startsWith("#")) {
                 continue;
+            }
+            if (!sourced) {
+                throw new IllegalStateException(name + " names no source before its first vector");
             }
             String where = name + ":" + (i + 1);
             List<String> split = List.of(line.split(";", -1)).stream().map(field -> field.strip()).toList();

@@ -1,5 +1,10 @@
 # Unicode 18.0.0 default case conversion, untailored.
 #
+# Source:
+#   Raoh spec/decoder-language.md — Types
+#   Souther specification.adoc — string-case
+#   199x-notation README.md — What belongs here (the bounded forms)
+#
 # text ; direction ; bound ; outcome ; mapped
 #
 # direction is LOWER or UPPER. bound is empty for a conversion without one, and otherwise the most

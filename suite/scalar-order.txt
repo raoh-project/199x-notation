@@ -1,5 +1,8 @@
 # The order of two texts: the lexicographic order of the scalar values they are made of.
 #
+# Source:
+#   Souther specification.adoc — a-string-is-ordered-by-scalar-value
+#
 # a ; b ; order
 #
 # order is LESS, EQUAL or GREATER, and says where a is against b. Most lines are where an order of

@@ -17,34 +17,74 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * from the text: a count, a depth, and the states the pattern comes to with its repetitions written
  * out.
  *
- * <p>Where each limit falls, and what is answered on either side of it, is in
- * {@code suite/pattern-read.txt} and {@code suite/pattern-states.txt}. What is here is what a line of
- * vectors does not hold: text too deep to write out, a machine as large as a pattern within the
- * limits builds, the count against the machine that is built, and where what is past a limit
- * is quoted from, which the specification does not state.
+ * <p>The states every implementation counts, and what it answers on either side of each limit, are
+ * in {@code suite/pattern-states.txt} and {@code suite/pattern-read.txt}. What is here is Java's own
+ * answer where the specifications decide less: which limit is answered where a pattern is past more
+ * than one, which refusal text is refused for, and where each points and what it quotes. And what a
+ * line of vectors cannot hold: text too deep to write out, and a machine as large as a pattern within
+ * the limits builds.
  */
 class APatternIsHeldToTheLimitsEveryImplementationHoldsToTest {
 
-    /**
-     * What is past a limit is quoted from where it begins: a count as written, every digit of it,
-     * and the whole pattern for the states, which are a fact about all of it. The specification
-     * does not state where a pattern past a limit points, so this is Java's answer and not a vector
-     * in {@code suite/}.
-     */
     @Test
-    void whatIsPastALimitIsQuotedFromWhereItBegins() {
+    void theStatesAtTheLimitAreReadAndOnePastAreNot() {
+        assertInstanceOf(PatternRead.Read.class, PatternParser.read("a{249998}"));
         assertEquals(new PatternRead.Beyond(PatternRead.Limit.MACHINE_STATES, 0, "a{249999}"),
                 PatternParser.read("a{249999}"));
         assertEquals(new PatternRead.Beyond(PatternRead.Limit.MACHINE_STATES, 0, "(a{500}){500}"),
                 PatternParser.read("(a{500}){500}"));
         assertEquals(new PatternRead.Beyond(PatternRead.Limit.MACHINE_STATES, 0, "a{134217727}"),
                 PatternParser.read("a{134217727}"));
+    }
+
+    /** A count past its limit is quoted as written, every digit of it. */
+    @Test
+    void aCountPastItsLimitIsQuotedAsWritten() {
         assertEquals(new PatternRead.Beyond(PatternRead.Limit.REPETITION_COUNT, 2, "134217728"),
                 PatternParser.read("a{134217728}"));
         assertEquals(new PatternRead.Beyond(PatternRead.Limit.REPETITION_COUNT, 4, "99999999999"),
                 PatternParser.read("a{0,99999999999}"));
+    }
+
+    /**
+     * A limit is about a pattern, so text that is no pattern is refused as that whatever limit it
+     * also went past, and wherever in the text the two are: the reading goes on past a count or a
+     * depth to the end, and places the anchors, before it says a limit was the answer.
+     */
+    @Test
+    void textThatIsNoPatternIsRefusedWhateverLimitItWentPast() {
+        assertEquals(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ, refusal("a{249999}\\q"));
+        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refusal("a{134217728x}"));
+        assertEquals(PatternRead.Refusal.A_CHARACTER_PROPERTY, refusal("a{134217728}\\p{L}"));
+        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refusal("a{134217728}("));
+        int past = PatternRead.Limit.NESTING_DEPTH.most() + 1;
+        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refusal("(?:".repeat(past) + "a"));
+        assertEquals(PatternRead.Refusal.AN_ANCHOR_THIS_CANNOT_PLACE,
+                refusal("(?:".repeat(past) + "(a|)^b" + ")".repeat(past)));
+        assertEquals(PatternRead.Refusal.A_GROUP_THE_GRAMMAR_DOES_NOT_HAVE,
+                refusal("(?:".repeat(past) + "(?=a)" + ")".repeat(past)));
+    }
+
+    /** A floor and a ceiling are compared as written, even where both are past the limit. */
+    @Test
+    void aCeilingBelowItsFloorIsRefusedHoweverLargeTheyAre() {
+        assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ, refusal("a{200000000,150000000}"));
+        assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ,
+                refusal("a{99999999999999999999,99999999999999999998}"));
         assertEquals(new PatternRead.Beyond(PatternRead.Limit.REPETITION_COUNT, 2, "000134217728"),
                 PatternParser.read("a{000134217728}"));
+        assertInstanceOf(PatternRead.Read.class, PatternParser.read("a{0003,0005}"));
+    }
+
+    /** Of two limits met, the first in the text is the answer. */
+    @Test
+    void theFirstLimitInTheTextIsTheAnswer() {
+        int past = PatternRead.Limit.NESTING_DEPTH.most() + 1;
+        String deep = "(?:".repeat(past) + "a" + ")".repeat(past);
+        assertEquals(PatternRead.Limit.REPETITION_COUNT,
+                ((PatternRead.Beyond) PatternParser.read("a{134217728}" + deep)).limit());
+        assertEquals(PatternRead.Limit.NESTING_DEPTH,
+                ((PatternRead.Beyond) PatternParser.read(deep + "a{134217728}")).limit());
     }
 
     /**

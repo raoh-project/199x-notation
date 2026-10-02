@@ -1,5 +1,9 @@
 # The White_Space set of Unicode 18.0.0, every member of it.
 #
+# Source:
+#   Raoh catalog/operations.json — trim, nonBlank
+#   Souther specification.adoc — string-whitespace
+#
 # code point
 #
 # A scalar value no line names is not white space, so a runner holds an implementation to this over

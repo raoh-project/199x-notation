@@ -1,5 +1,9 @@
 # What a pattern that is read accepts: whether the whole of a text is one of its strings.
 #
+# Source:
+#   Raoh spec/pattern.md — What a pattern is built from
+#   Souther specification.adoc — string-patterns
+#
 # pattern ; subject ; accepted
 #
 # accepted is true or false.
