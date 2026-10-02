@@ -24,8 +24,7 @@ implementations are not here yet. See the issues.
 - Order and length of text counted in Unicode scalar values.
 - The lexical grammar of dates, times, date-times, date-times with an offset, and instants.
 - The pattern language: reading a pattern, refusing what is not one, and matching in time linear in
-  the input. With it, the machine a pattern means and the operations on such machines, which is
-  what a match is built from.
+  the input.
 
 The normative definitions are in the
 [Raoh Specification](https://github.com/raoh-project/raoh-specification) and the
@@ -33,13 +32,21 @@ The normative definitions are in the
 This repository implements them and defines no rule about text of its own: which text is a date, a
 pattern or white space, and what a conversion answers, is theirs to say.
 
-What it does define is how its implementations are called: the bounded forms, and the machines,
-images and checkpoints below. For those, and only for those, this README is the source. Every
-implementation has the bounded forms. The machines, images and checkpoints are in a language whose
-callers need them, and are called the same way in each language that has them. A bounded case
-conversion or normalization takes the most scalar values its answer may hold, answers what the
-unbounded one does where that answer is no longer than the bound, and answers nothing where it is
-longer.
+What it does define is how its implementations are called: entry points, each an operation with a
+contract of its own. For those contracts, and only for those, this README is the source. An entry
+point is what it does and what it answers, not how one language spells it: Java takes a checkpoint
+as an interface, where Go would take a `context.Context`. An entry point an implementation has
+beyond the ones described here, such as Java's `Normalization.combiningClass`, is that
+implementation's own.
+
+Every implementation has an entry point for each rule above, and a bounded case conversion and a
+bounded normalization besides. A bounded case conversion or normalization takes the most scalar
+values its answer may hold, answers what the unbounded one does where that answer is no longer than
+the bound, and answers nothing where it is longer. Each of the other entry points described below is
+in an implementation whose callers need that one, apart from the others: the operations on the
+machine a pattern means, writing a machine as an image, running a match from an image, and running a
+match, a bounded normalization or a bounded case conversion with a checkpoint. Where an implementation has one, it holds to the contract every other implementation
+that has it holds to.
 
 ## What does not belong here
 
@@ -51,12 +58,15 @@ A pattern is held to three limits, the same numbers in every implementation and 
 the text: a repetition count of at most 134,217,727, groups nested at most 200 deep, and at most
 250,000 states once its repetitions are written out, counted from what is written without building
 anything. They are the specifications' limits on an admissible pattern, and a pattern past one is
-told apart from text that is no pattern. Every pattern within them has a machine, so no limit of
-how a machine is built or carried decides which patterns a caller takes. A caller that runs a
-pattern where it reads it takes the matcher; one that carries the machine elsewhere, as a compiler
-writing it into a class does, takes it written out as an image, and only the image has a size of
-its own. An image begins with the format it is written in, and a release reads every format an
-earlier release wrote, so a class compiled against one release runs against a later one.
+told apart from text that is no pattern. Every pattern within them has a machine, which is what a
+match is built from, so no limit of how a machine is built or carried decides which patterns a
+caller takes. A caller that runs a pattern where it reads it takes the matcher. One that carries the
+machine elsewhere, as a compiler writing it into a class does, writes it out as an image, and what
+runs the class runs a match from the image: writing an image and running a match from one are two
+entry points, and an implementation may have either without the other. Only the image has a size of
+its own. An image begins with the format it is written in, and an implementation that runs a match
+from an image reads every format an earlier release wrote, so a class compiled against one release
+runs against a later one.
 
 What a caller asks about the patterns it holds beyond that, and how much it is willing to spend on
 an answer, is the caller's. The operations on machines take their limits as an argument. Souther's
@@ -74,10 +84,10 @@ asked inside. A rule that was stopped answers that it was stopped, apart from it
 so a stopped match is neither accepted nor refused. The same rules run without a checkpoint answer
 as they did.
 
-The checkpoints are in Java, for Souther, which evaluates example rows under a step limit and a
-deadline and has to stop a rule inside one of those calls. A language gains them when a caller of
-its own has to stop a rule part of the way through, and they are added beside the forms without one,
-so nothing that calls those changes.
+Java has the three entry points with a checkpoint, for Souther, which evaluates example rows under a
+step limit and a deadline and has to stop a rule inside one of those calls. An implementation gains
+one when a caller of its own has to stop that rule part of the way through, beside the entry point
+without one, so nothing that calls that changes.
 
 Every rule is stated of text that is a sequence of Unicode scalar values. Where a language's string
 can hold something else, as a Java `String` can hold half of a surrogate pair, the implementation
