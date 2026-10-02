@@ -1,6 +1,7 @@
 package notation199x
 
 import (
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -278,14 +279,16 @@ func TestAGivenUpRoomTriesAgainAndWaitsLongerAfterEachTryThatFails(t *testing.T)
 	for !w.known.off {
 		check(random(20_000))
 	}
-	if w.known.wait() != retryBytes {
-		t.Fatalf("the first give-up waits %d, not %d", w.known.wait(), retryBytes)
+	if w.known.wait() != retryWork {
+		t.Fatalf("the first give-up waits %d, not %d", w.known.wait(), retryWork)
 	}
-	// Waited for, so that the test reads less than the constant says.
+	// Waited for, so that the test walks less than the constant says. A walk of 800 bytes walks
+	// 801, as retryWork counts, and what has been walked is asked before a walk.
 	w.known.offFor = 1000
 	check(strings.Repeat("ab", 400))
+	check(strings.Repeat("ab", 400))
 	if !w.known.off {
-		t.Fatal("it tried again before it read what it waits for")
+		t.Fatal("it tried again before it walked what it waits for")
 	}
 	check(strings.Repeat("ab", 400))
 	if w.known.off {
@@ -297,11 +300,73 @@ func TestAGivenUpRoomTriesAgainAndWaitsLongerAfterEachTryThatFails(t *testing.T)
 	if w.known.wait() != 2000 {
 		t.Fatalf("a try that gave up again waits %d, not 2000", w.known.wait())
 	}
-	w.known.offRead = w.known.wait()
+	w.known.offWork = w.known.wait()
 	for range 1000 {
 		check(strings.Repeat("ab", 20))
 	}
 	if w.known.off {
 		t.Fatal("subjects whose sets are looked up again made it give up")
+	}
+}
+
+// What a walk without kept sets walks is what counts toward trying again: an empty subject counts
+// the set it starts in, so empty subjects alone lead to a try, and a long subject turned away at
+// once counts the little that was walked of it, not its length.
+func TestWhatCountsTowardTryingAgainIsWhatWasWalked(t *testing.T) {
+	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	m := read.compiled.machine
+	w := m.newWalk()
+	rng := uint32(7)
+	random := func(n int) string {
+		var b strings.Builder
+		for range n {
+			rng = rng*1664525 + 1013904223
+			b.WriteByte("ab"[rng>>31])
+		}
+		return b.String()
+	}
+	for !w.known.off {
+		m.matchesIn(w, random(20_000))
+	}
+	w.known.offFor = 100
+	for range 100 {
+		if !w.known.off {
+			t.Fatal("empty subjects led to a try too soon")
+		}
+		if m.matchesIn(w, "") {
+			t.Fatal("the empty subject is accepted")
+		}
+	}
+	m.matchesIn(w, "")
+	if w.known.off {
+		t.Fatal("empty subjects alone did not lead to a try")
+	}
+	for !w.known.off {
+		m.matchesIn(w, random(20_000))
+	}
+	before := w.known.offWork
+	if m.matchesIn(w, "c"+strings.Repeat("a", 100_000)) {
+		t.Fatal("a subject with a c is accepted")
+	}
+	if counted := w.known.offWork - before; counted > 3 {
+		t.Fatalf("a subject turned away at once counted %d", counted)
+	}
+}
+
+// A count of what is read is held at the most an int holds, so that on a 32-bit platform it does
+// not go round to a negative that would make a room give up keeping sets it uses.
+func TestCountsThatOnlyGrowAreHeldAtTheMostAnIntHolds(t *testing.T) {
+	if got := grown(math.MaxInt-1, 5); got != math.MaxInt {
+		t.Fatalf("grown(MaxInt-1, 5) is %d", got)
+	}
+	if got := grown(2, 3); got != 5 {
+		t.Fatalf("grown(2, 3) is %d", got)
+	}
+	var k knownSets
+	k.offFor, k.retrying = math.MaxInt/2+1, true
+	k.giveUp()
+	if k.offFor != math.MaxInt {
+		t.Fatalf("a wait doubled past the most an int holds is %d", k.offFor)
 	}
 }

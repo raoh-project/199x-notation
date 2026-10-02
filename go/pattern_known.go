@@ -2,6 +2,7 @@ package notation199x
 
 import (
 	"encoding/binary"
+	"math"
 	"slices"
 )
 
@@ -9,10 +10,24 @@ import (
 // them and starts again.
 var knownBytes = 2 << 20
 
-// retryBytes is how many bytes of subjects are first read without kept sets after keeping them is
-// given up on, before keeping them is tried again. Each time a try ends in giving up again the
-// wait doubles, so what the tries cost stays a part of what is read that gets smaller.
-var retryBytes = 16 * (2 << 20)
+// retryWork is how much walking without kept sets is done after keeping them is given up on,
+// before keeping them is tried again: counted as one for each walk, for the set it starts in, and
+// one for each byte of the subject walked. Each time a try ends in giving up again the wait
+// doubles, so what the tries cost stays a part of that walking that gets smaller.
+//
+// It is what was walked and not what was handed in that is counted. An empty subject is walked
+// too, from the set a walk starts in, and so many of them lead to a try as surely as long ones do;
+// a long subject turned away at its first character counts that character, not its length.
+var retryWork = 16 * (2 << 20)
+
+// grown is a + b for counts that only grow, held at the most an int holds rather than going
+// round, which on a 32-bit platform a count of what is read across walks would reach.
+func grown(a, b int) int {
+	if a > math.MaxInt-b {
+		return math.MaxInt
+	}
+	return a + b
+}
 
 // knownSet is a set of states a walk has been in, and where the characters it has read from it
 // lead: the sets of states a deterministic machine would have, made only as a walk comes to them.
@@ -39,7 +54,7 @@ const utf8RuneSelf = 0x80
 // Where they would be more, they are forgotten and worked out again as they are come to. Where
 // what was worked out since they were last forgotten was looked up again less than once in ten,
 // keeping them saves nothing: the walk goes on without them, and so do the walks in the same room
-// after it, until they have read retryBytes of subjects. Then keeping sets is tried again, as by a
+// after it, until they have walked retryWork. Then keeping sets is tried again, as by a
 // room that has kept none: a room is kept between matches, in the machine's pool, and what was
 // looked up too seldom then says nothing about the subjects read later. A try that gives up again
 // waits twice as long before the next, and one that keeps sets long enough to forget them waits
@@ -56,11 +71,11 @@ type knownSets struct {
 	bytes int
 	// made and read are the sets made and the characters read since they were last forgotten.
 	made, read int
-	// off is whether keeping them was given up on; offRead is the bytes read since, and offFor how
-	// many are read before it is tried again, retryBytes where it is zero. retrying is whether it is
-	// being tried again, so that giving up waits longer.
+	// off is whether keeping them was given up on; offWork is what has been walked since, counted
+	// as retryWork says, and offFor how much is walked before it is tried again, retryWork where it
+	// is zero. retrying is whether it is being tried again, so that giving up waits longer.
 	off             bool
-	offRead, offFor int
+	offWork, offFor int
 	retrying        bool
 	// key is the room a set's key is written in to look it up.
 	key []byte
@@ -77,13 +92,11 @@ func (k *knownSets) forget() {
 	k.bytes, k.made, k.read = 0, 0, 0
 }
 
-// start keeps the set a walk of a subject of bytes bytes starts in, which w.now holds, or is nil
-// where sets are not kept. While keeping them is given up on, it counts what is read, and tries
-// again once that is offFor.
-func (k *knownSets) start(m *machine, w *walk, bytes int) *knownSet {
+// start keeps the set a walk starts in, which w.now holds, or is nil where sets are not kept.
+// While keeping them is given up on, it tries again once what has been walked since is offFor.
+func (k *knownSets) start(m *machine, w *walk) *knownSet {
 	if k.off {
-		k.offRead += bytes
-		if k.offRead < k.wait() {
+		if k.offWork < k.wait() {
 			return nil
 		}
 		k.off, k.retrying = false, true
@@ -95,7 +108,7 @@ func (k *knownSets) start(m *machine, w *walk, bytes int) *knownSet {
 // after is the kept set r leads to from from, worked out where that is not known, or nil where
 // the walk is to go on without kept sets, in w.now.
 func (k *knownSets) after(m *machine, w *walk, from *knownSet, r rune) *knownSet {
-	k.read++
+	k.read = grown(k.read, 1)
 	if r < utf8RuneSelf {
 		if next := from.ascii[r]; next != nil {
 			return next
@@ -158,20 +171,25 @@ func (k *knownSets) keep(m *machine, w *walk) (set *knownSet, forgot bool) {
 	return set, forgot
 }
 
-// wait is how many bytes are read without kept sets before keeping them is tried again.
+// wait is how much is walked without kept sets before keeping them is tried again.
 func (k *knownSets) wait() int {
 	if k.offFor == 0 {
-		return retryBytes
+		return retryWork
 	}
 	return k.offFor
 }
 
-// giveUp walks the walks after this without kept sets, until wait() bytes are read.
+// giveUp walks the walks after this without kept sets, until wait() is walked.
 func (k *knownSets) giveUp() {
 	if k.retrying {
-		k.offFor = 2 * k.wait()
+		k.offFor = grown(k.wait(), k.wait())
 	}
 	k.retrying = false
 	k.off = true
-	k.offRead = 0
+	k.offWork = 0
+}
+
+// walkedAlone counts a walk without kept sets, which walked bytes bytes of its subject.
+func (k *knownSets) walkedAlone(bytes int) {
+	k.offWork = grown(grown(k.offWork, bytes), 1)
 }
