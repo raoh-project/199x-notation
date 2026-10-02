@@ -111,11 +111,13 @@ jobs:
         php: ['8.2', '8.5']
     steps:
       - uses: actions/checkout@v5
-      # Without mbstring, intl and iconv, so that a rule that asked them would fail here.
+      # Without mbstring and intl, so that a rule that asked them would fail here. Composer needs
+      # iconv where mbstring is not there, so iconv stays, and HostTest holds the sources to not
+      # asking it.
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: :mbstring, :intl, :iconv
+          extensions: :mbstring, :intl
           coverage: none
       - name: Validate composer.json
         working-directory: php

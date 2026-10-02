@@ -182,7 +182,7 @@ cd php && composer install && vendor/bin/phpunit
 A package made from `php/` holds only what is under it, so as for Go and Rust, the tests that read
 files outside it are skipped where the files are not there, and `NOTATION199X_REQUIRE_SUITE` makes
 that a failure. The package needs a 64-bit PHP 8.2 or later and no extension, and CI tests it on
-the oldest PHP it takes and the newest, without mbstring, intl and iconv, and runs PHPStan at its
+the oldest PHP it takes and the newest, without mbstring and intl, and runs PHPStan at its
 highest level over it. A PHP string is bytes, so the question a caller asks before it takes text
 in is whether the string is UTF-8, and a pattern reader refuses one that is not.
 
