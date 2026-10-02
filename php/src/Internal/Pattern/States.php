@@ -32,38 +32,40 @@ use Raoh\Notation199x\PatternLimit;
 final class States
 {
     /**
-     * The states $w comes to as a whole pattern, or one past the limit where it is past it.
+     * The states the part $root of $written comes to as a whole pattern, or one past the limit
+     * where it is past it.
      */
-    public static function written(Written $w): int
+    public static function written(Tree $written, int $root): int
     {
-        return self::plus(1, self::in($w));
+        return self::plus(1, self::in($written, $root));
     }
 
-    private static function in(Written $w): int
+    private static function in(Tree $written, int $part): int
     {
-        switch ($w->kind) {
-            case Written::MEANT:
-                // A meaning the reader holds before the anchors are placed is a set of symbols or
-                // nothing.
-                return $w->meaning()->kind === Meaning::NOTHING ? 0 : 1;
-            case Written::ANCHOR:
-                return 1;
-            case Written::IN_TURN:
+        $parts = $written->partsOf($part);
+        switch ($written->kind[$part]) {
+            case Tree::NOTHING:
+                return 0;
+            case Tree::IN_TURN:
                 $sum = 0;
-                foreach ($w->parts as $part) {
-                    $sum = self::plus($sum, self::in($part));
+                foreach ($parts as $each) {
+                    $sum = self::plus($sum, self::in($written, $each));
                 }
                 return $sum;
-            case Written::EITHER_OF:
+            case Tree::EITHER_OF:
                 $sum = 1;
-                foreach ($w->parts as $arm) {
-                    $sum = self::plus($sum, self::plus(1, self::in($arm)));
+                foreach ($parts as $arm) {
+                    $sum = self::plus($sum, self::plus(1, self::in($written, $arm)));
                 }
                 return $sum;
+            case Tree::REPEATED:
+                // Its copies, and the state it ends in.
+                $most = $written->most($part);
+                $copies = $most === Tree::NO_CEILING ? $written->least($part) + 1 : $most;
+                return self::plus(self::times($copies, self::in($written, $parts[0])), 1);
             default:
-                // A repetition: its copies, and the state it ends in.
-                $copies = $w->most === Meaning::NO_CEILING ? $w->least + 1 : $w->most;
-                return self::plus(self::times($copies, self::in($w->parts[0])), 1);
+                // A set of symbols, or an anchor.
+                return 1;
         }
     }
 

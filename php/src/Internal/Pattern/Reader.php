@@ -29,13 +29,13 @@ final class Reader
     /** The first limit met in the text, or null while none has been. */
     private ?PatternBeyond $past = null;
     private readonly int $length;
-    /** Every part of the written tree that holds others. */
-    private readonly Nodes $nodes;
+    /** The pattern as it is written, as it is read. */
+    private readonly Tree $written;
 
     private function __construct(private readonly string $text)
     {
         $this->length = strlen($text);
-        $this->nodes = new Nodes();
+        $this->written = new Tree();
     }
 
     /**
@@ -43,23 +43,10 @@ final class Reader
      */
     public static function read(string $text): Meaning|PatternRefused|PatternBeyond
     {
-        $r = new self($text);
-        // The trees are as deep as the text is nested, and are taken apart before they are let go
-        // of, whatever the answer: the written one always, and the meaning where it is not the
-        // answer. A meaning that is the answer is within the nesting depth.
-        $meanings = new Nodes();
-        try {
-            $read = $r->answer($meanings);
-        } finally {
-            $r->nodes->release();
-        }
-        if (!$read instanceof Meaning) {
-            $meanings->release();
-        }
-        return $read;
+        return (new self($text))->answer();
     }
 
-    private function answer(Nodes $meanings): Meaning|PatternRefused|PatternBeyond
+    private function answer(): Meaning|PatternRefused|PatternBeyond
     {
         try {
             $w = $this->pattern();
@@ -69,7 +56,7 @@ final class Reader
         }
         // Every anchor has to come to something, and what it comes to is settled by where it
         // stands, which is known now that the whole of the pattern is.
-        $m = Anchors::place($w, $meanings);
+        $m = Anchors::place($this->written, $w);
         if ($m === null) {
             return new PatternRefused(PatternRefusal::AnAnchorThisCannotPlace, 0, $this->text);
         }
@@ -79,7 +66,7 @@ final class Reader
         }
         // Counted on what was written, where an anchor is one state whatever it came to, so the
         // count is never below the states of the machine the meaning builds.
-        if (States::written($w) > PatternLimit::MachineStates->most()) {
+        if (States::written($this->written, $w) > PatternLimit::MachineStates->most()) {
             return new PatternBeyond(PatternLimit::MachineStates, 0, $this->text);
         }
         return $m;
@@ -89,11 +76,11 @@ final class Reader
      * The whole text, as what it is written as. A choice is read with a stack of the choices open
      * around it, so a group is a push and its closing bracket a pop, and nothing here recurses.
      */
-    private function pattern(): Written
+    private function pattern(): int
     {
         /** @var list<OpenChoice> $around */
         $around = [];
-        $reading = new OpenChoice($this->nodes);
+        $reading = new OpenChoice($this->written);
         while (true) {
             $next = $this->peek();
             if ($next !== self::END_OF_TEXT && $next !== 0x7C && $next !== 0x29) {
@@ -101,7 +88,7 @@ final class Reader
                 if ($next === 0x28) {
                     $this->opened();
                     $around[] = $reading;
-                    $reading = new OpenChoice($this->nodes);
+                    $reading = new OpenChoice($this->written);
                 } else {
                     $reading->part($this->quantified($this->atom()));
                 }
@@ -158,7 +145,7 @@ final class Reader
     /**
      * $one with the count written after it, if any.
      */
-    private function quantified(Written $one): Written
+    private function quantified(int $one): int
     {
         $this->construct = $this->at;
         switch ($this->peek()) {
@@ -168,11 +155,11 @@ final class Reader
                 break;
             case 0x2A: // *
                 $this->take();
-                [$least, $most] = [0, Meaning::NO_CEILING];
+                [$least, $most] = [0, Tree::NO_CEILING];
                 break;
             case 0x2B: // +
                 $this->take();
-                [$least, $most] = [1, Meaning::NO_CEILING];
+                [$least, $most] = [1, Tree::NO_CEILING];
                 break;
             case 0x7B: // {
                 $this->take();
@@ -188,7 +175,7 @@ final class Reader
                     $this->refuse(PatternRefusal::ACountThisCannotRead);
                 }
                 $least = $floor[1];
-                $most = $ceiling === null ? Meaning::NO_CEILING : $ceiling[1];
+                $most = $ceiling === null ? Tree::NO_CEILING : $ceiling[1];
                 break;
             default:
                 return $one;
@@ -202,29 +189,29 @@ final class Reader
             $this->take();
             $this->refuse(PatternRefusal::APossessiveRepetition);
         }
-        return $this->nodes->held(new Written(Written::REPEATED, parts: [$one], least: $least, most: $most));
+        return $this->written->repeated($one, $least, $most);
     }
 
     /**
      * One thing written, other than a group.
      */
-    private function atom(): Written
+    private function atom(): int
     {
         switch ($this->peek()) {
             case 0x5B: // [
                 $this->take();
-                return Written::meant(Meaning::symbols($this->characterClass()));
+                return $this->written->symbols($this->characterClass());
             case 0x5C: // \
                 $this->take();
-                return Written::meant(Meaning::symbols($this->escaped()));
+                return $this->written->symbols($this->escaped());
             case 0x2E: // .
                 $this->take();
-                return Written::meant(Meaning::symbols(Symbols::dot()));
+                return $this->written->symbols(Symbols::DOT);
             case 0x5E: // ^
             case 0x24: // $
                 $end = $this->peek() === 0x24;
                 $this->take();
-                return new Written(Written::ANCHOR, end: $end);
+                return $this->written->leaf($end ? Tree::END : Tree::START);
             case 0x7B: // {
                 // A brace that begins no count. Read as an ordinary character it would be a
                 // pattern meaning one thing here and a count wherever a digit followed it.
@@ -240,7 +227,7 @@ final class Reader
             case self::END_OF_TEXT:
                 $this->refuse(PatternRefusal::SomethingUnclosed);
         }
-        return Written::meant(Meaning::symbols(Symbols::one($this->literal())));
+        return $this->written->symbols(Symbols::one($this->literal()));
     }
 
     /**
@@ -334,22 +321,22 @@ final class Reader
             // word character is ASCII with the underscore, and the whitespace is six characters.
             case 0x64: // d
                 $this->take();
-                return Symbols::digit();
+                return Symbols::DIGIT;
             case 0x44: // D
                 $this->take();
-                return Symbols::notOf('digit');
+                return Symbols::NOT_DIGIT;
             case 0x77: // w
                 $this->take();
-                return Symbols::word();
+                return Symbols::WORD;
             case 0x57: // W
                 $this->take();
-                return Symbols::notOf('word');
+                return Symbols::NOT_WORD;
             case 0x73: // s
                 $this->take();
-                return Symbols::space();
+                return Symbols::SPACE;
             case 0x53: // S
                 $this->take();
-                return Symbols::notOf('space');
+                return Symbols::NOT_SPACE;
             case 0x6E: // n
                 $this->take();
                 return Symbols::one(0x0A);

@@ -16,6 +16,14 @@ use Raoh\Notation199x\ScalarValues;
  *
  * What labels a step is a set of symbols and never one, so a step is as cheap for [^a] as for a.
  *
+ * Every pattern within the limits has a machine, up to 250,000 states, and the machine is held so
+ * that one that large is built and walked within PHP's default memory limit. A PHP array is a
+ * table of its own whatever it holds, so nothing here is an array per state: the steps are flat
+ * lists of numbers, each state's steps a run of them from an offset (the layout called compressed
+ * sparse rows), and a set of symbols is held once and named by its number. The sets a walk has
+ * worked out are held the same way, by number, so no set holds another and forgetting them is
+ * letting go of a few lists.
+ *
  * @internal
  */
 final class Machine
@@ -26,19 +34,38 @@ final class Machine
      */
     public static int $knownBytes = 2 << 20;
 
+    /** About what one number in a list takes. */
+    private const NUMBER_BYTES = 16;
     /** About what one step a kept set holds takes. */
     private const STEP_BYTES = 48;
 
-    /** @var list<list<array{list<int>, int}>> each state's steps: the symbols it is over and where it leads */
-    private array $steps = [];
-    /** @var list<list<int>> each state's steps for nothing */
-    private array $free = [];
     private int $accept = 0;
+    /** @var array<int, int> where each state's steps over a symbol begin in $stepTo, and one more where the last one's end */
+    private array $stepStart = [];
+    /** @var array<int, int> where each step leads */
+    private array $stepTo = [];
+    /** @var array<int, int> which set each step is over */
+    private array $stepOver = [];
+    /** @var array<int, int> where each state's steps for nothing begin in $freeTo, and one more */
+    private array $freeStart = [];
+    /** @var array<int, int> */
+    private array $freeTo = [];
+    /** @var list<list<int>> the sets of symbols steps are over, each once */
+    private array $sets = [];
 
-    /** @var array<string, KnownSet> the sets worked out, by their states in order */
+    // The sets of states a walk has been in, by number: the sets a deterministic machine would
+    // have, made only as a walk comes to them, and where the characters read from each lead.
+
+    /** @var array<string, int> each kept set, by its states in order */
     private array $index = [];
-    /** The set a walk starts in, or null where it is not known. */
-    private ?KnownSet $first = null;
+    /** @var list<list<int>> the states of each kept set, ascending, every step for nothing taken */
+    private array $keptStates = [];
+    /** @var list<bool> */
+    private array $keptAccepts = [];
+    /** @var list<array<string, int>> where each character read from each kept set leads, by its UTF-8 bytes */
+    private array $keptNext = [];
+    /** The kept set a walk starts in, or -1 where it is not known. */
+    private int $first = -1;
     private int $bytes = 0;
     /** The sets made and the characters read since the sets were last forgotten. */
     private int $made = 0;
@@ -56,108 +83,45 @@ final class Machine
      */
     public static function build(Meaning $m): self
     {
-        $b = new self();
-        $start = $b->state();
-        $b->accept = $b->part($m, $start);
-        return $b;
-    }
-
-    private function state(): int
-    {
-        $this->steps[] = [];
-        $this->free[] = [];
-        return count($this->steps) - 1;
+        $b = new MachineBuilder($m->tree);
+        $machine = new self();
+        $machine->accept = $b->part($m->root, $b->state());
+        [$machine->stepStart, $machine->stepTo, $machine->stepOver] = self::rows($b->states, $b->stepFrom, $b->stepTo, $b->stepOver);
+        [$machine->freeStart, $machine->freeTo] = self::rows($b->states, $b->freeFrom, $b->freeTo, null);
+        $machine->sets = $m->tree->sets;
+        return $machine;
     }
 
     /**
-     * Makes the states for $m, walked into from $from, and answers where it leaves off: one entry
-     * and one exit apiece, which is what lets the shapes compose without any of them knowing what
-     * it is inside. Recursive, since a pattern that was read nests no deeper than the nesting
-     * depth.
+     * Steps given as where each comes from, laid out as rows: an offset for each state and the
+     * steps from it one after another, in the order they were made.
+     *
+     * @param list<int>      $from
+     * @param list<int>      $to
+     * @param list<int>|null $over
+     * @return array{array<int, int>, array<int, int>, array<int, int>}
      */
-    private function part(Meaning $m, int $from): int
+    private static function rows(int $states, array $from, array $to, ?array $over): array
     {
-        switch ($m->kind) {
-            case Meaning::NOTHING:
-                return $from;
-            case Meaning::NEVER:
-                // Nothing leads out of it, so nothing after it is reached.
-                return $this->state();
-            case Meaning::SYMBOLS:
-                $to = $this->state();
-                $this->steps[$from][] = [$m->held, $to];
-                return $to;
-            case Meaning::IN_TURN:
-                $at = $from;
-                foreach ($m->parts as $part) {
-                    $at = $this->part($part, $at);
-                }
-                return $at;
-            case Meaning::EITHER_OF:
-                $out = $this->state();
-                foreach ($m->parts as $arm) {
-                    $in = $this->state();
-                    $this->free[$from][] = $in;
-                    $this->free[$this->part($arm, $in)][] = $out;
-                }
-                return $out;
-            default:
-                return $this->repeated($m, $from);
+        $start = array_fill(0, $states + 1, 0);
+        foreach ($from as $q) {
+            $start[$q + 1]++;
         }
-    }
-
-    /**
-     * Makes a repetition as the copies it is: the floor is copies one after another, what is above
-     * it is copies each of which may be stepped over, and an unbounded ceiling is one more copy
-     * with a step back to where it began.
-     */
-    private function repeated(Meaning $m, int $from): int
-    {
-        $what = $m->parts[0];
-        // A body that makes no state is the empty string however many times it is taken, and is
-        // built as that: one state to end in. Copied a count at a time it would cost the count and
-        // make nothing.
-        if (self::buildsNoState($what)) {
-            $out = $this->state();
-            $this->free[$from][] = $out;
-            return $out;
+        for ($q = 0; $q < $states; $q++) {
+            $start[$q + 1] += $start[$q];
         }
-        $at = $from;
-        for ($i = 0; $i < $m->least; $i++) {
-            $at = $this->part($what, $at);
-        }
-        if ($m->most === Meaning::NO_CEILING) {
-            $loop = $this->state();
-            $this->free[$at][] = $loop;
-            $this->free[$this->part($what, $loop)][] = $loop;
-            return $loop;
-        }
-        $out = $this->state();
-        $this->free[$at][] = $out;
-        for ($i = $m->least; $i < $m->most; $i++) {
-            $at = $this->part($what, $at);
-            $this->free[$at][] = $out;
-        }
-        return $out;
-    }
-
-    /**
-     * Whether building $m makes no state, which is only ever the empty string.
-     */
-    private static function buildsNoState(Meaning $m): bool
-    {
-        if ($m->kind === Meaning::NOTHING) {
-            return true;
-        }
-        if ($m->kind !== Meaning::IN_TURN) {
-            return false;
-        }
-        foreach ($m->parts as $part) {
-            if (!self::buildsNoState($part)) {
-                return false;
+        $next = $start;
+        $count = count($from);
+        $rowTo = array_fill(0, $count, 0);
+        $rowOver = $over === null ? [] : array_fill(0, $count, 0);
+        foreach ($from as $i => $q) {
+            $at = $next[$q]++;
+            $rowTo[$at] = $to[$i];
+            if ($over !== null) {
+                $rowOver[$at] = $over[$i];
             }
         }
-        return true;
+        return [$start, $rowTo, $rowOver];
     }
 
     /**
@@ -180,12 +144,12 @@ final class Machine
             $width = Utf8::width(ord($subject[$at]));
             $character = $width === 1 ? $subject[$at] : substr($subject, $at, $width);
             $at += $width;
-            if ($in !== null) {
-                $next = $in->next[$character] ?? null;
-                if ($next !== null) {
+            if ($in >= 0) {
+                $next = $this->keptNext[$in][$character] ?? -1;
+                if ($next >= 0) {
                     $in = $next;
                     $this->read++;
-                    if ($next->none) {
+                    if ($this->keptStates[$next] === []) {
                         return false;
                     }
                     continue;
@@ -195,8 +159,8 @@ final class Machine
                 return false;
             }
         }
-        if ($in !== null) {
-            return $in->accepts;
+        if ($in >= 0) {
+            return $this->keptAccepts[$in];
         }
         return isset($now[$this->accept]);
     }
@@ -207,15 +171,15 @@ final class Machine
      *
      * @param array<int, true> $now
      */
-    private function begin(array &$now): ?KnownSet
+    private function begin(array &$now): int
     {
-        if ($this->first !== null) {
+        if ($this->first >= 0) {
             return $this->first;
         }
         $now = [];
         $this->enter($now, 0);
         if ($this->off) {
-            return null;
+            return -1;
         }
         [$this->first] = $this->keep($now);
         return $this->first;
@@ -229,31 +193,26 @@ final class Machine
      *
      * @param array<int, true> $now
      */
-    private function take(?KnownSet &$in, array &$now, string $character): bool
+    private function take(int &$in, array &$now, string $character): bool
     {
         $symbol = Utf8::decode($character);
-        if ($in === null) {
+        if ($in < 0) {
             $now = $this->advance(array_keys($now), $symbol);
             return $now !== [];
         }
         $this->read++;
         $from = $in;
-        $now = $this->advance($from->states, $symbol);
+        $now = $this->advance($this->keptStates[$from], $symbol);
         [$next, $forgot] = $this->keep($now);
         // $from was forgotten to make room where $forgot, and is not looked up again. Where an
         // ASCII character leads is room every set is charged for when it is kept; where another
-        // leads is kept only while there is room for it.
-        if ($next !== null && !$forgot) {
-            if (strlen($character) === 1) {
-                $from->next[$character] = $next;
-            } elseif ($this->bytes < self::$knownBytes) {
-                $from->next[$character] = $next;
-                $this->bytes += self::STEP_BYTES;
-            }
+        // leads is kept only where there is room for it.
+        if ($next >= 0 && !$forgot && (strlen($character) === 1 || $this->charge(self::STEP_BYTES))) {
+            $this->keptNext[$from][$character] = $next;
         }
         $in = $next;
-        if ($next !== null) {
-            return !$next->none;
+        if ($next >= 0) {
+            return $this->keptStates[$next] !== [];
         }
         return $now !== [];
     }
@@ -272,10 +231,12 @@ final class Machine
     {
         $next = [];
         foreach ($from as $q) {
-            foreach ($this->steps[$q] as [$over, $to]) {
+            for ($i = $this->stepStart[$q], $end = $this->stepStart[$q + 1]; $i < $end; $i++) {
+                $to = $this->stepTo[$i];
                 if (isset($next[$to])) {
                     continue;
                 }
+                $over = $this->sets[$this->stepOver[$i]];
                 // Most sets are one range, asked here without a search.
                 $holds = count($over) === 2 ? $over[0] <= $symbol && $symbol <= $over[1] : Ranges::has($over, $symbol);
                 if ($holds) {
@@ -300,7 +261,8 @@ final class Machine
         $pending = [$q];
         while ($pending !== []) {
             $from = array_pop($pending);
-            foreach ($this->free[$from] as $to) {
+            for ($i = $this->freeStart[$from], $end = $this->freeStart[$from + 1]; $i < $end; $i++) {
+                $to = $this->freeTo[$i];
                 if (!isset($into[$to])) {
                     $into[$to] = true;
                     $pending[] = $to;
@@ -310,8 +272,8 @@ final class Machine
     }
 
     /**
-     * The kept set $now holds, kept where it is not already, or null where keeping sets is given
-     * up on; and whether the sets kept before were forgotten to make room for it.
+     * The kept set $now holds, kept where it is not already, or -1 where keeping sets is given up
+     * on; and whether the sets kept before were forgotten to make room for it.
      *
      * Which sets are kept, and whether any are, changes how fast a walk is and no answer. Where
      * they would be more than about $knownBytes, they are forgotten and worked out again as they
@@ -321,7 +283,7 @@ final class Machine
      * coming to new ones, are walked a state at a time as without them.
      *
      * @param array<int, true> $now
-     * @return array{?KnownSet, bool}
+     * @return array{int, bool}
      */
     private function keep(array $now): array
     {
@@ -329,36 +291,56 @@ final class Machine
         $states = array_keys($now);
         sort($states);
         $key = implode(',', $states);
-        $set = $this->index[$key] ?? null;
-        if ($set !== null) {
+        $set = $this->index[$key] ?? -1;
+        if ($set >= 0) {
             return [$set, false];
         }
-        $cost = 2 * strlen($key) + 16 * count($states) + 128 * self::STEP_BYTES + 128;
+        $cost = 2 * strlen($key) + self::NUMBER_BYTES * count($states) + 128 * self::STEP_BYTES + 128;
         $forgot = false;
-        if ($this->bytes + $cost > self::$knownBytes) {
+        if (!$this->charge($cost)) {
             $gaveUp = $this->read < 10 * $this->made || $cost > self::$knownBytes;
             $this->forget();
             if ($gaveUp) {
                 $this->off = true;
-                return [null, true];
+                return [-1, true];
             }
             $forgot = true;
+            $this->charge($cost);
         }
-        $set = new KnownSet($states, isset($now[$this->accept]), $states === []);
+        $set = count($this->keptStates);
+        $this->keptStates[] = $states;
+        $this->keptAccepts[] = isset($now[$this->accept]);
+        $this->keptNext[] = [];
         $this->index[$key] = $set;
-        $this->bytes += $cost;
         $this->made++;
         return [$set, $forgot];
     }
 
     /**
-     * Forgets every set kept. A set held across it is still the set it was, and is no longer
-     * looked up.
+     * Takes $bytes of the room the kept sets have, and is false, taking nothing, where there is
+     * not that much left. Every set and every step the kept sets hold is charged here, which is
+     * what holds them to the room.
+     */
+    private function charge(int $bytes): bool
+    {
+        if ($this->bytes + $bytes > self::$knownBytes) {
+            return false;
+        }
+        $this->bytes += $bytes;
+        return true;
+    }
+
+    /**
+     * Forgets every set kept. A number a walk holds names no set afterwards, and a walk that
+     * forgot goes on from the set it was making.
      */
     private function forget(): void
     {
         $this->index = [];
-        $this->first = null;
+        $this->keptStates = [];
+        $this->keptAccepts = [];
+        $this->keptNext = [];
+        $this->first = -1;
         $this->bytes = 0;
         $this->made = 0;
         $this->read = 0;

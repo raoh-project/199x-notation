@@ -26,9 +26,6 @@ final class Symbols
     public const SURROGATES_FROM = 0xD800;
     public const SURROGATES_TO = 0xDFFF;
 
-    /** @var array<string, list<int>> */
-    private static array $named = [];
-
     public static function isSurrogate(int $cp): bool
     {
         return $cp >= self::SURROGATES_FROM && $cp <= self::SURROGATES_TO;
@@ -164,70 +161,21 @@ final class Symbols
         return $n;
     }
 
-    /**
-     * What a pattern's . stands for: every symbol but the line terminators, a line feed, a
-     * carriage return, the next-line character and the two separators. Written as a difference,
-     * so that a negated class, which does not leave them out, is the same algebra with a different
-     * set taken away.
-     *
-     * @return list<int>
-     */
-    public static function dot(): array
-    {
-        return self::$named['dot'] ??= self::less(
-            self::not([]),
-            self::union(self::one(0x0A), self::one(0x0D), self::one(0x85), self::one(0x2028), self::one(0x2029)),
-        );
-    }
+    // The sets the language names, written out: each is fixed by the specifications, and a test
+    // holds each to the algebra that states it, so that no request works them out again.
 
-    /**
-     * A pattern's \d: the ten ASCII digits and no other.
-     *
-     * @return list<int>
-     */
-    public static function digit(): array
-    {
-        return self::between(0x30, 0x39);
-    }
-
-    /**
-     * A pattern's \w: the ASCII letters, the ASCII digits and the underscore.
-     *
-     * @return list<int>
-     */
-    public static function word(): array
-    {
-        return self::$named['word'] ??= self::union(
-            self::between(0x61, 0x7A),
-            self::between(0x41, 0x5A),
-            self::digit(),
-            self::one(0x5F),
-        );
-    }
-
-    /**
-     * A pattern's \s: a space, a tab, a line feed, a vertical tab, a form feed and a carriage
-     * return. Not the White_Space set, which is a separate set the specifications state separately.
-     *
-     * @return list<int>
-     */
-    public static function space(): array
-    {
-        return self::$named['space'] ??= self::union(self::one(0x20), self::between(0x09, 0x0D));
-    }
-
-    /**
-     * The complement of a shorthand, worked out once rather than at each place a pattern writes it.
-     *
-     * @param 'digit'|'word'|'space' $shorthand
-     * @return list<int>
-     */
-    public static function notOf(string $shorthand): array
-    {
-        return self::$named['not ' . $shorthand] ??= self::not(match ($shorthand) {
-            'digit' => self::digit(),
-            'word' => self::word(),
-            'space' => self::space(),
-        });
-    }
+    /** What a pattern's . stands for: every symbol but the line terminators, a line feed, a carriage return, the next-line character and the two separators. */
+    public const DOT = [0x0000, 0x0009, 0x000B, 0x000C, 0x000E, 0x0084, 0x0086, 0x2027, 0x202A, 0xD7FF, 0xE000, 0x10FFFF];
+    /** A pattern's \d: the ten ASCII digits and no other. */
+    public const DIGIT = [0x0030, 0x0039];
+    /** A pattern's \w: the ASCII letters, the ASCII digits and the underscore. */
+    public const WORD = [0x0030, 0x0039, 0x0041, 0x005A, 0x005F, 0x005F, 0x0061, 0x007A];
+    /** A pattern's \s: a space, a tab, a line feed, a vertical tab, a form feed and a carriage return. Not the White_Space set, which the specifications state separately. */
+    public const SPACE = [0x0009, 0x000D, 0x0020, 0x0020];
+    /** A pattern's \D: every symbol DIGIT does not hold. */
+    public const NOT_DIGIT = [0x0000, 0x002F, 0x003A, 0xD7FF, 0xE000, 0x10FFFF];
+    /** A pattern's \W: every symbol WORD does not hold. */
+    public const NOT_WORD = [0x0000, 0x002F, 0x003A, 0x0040, 0x005B, 0x005E, 0x0060, 0x0060, 0x007B, 0xD7FF, 0xE000, 0x10FFFF];
+    /** A pattern's \S: every symbol SPACE does not hold. */
+    public const NOT_SPACE = [0x0000, 0x0008, 0x000E, 0x001F, 0x0021, 0xD7FF, 0xE000, 0x10FFFF];
 }

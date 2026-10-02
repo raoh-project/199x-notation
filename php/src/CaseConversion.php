@@ -142,9 +142,12 @@ final class CaseConversion
             for ($byte = 0x80; $byte <= 0xFF; $byte++) {
                 $stops .= chr($byte);
             }
-            $named = $lower ? CaseTables::LOWER + CaseTables::FINAL_SIGMA : CaseTables::UPPER;
-            foreach (array_keys($named) as $character) {
-                if (strlen($character) === 1) {
+            // Each ASCII character asked of the tables, rather than every key read: a request
+            // works this out once, and the 128 lookups cost a few microseconds.
+            for ($byte = 0; $byte < 0x80; $byte++) {
+                $character = chr($byte);
+                if ($lower ? isset(CaseTables::LOWER[$character]) || isset(CaseTables::FINAL_SIGMA[$character])
+                    : isset(CaseTables::UPPER[$character])) {
                     $stops .= $character;
                 }
             }

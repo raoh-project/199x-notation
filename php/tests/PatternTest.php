@@ -150,8 +150,8 @@ final class PatternTest extends TestCase
     #[RunInSeparateProcess, PreserveGlobalState(false)]
     public function testTextNestedFarPastTheDepthIsReadToItsEnd(): void
     {
-        // Each level of the tree is about a kilobyte of PHP objects.
-        ini_set('memory_limit', '512M');
+        // PHP's default, which reading text this deep stays within.
+        ini_set('memory_limit', '128M');
         $deep = 100_000;
         $read = Pattern::read(str_repeat('(', $deep) . '^a$' . str_repeat(')', $deep));
         self::assertInstanceOf(PatternBeyond::class, $read);
@@ -170,7 +170,7 @@ final class PatternTest extends TestCase
     #[RunInSeparateProcess, PreserveGlobalState(false)]
     public function testATreeAsDeepAsTheTextIsLetGoOfWithoutRecursion(): void
     {
-        ini_set('memory_limit', '512M');
+        ini_set('memory_limit', '128M');
         $deep = 50_000;
         $nested = str_repeat('(', $deep) . 'a' . str_repeat(')*', $deep);
         $read = Pattern::read($nested);
@@ -181,6 +181,36 @@ final class PatternTest extends TestCase
         self::assertSame(PatternRefusal::SomethingUnclosed, self::refusedOf($nested . '(')->why);
         self::assertSame(PatternRefusal::AnAnchorThisCannotPlace,
             self::refusedOf(str_repeat('(', $deep) . 'a|)^b' . str_repeat(')*', $deep - 1))->why);
+    }
+
+    /**
+     * Every pattern within the limits has a machine, and one at the limit of states is built and
+     * walked within PHP's default memory limit: the limit every implementation holds to is not
+     * lowered by how PHP holds a machine.
+     */
+    #[RunInSeparateProcess, PreserveGlobalState(false)]
+    public function testAMachineAtTheLimitOfStatesIsBuiltAndWalkedWithinTheDefaultMemoryLimit(): void
+    {
+        ini_set('memory_limit', '128M');
+        foreach ([
+            // 1 + 249998 + 1 states, each copy one symbol and one step past it.
+            'a{0,249998}' => [str_repeat('a', 1000), str_repeat('a', 249998), str_repeat('a', 249999)],
+            '[a-z]{249998}' => [str_repeat('z', 249998), str_repeat('z', 249997)],
+            // Every state of the machine at once, a character at a time.
+            '(?:a?){49998}' => [str_repeat('a', 20), 'b'],
+        ] as $pattern => $subjects) {
+            $read = self::read($pattern);
+            $answers = array_map(static fn (string $subject): bool => $read->matches($subject), $subjects);
+            self::assertSame(
+                match ($pattern) {
+                    'a{0,249998}' => [true, true, false],
+                    '[a-z]{249998}' => [true, false],
+                    default => [true, false],
+                },
+                $answers,
+                $pattern,
+            );
+        }
     }
 
     /**

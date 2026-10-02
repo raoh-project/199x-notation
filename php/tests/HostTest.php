@@ -24,6 +24,44 @@ final class HostTest extends TestCase
     /** The one PCRE call the sources make, and where. */
     private const PCRE_ASKED = ['ScalarValues.php' => 1];
 
+    /**
+     * What a class holds from one call to the next, by class and property, and why it may. PHP
+     * keeps it for a request where PHP-FPM serves one, and keeps none of it for the next, so what
+     * is worked out here is worked out again on every request: a table that is a fact about Unicode
+     * is generated instead (see gen/PhpEmitter.java), and what is held here costs a request a few
+     * microseconds or grows only as far as the tables do.
+     */
+    private const STATE_HELD = [
+        'Raoh\\Notation199x\\CaseConversion::$stops' => 'two strings of the ASCII characters the tables name, 128 lookups each',
+        'Raoh\\Notation199x\\Internal\\Composing::$decompositions' => 'the full decompositions asked for, no more than the tables hold',
+        'Raoh\\Notation199x\\Internal\\Pattern\\Machine::$knownBytes' => 'the room a machine keeps sets in, which a test sets',
+    ];
+
+    /**
+     * Nothing holds state from one call to the next but what STATE_HELD names. A static property
+     * that is not there is a table or a cache someone added without asking what it costs a request.
+     */
+    public function testWhatIsHeldFromOneCallToTheNextIsWhatTheListSays(): void
+    {
+        $held = [];
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(dirname(__DIR__) . '/src'));
+        foreach ($files as $file) {
+            if (!$file instanceof \SplFileInfo || $file->getExtension() !== 'php') {
+                continue;
+            }
+            $relative = substr($file->getPathname(), strlen(dirname(__DIR__) . '/src/'), -4);
+            $class = 'Raoh\\Notation199x\\' . str_replace('/', '\\', $relative);
+            self::assertTrue(class_exists($class) || enum_exists($class), $class);
+            foreach ((new \ReflectionClass($class))->getProperties(\ReflectionProperty::IS_STATIC) as $property) {
+                $held[] = $class . '::$' . $property->getName();
+            }
+        }
+        sort($held);
+        $listed = array_keys(self::STATE_HELD);
+        sort($listed);
+        self::assertSame($listed, $held);
+    }
+
     public function testTheSourcesAskTheHostNothingAboutUnicode(): void
     {
         $named = [];
