@@ -29,6 +29,8 @@ final class JavaEmitter {
         Map<Path, String> sources = new LinkedHashMap<>();
         sources.put(Path.of(SOURCES + "CaseTables.java"), caseTables(model));
         sources.put(Path.of(SOURCES + "NormalizationTables.java"), normalizationTables(model));
+        sources.put(Path.of(SOURCES + "WhiteSpaceTables.java"), whiteSpaceTables(model));
+        sources.put(Path.of(SOURCES + "pattern/PatternAlphabetTables.java"), patternAlphabetTables(model));
         return sources;
     }
 
@@ -258,6 +260,83 @@ final class JavaEmitter {
                  *  lookup can binary search. */
                 private static int[] decodeSortedInts(String data) {
                     return decodeIntValues(data);
+                }
+
+            """.stripIndent();
+
+    // WhiteSpaceTables
+
+    private static String whiteSpaceTables(UcdModel model) {
+        StringBuilder out = new StringBuilder();
+        out.append("package net.unit8.notation199x;\n\n");
+        out.append("/**\n");
+        out.append(" * The {@code White_Space} set {@link WhiteSpace} reads, as of Unicode ").append(model.version())
+                .append(".\n");
+        out.append(" *\n");
+        provenance(out, model, "PropList.txt");
+        out.append(" */\n");
+        out.append("final class WhiteSpaceTables {\n\n");
+        out.append("    private WhiteSpaceTables() {}\n\n");
+        out.append(RANGES_DECODER);
+        out.append("    /** {@code White_Space}, as sorted non-overlapping inclusive ranges: index 0 is starts,\n");
+        out.append("     *  index 1 is ends. */\n");
+        out.append("    static final int[][] WHITE_SPACE = decodeRanges(").append(literal(ranges(model.whiteSpace())))
+                .append(");\n");
+        out.append("}\n");
+        return out.toString();
+    }
+
+    // PatternAlphabetTables
+
+    private static String patternAlphabetTables(UcdModel model) {
+        StringBuilder out = new StringBuilder();
+        out.append("package net.unit8.notation199x.pattern;\n\n");
+        out.append("/**\n");
+        out.append(" * The characters {@link PatternAlphabet} keeps a backslash before for an escape: the letters and\n");
+        out.append(" * the decimal digits, General_Category {@code L} and {@code Nd}, as of Unicode ")
+                .append(model.version()).append(".\n");
+        out.append(" *\n");
+        provenance(out, model, "extracted/DerivedGeneralCategory.txt");
+        out.append(" */\n");
+        out.append("final class PatternAlphabetTables {\n\n");
+        out.append("    private PatternAlphabetTables() {}\n\n");
+        out.append(RANGES_DECODER);
+        out.append("    /** The Unicode version the tables are read from. */\n");
+        out.append("    static final String UNICODE_VERSION = \"").append(model.version()).append("\";\n\n");
+        out.append("    /** General_Category {@code Lu}, {@code Ll}, {@code Lt}, {@code Lm}, {@code Lo} and\n");
+        out.append("     *  {@code Nd}, as sorted non-overlapping inclusive ranges: index 0 is starts, index 1 is\n");
+        out.append("     *  ends. */\n");
+        out.append("    static final int[][] LETTERS_AND_DIGITS = decodeRanges(")
+                .append(literal(ranges(model.patternEscapeAlphabet()))).append(");\n");
+        out.append("}\n");
+        return out.toString();
+    }
+
+    /** Which input a class is generated from, how to regenerate it, and the input's checksum. */
+    private static void provenance(StringBuilder out, UcdModel model, String file) {
+        String name = file.substring(file.lastIndexOf('/') + 1);
+        out.append(" * <p>Generated from Unicode ").append(model.version()).append("'s {@code ").append(name)
+                .append("} ({@code https://www.unicode.org/Public/").append(model.version()).append("/ucd/})\n");
+        out.append(" * by {@code gen/Generate.java}. DO NOT EDIT — regenerate on a Unicode version bump with\n");
+        out.append(" * {@code java gen/Generate.java ucd/<version>}.\n");
+        out.append(" *\n");
+        out.append(" * <p>SHA-256 of ").append(name).append(" as downloaded: {@code ").append(model.sha256().get(file))
+                .append("}\n");
+    }
+
+    private static final String RANGES_DECODER = """
+                /** Decodes a "{@code <start>-<end> ...}" string of sorted, non-overlapping inclusive
+                 *  hex ranges into the parallel {@code [starts, ends]} arrays a lookup searches. */
+                private static int[][] decodeRanges(String data) {
+                    String[] tokens = data.split(" ");
+                    int[] starts = new int[tokens.length];
+                    int[] ends = new int[tokens.length];
+                    for (int i = 0; i < tokens.length; i++) {
+                        int dash = tokens[i].indexOf('-');
+                        starts[i] = Integer.parseInt(tokens[i].substring(0, dash), 16);
+                        ends[i] = Integer.parseInt(tokens[i].substring(dash + 1), 16);
+                    }
+                    return new int[][] {starts, ends};
                 }
 
             """.stripIndent();

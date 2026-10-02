@@ -6,6 +6,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,8 +35,12 @@ import java.util.TreeSet;
  * @param sha256    the SHA-256 of each input, by its path under the UCD directory, in the order read
  * @param casing    what the default case conversion reads
  * @param decomposition what normalization reads
+ * @param whiteSpace {@code White_Space}
+ * @param patternEscapeAlphabet the characters a pattern keeps a backslash before for an escape: the
+ *                  letters and the decimal digits, General_Category {@code L} and {@code Nd}
  */
-record UcdModel(String version, Map<String, String> sha256, Casing casing, Decomposition decomposition) {
+record UcdModel(String version, Map<String, String> sha256, Casing casing, Decomposition decomposition,
+                RangeSet whiteSpace, RangeSet patternEscapeAlphabet) {
 
     /** The version every input is checked to be. */
     static final String VERSION = "18.0.0";
@@ -110,9 +115,29 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
         List<String> compositionExclusions = in.lines("CompositionExclusions.txt", "CompositionExclusions");
         List<String> derivedNormalizationProps =
                 in.lines("DerivedNormalizationProps.txt", "DerivedNormalizationProps");
+        List<String> propList = in.lines("PropList.txt", "PropList");
+        List<String> derivedGeneralCategory =
+                in.lines("extracted/DerivedGeneralCategory.txt", "DerivedGeneralCategory");
         return new UcdModel(VERSION, Collections.unmodifiableMap(in.sha256),
                 casing(unicodeData, specialCasing, derivedCoreProperties),
-                decomposition(unicodeData, compositionExclusions, derivedNormalizationProps));
+                decomposition(unicodeData, compositionExclusions, derivedNormalizationProps),
+                ranges(propList, Set.of("White_Space")),
+                ranges(derivedGeneralCategory, Set.of("Lu", "Ll", "Lt", "Lm", "Lo", "Nd")));
+    }
+
+    /** The ranges of the lines whose second field is one of {@code taken}, in order of code point.
+     *  That field is a binary property in {@code PropList.txt} and a value of General_Category in
+     *  {@code DerivedGeneralCategory.txt}, which lists its values one after another, so ranges of
+     *  different values are put back in order here. */
+    private static RangeSet ranges(List<String> lines, Set<String> taken) {
+        List<int[]> ranges = new ArrayList<>();
+        for (PropertyLine line : PropertyLine.read(lines, false)) {
+            if (taken.contains(line.property()) && line.value().isEmpty()) {
+                ranges.add(new int[] {line.start(), line.end()});
+            }
+        }
+        ranges.sort(Comparator.comparingInt(range -> range[0]));
+        return new RangeSet(ranges);
     }
 
     /** The inputs read so far, and their checksums. */
