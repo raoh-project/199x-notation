@@ -45,8 +45,8 @@ values its answer may hold, answers what the unbounded one does where that answe
 the bound, and answers nothing where it is longer. Each of the other entry points described below is
 in an implementation whose callers need that one, apart from the others: the operations on the
 machine a pattern means, writing a machine as an image, running a match from an image, and running a
-match, a bounded normalization or a bounded case conversion with a checkpoint. Where an implementation has one, it holds to the contract every other implementation
-that has it holds to.
+match, a bounded normalization or a bounded case conversion with a checkpoint. Where an
+implementation has one, it holds to the contract every other implementation that has it holds to.
 
 ## What does not belong here
 
