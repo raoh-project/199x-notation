@@ -168,9 +168,13 @@ impl Cache {
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins: found
-    /// where it is kept, and otherwise kept now, the set moved out of the walk. `None` where keeping
-    /// sets is given up on, and the set is still in `walk.next`. The second answer is whether the sets
-    /// kept before were forgotten to make room for it.
+    /// where it is kept, and otherwise kept now, as a copy of `walk.next` as long as the set. `None`
+    /// where keeping sets is given up on. The set is still in `walk.next` either way. The second
+    /// answer is whether the sets kept before were forgotten to make room for it.
+    ///
+    /// The set is copied and not moved out of the walk: moved, it would leave `walk.next` with no
+    /// room, to be grown again for each set after it, and it would hold the room it had grown to,
+    /// more than the four bytes a state that [`KNOWN_BYTES`] counts.
     fn keep(&mut self, machine: &Machine, classes: usize) -> Option<(u32, bool)> {
         if self.walk.next.is_empty() {
             return Some((NONE, false));
@@ -219,7 +223,11 @@ impl Cache {
         for _ in 0..classes {
             self.next.push(UNKNOWN);
         }
-        self.sets.push(core::mem::take(&mut self.walk.next));
+        let mut states = Vec::with_capacity(self.walk.next.len());
+        for &q in &self.walk.next {
+            states.push(q);
+        }
+        self.sets.push(states);
         self.hashes.push(hash);
         self.accepting.push(accepting);
         self.bytes += cost;
@@ -381,7 +389,8 @@ impl Walk {
 /// The loops whose count turns on the subject, the machine or the kept sets are these, and no other:
 /// [`run_known`] and [`Cache::walk_alone`] over the subject; [`Walk::advance`] and [`Walk::enter`] over the
 /// steps and free steps of the states they move; [`hash_of`] and [`accepts`] over a set;
-/// [`Cache::keep`] over the slots it looks in and the row it makes, [`Cache::same`] over a kept set,
+/// [`Cache::keep`] over the slots it looks in, the set it copies and the row it makes,
+/// [`Cache::same`] over a kept set,
 /// and [`Cache::grow`] over the kept sets; and
 /// [`Walk::next_set`], over every state, once in four billion sets.
 pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bool {
