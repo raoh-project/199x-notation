@@ -130,3 +130,23 @@ fn normalization_within_a_bound_answers_every_line_of_the_suite() {
         })
     });
 }
+
+#[test]
+fn temporal_text_answers_every_line_of_the_suite() {
+    each_line("suite/temporal.txt", 3, |line| {
+        let kind = match line.one_of(
+            0,
+            &["DATE", "TIME", "DATETIME", "OFFSET_DATETIME", "INSTANT"],
+        ) {
+            "DATE" => TemporalKind::Date,
+            "TIME" => TemporalKind::Time,
+            "DATETIME" => TemporalKind::DateTime,
+            "OFFSET_DATETIME" => TemporalKind::OffsetDateTime,
+            _ => TemporalKind::Instant,
+        };
+        let text = line.text(1);
+        let admitted = line.one_of(2, &["ADMITTED", "REFUSED"]) == "ADMITTED";
+        let answer = check_temporal(kind, &text);
+        (answer.is_ok() != admitted).then(|| format!("{} as {kind:?} is {answer:?}", shown(&text)))
+    });
+}

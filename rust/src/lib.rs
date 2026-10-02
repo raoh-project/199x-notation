@@ -34,10 +34,14 @@ mod white_space_tables;
 mod case;
 mod normalization;
 mod tables;
+mod temporal;
 mod text;
 mod white_space;
 
 pub use case::{lowercase, lowercase_within, uppercase, uppercase_within};
 pub use normalization::{Form, normalize, normalize_within};
+pub use temporal::{
+    INSTANT_MAX, INSTANT_MIN, TemporalKind, TemporalRefusal, YEAR_MAX, YEAR_MIN, check_temporal,
+};
 pub use text::{compare, scalar_count};
 pub use white_space::is_white_space;
