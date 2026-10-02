@@ -1,0 +1,8 @@
+# The Rust the crate is built, linted and tested with, here and in CI, so that what clippy and
+# rustfmt ask does not change with a release of Rust. The oldest Rust it builds with is the
+# rust-version in Cargo.toml, which CI also builds with.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

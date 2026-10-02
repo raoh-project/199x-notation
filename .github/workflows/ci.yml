@@ -28,6 +28,13 @@ jobs:
       - name: Test
         working-directory: java
         run: mvn --batch-mode test
+      # The images the tests wrote of the suite's patterns, for the implementations that read P1.
+      - name: Keep the images of the suite's patterns
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-images
+          path: java/target/images/pattern-match.txt
+          if-no-files-found: error
       # Every public type and member is documented, its tags included, and a warning fails.
       - name: Javadoc
         working-directory: java
@@ -62,6 +69,61 @@ jobs:
         env:
           NOTATION199X_REQUIRE_SUITE: '1'
         run: go test ./...
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The toolchain rust/rust-toolchain.toml names, so that a release of Rust changes nothing here.
+      - name: Install the Rust toolchain
+        working-directory: rust
+        run: rustup toolchain install
+      # rustfmt leaves every file as it is; the generated tables are skipped where they are declared.
+      - name: Format
+        working-directory: rust
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings
+      # The crate is no_std, and a target with no standard library builds it.
+      - name: Build without the standard library
+        working-directory: rust
+        run: cargo build --target wasm32-unknown-unknown
+      # The oldest Rust the crate says it builds with builds it.
+      - name: Build with the declared rust-version
+        working-directory: rust
+        run: |
+          rustup toolchain install "$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" --profile minimal
+          cargo +"$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" build
+      # A checkout holds ucd/, suite/ and image/, and a test that does not find them fails rather than
+      # skips.
+      - name: Test
+        working-directory: rust
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: cargo test
+
+  # Java writes an image of each pattern of the suite, and Rust reads it and answers what the suite
+  # says the pattern accepts. Apart from the rust job, so that what Rust answers alone is not held up
+  # by Java.
+  java-images-in-rust:
+    needs: java
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the Rust toolchain
+        working-directory: rust
+        run: rustup toolchain install
+      - uses: actions/download-artifact@v4
+        with:
+          name: java-images
+          path: java-images
+      - name: Read the images Java wrote
+        working-directory: rust
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+          NOTATION199X_JAVA_IMAGES: ${{ github.workspace }}/java-images/pattern-match.txt
+        run: cargo test --test java_images
 
   # A tag names a release: vX.Y.Z on a commit whose version is X.Y.Z. Checked when it is pushed,
   # before anything is deployed from it.
