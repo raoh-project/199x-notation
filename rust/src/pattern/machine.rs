@@ -18,10 +18,10 @@ pub(crate) struct Machine {
     pub(crate) accepting: Vec<bool>,
     /// The steps out of state `q` are `steps[step_starts[q]..step_starts[q + 1]]`, each the set it is
     /// over and the state it leads to.
-    step_starts: Vec<u32>,
+    step_starts: Vec<usize>,
     steps: Vec<(u32, u32)>,
     /// The free steps out of state `q`, the same way.
-    free_starts: Vec<u32>,
+    free_starts: Vec<usize>,
     free: Vec<u32>,
     /// The classes of characters no set tells apart.
     pub(crate) classes: Classes,
@@ -61,11 +61,11 @@ impl Machine {
 
     /// The steps out of `q`, each the set it is over and the state it leads to.
     pub(crate) fn steps_from(&self, q: usize) -> &[(u32, u32)] {
-        &self.steps[self.step_starts[q] as usize..self.step_starts[q + 1] as usize]
+        &self.steps[self.step_starts[q]..self.step_starts[q + 1]]
     }
 
     pub(crate) fn free_from(&self, q: usize) -> &[u32] {
-        &self.free[self.free_starts[q] as usize..self.free_starts[q + 1] as usize]
+        &self.free[self.free_starts[q]..self.free_starts[q + 1]]
     }
 }
 
@@ -79,7 +79,7 @@ pub(crate) struct Classes {
     /// The class of each ASCII character, by its byte. A byte past ASCII is the first of a character
     /// of two bytes or more, whose class is found by searching `starts`; its place here is 0 and is
     /// never read, and is here so that a byte looks its class up with no check of its own.
-    ascii: Box<[u32; 256]>,
+    ascii: Box<[usize; 256]>,
 }
 
 impl Classes {
@@ -113,7 +113,7 @@ impl Classes {
 
     /// The class of each ASCII character, by its byte; the places of the bytes past ASCII are not
     /// classes.
-    pub(crate) fn ascii(&self) -> &[u32; 256] {
+    pub(crate) fn ascii(&self) -> &[usize; 256] {
         &self.ascii
     }
 
@@ -122,7 +122,7 @@ impl Classes {
     }
 
     /// The class of `c`.
-    pub(crate) fn class(&self, c: char) -> u32 {
+    pub(crate) fn class(&self, c: char) -> usize {
         if c.is_ascii() {
             self.ascii[c as usize]
         } else {
@@ -130,8 +130,8 @@ impl Classes {
         }
     }
 
-    fn class_of(&self, c: char) -> u32 {
-        (self.starts.partition_point(|start| *start <= u32::from(c)) - 1) as u32
+    fn class_of(&self, c: char) -> usize {
+        self.starts.partition_point(|start| *start <= u32::from(c)) - 1
     }
 }
 
@@ -140,8 +140,10 @@ impl Classes {
 fn by_state<T: Copy + Default>(
     states: usize,
     items: impl Iterator<Item = (u32, T)> + Clone,
-) -> (Vec<u32>, Vec<T>) {
-    let mut starts = vec![0u32; states + 1];
+) -> (Vec<usize>, Vec<T>) {
+    // Counted in `usize`: each state's are at most what P1 lets a count be, but all of them together
+    // are as many as the image writes.
+    let mut starts = vec![0usize; states + 1];
     for (from, _) in items.clone() {
         starts[from as usize + 1] += 1;
     }
@@ -149,9 +151,9 @@ fn by_state<T: Copy + Default>(
         starts[q + 1] += starts[q];
     }
     let mut placed = starts.clone();
-    let mut out = vec![T::default(); starts[states] as usize];
+    let mut out = vec![T::default(); starts[states]];
     for (from, item) in items {
-        out[placed[from as usize] as usize] = item;
+        out[placed[from as usize]] = item;
         placed[from as usize] += 1;
     }
     (starts, out)

@@ -168,7 +168,9 @@ cd rust && cargo test
 A crate packaged from `rust/` holds only what is under it, so as for Go, the tests that read files
 outside it are skipped where the files are not there, and `NOTATION199X_REQUIRE_SUITE` makes that a
 failure. The crate is `no_std` and allocates through `alloc`; a run time without the standard
-library provides the global allocator.
+library provides the global allocator. It is built, linted and tested with the Rust that
+`rust/rust-toolchain.toml` names, and CI also builds it with the oldest Rust its `rust-version` says
+it builds with.
 
 Rust reads images of P1 and writes none. Java's tests write the image of each pattern in
 `suite/pattern-match.txt` to `java/target/images/pattern-match.txt`, which is never checked in, and

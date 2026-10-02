@@ -45,7 +45,9 @@ pub(crate) struct Cache {
     /// The kept set a walk starts in, where it is kept.
     start: Option<u32>,
     bytes: usize,
-    /// The sets made and the bytes read since they were last forgotten.
+    /// The sets made and the bytes read since they were last forgotten. What is read is counted
+    /// across every match with this cache, so it stops at the most a `usize` holds rather than
+    /// going round; past there it is still more than ten for each set made.
     made: usize,
     read: usize,
     /// Whether keeping sets was given up on.
@@ -206,6 +208,9 @@ impl Walk {
             self.entered = vec![0; machine.states()];
         }
         if self.generation == u32::MAX {
+            // A loop of its own and not `fill`: it goes over every state of the machine, and is one a
+            // checkpoint asks in.
+            #[allow(clippy::manual_slice_fill)]
             for each in &mut self.entered {
                 *each = 0;
             }
@@ -302,7 +307,7 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
         let from = i;
         let stop = run_known(&cache.next, &machine.classes, subject, &mut i, &mut at);
         // What is read is counted in bytes, which is all the choice to keep sets asks of it.
-        cache.read += i - from;
+        cache.read = cache.read.saturating_add(i - from);
         let Some((slot, c)) = stop else {
             return cache.accepting[at as usize / classes];
         };
@@ -354,7 +359,7 @@ fn run_known(
             && u32::from_ne_bytes([a, b, c, d]) & 0x8080_8080 == 0
         {
             let step = |row: u32, byte: u8| {
-                let slot = row as usize + ascii[usize::from(byte)] as usize;
+                let slot = row as usize + ascii[usize::from(byte)];
                 (slot, next[slot])
             };
             let (slot, one) = step(row, a);
@@ -390,7 +395,7 @@ fn run_known(
                 .expect("a byte past ASCII begins a character here");
             (classes.class(c), c.len_utf8())
         };
-        let slot = row as usize + class as usize;
+        let slot = row as usize + class;
         let known = next[slot];
         // A kept set is the place its row begins, below both of the values that are not one.
         if known >= NONE {

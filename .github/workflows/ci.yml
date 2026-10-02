@@ -74,10 +74,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
+      # The toolchain rust/rust-toolchain.toml names, so that a release of Rust changes nothing here.
+      - name: Install the Rust toolchain
+        working-directory: rust
+        run: rustup toolchain install
       # rustfmt leaves every file as it is; the generated tables are skipped where they are declared.
       - name: Format
         working-directory: rust
@@ -111,7 +111,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the Rust toolchain
+        working-directory: rust
+        run: rustup toolchain install
       - uses: actions/download-artifact@v4
         with:
           name: java-images
