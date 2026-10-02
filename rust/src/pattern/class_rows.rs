@@ -128,15 +128,37 @@ impl ClassRows {
         self.accepting[q]
     }
 
-    /// [`ClassRows::matches`] over the [`ClassRows::table`]: a scalar value is a lookup of its class and of
-    /// where that leads.
+    /// [`ClassRows::matches`] over the [`ClassRows::table`]: a scalar value is a lookup of its class
+    /// and of where that leads. An ASCII character is its byte, four at a time where four are
+    /// ASCII, as a walk over the steps reads them; any other is decoded.
     fn look(&self, subject: &str) -> bool {
         if !self.live[0] {
             return false;
         }
-        let mut row = 0;
-        for c in subject.chars() {
-            row = self.table[row as usize + self.class(c) as usize];
+        let (table, ascii) = (&self.table[..], &self.ascii[..]);
+        let mut row = 0u32;
+        let mut rest = subject;
+        loop {
+            if let Some(&[a, b, c, d]) = rest
+                .as_bytes()
+                .first_chunk::<4>()
+                .filter(|four| u32::from_ne_bytes(**four) & 0x8080_8080 == 0)
+            {
+                for byte in [a, b, c, d] {
+                    row = table[row as usize + ascii[usize::from(byte)] as usize];
+                    if row == DEAD {
+                        return false;
+                    }
+                }
+                rest = &rest[4..];
+                continue;
+            }
+            let mut chars = rest.chars();
+            let Some(c) = chars.next() else {
+                break;
+            };
+            rest = chars.as_str();
+            row = table[row as usize + self.class(c) as usize];
             if row == DEAD {
                 return false;
             }
