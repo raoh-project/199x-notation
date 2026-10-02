@@ -97,6 +97,7 @@ func (k *knownSets) forget() {
 func (k *knownSets) start(m *machine, w *walk) *knownSet {
 	if k.off {
 		if k.offWork < k.wait() {
+			k.walkedAlone(1)
 			return nil
 		}
 		k.off, k.retrying = false, true
@@ -186,10 +187,13 @@ func (k *knownSets) giveUp() {
 	}
 	k.retrying = false
 	k.off = true
-	k.offWork = 0
+	// The walk that gave up goes on without kept sets from the set it is in, which counts one.
+	k.offWork = 1
 }
 
-// walkedAlone counts a walk without kept sets, which walked bytes bytes of its subject.
-func (k *knownSets) walkedAlone(bytes int) {
-	k.offWork = grown(grown(k.offWork, bytes), 1)
+// walkedAlone counts what a walk without kept sets walked toward trying to keep them again, as
+// retryWork says: one for the set a walk starts in, or goes on from where it gave up, and one for
+// each byte of the subject it steps over.
+func (k *knownSets) walkedAlone(work int) {
+	k.offWork = grown(k.offWork, work)
 }

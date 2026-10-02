@@ -213,12 +213,7 @@ func (m *machine) newWalk() *walk {
 // out for the next walk in it.
 func (m *machine) matchesIn(w *walk, subject string) bool {
 	m.begin(w)
-	at := 0
-	if w.in == nil && w.known.off {
-		// What a walk without kept sets walked counts toward trying to keep them again.
-		defer func() { w.known.walkedAlone(at) }()
-	}
-	for at < len(subject) {
+	for at := 0; at < len(subject); {
 		if c := subject[at]; c < utf8.RuneSelf && w.in != nil {
 			if next := w.in.ascii[c]; next != nil {
 				w.in = next
@@ -268,6 +263,9 @@ func (m *machine) take(w *walk, r rune) bool {
 		return len(w.now.states()) > 0
 	}
 	m.advance(w, r)
+	// The one place a walk without kept sets steps, so what such walks walk is counted here,
+	// whether keeping sets was given up on before the walk or during it.
+	w.known.walkedAlone(utf8.RuneLen(r))
 	return len(w.now.states()) > 0
 }
 

@@ -285,6 +285,8 @@ func TestAGivenUpRoomTriesAgainAndWaitsLongerAfterEachTryThatFails(t *testing.T)
 	// Waited for, so that the test walks less than the constant says. A walk of 800 bytes walks
 	// 801, as retryWork counts, and what has been walked is asked before a walk.
 	w.known.offFor = 1000
+	// What the walk that gave up walked after is counted too; the count starts from nought here.
+	w.known.offWork = 0
 	check(strings.Repeat("ab", 400))
 	check(strings.Repeat("ab", 400))
 	if !w.known.off {
@@ -330,6 +332,7 @@ func TestWhatCountsTowardTryingAgainIsWhatWasWalked(t *testing.T) {
 		m.matchesIn(w, random(20_000))
 	}
 	w.known.offFor = 100
+	w.known.offWork = 0
 	for range 100 {
 		if !w.known.off {
 			t.Fatal("empty subjects led to a try too soon")
@@ -368,5 +371,27 @@ func TestCountsThatOnlyGrowAreHeldAtTheMostAnIntHolds(t *testing.T) {
 	k.giveUp()
 	if k.offFor != math.MaxInt {
 		t.Fatalf("a wait doubled past the most an int holds is %d", k.offFor)
+	}
+}
+
+// A walk that gives up keeping sets part of the way through counts what it walks after, as one
+// that had given up before it does: the wait before trying again bounds every walk without kept
+// sets, wherever it began.
+func TestAWalkThatGivesUpOnItsWayCountsWhatItWalksAfter(t *testing.T) {
+	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	m := read.compiled.machine
+	w := m.newWalk()
+	rng := uint32(7)
+	for !w.known.off {
+		var b strings.Builder
+		for range 20_000 {
+			rng = rng*1664525 + 1013904223
+			b.WriteByte("ab"[rng>>31])
+		}
+		m.matchesIn(w, b.String())
+	}
+	if w.known.offWork <= 1000 {
+		t.Fatalf("the walk that gave up counted %d of what it walked after", w.known.offWork)
 	}
 }
