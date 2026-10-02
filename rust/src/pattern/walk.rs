@@ -306,10 +306,10 @@ fn scatter(q: u32) -> u32 {
 /// both need. What only keeping a set needs, its hash and whether it accepts, is worked out of the
 /// set where it is kept ([`hash_of`], [`accepts`]), and nothing of it is held here.
 ///
-/// `pending`, `now` and `next` each hold a state at most once at a time, so each is made as large as
-/// the machine when the walk first starts a set ([`Walk::next_set`]) and never grows: putting a state
-/// in one is never a copy of all of it. Nothing moves one out of the walk to keep, which would leave
-/// it no room for the next set; a kept set is a copy ([`Cache::keep`]).
+/// `pending`, `now` and `next` start with no room and grow as a walk holds more states in them, as
+/// many as it has held at once and never more than the machine's states. Nothing takes that room away
+/// from the walk: a kept set is a copy of `next` as long as the set ([`Cache::keep`]), so the next
+/// set is put in the room the last one had, and a walk pays for room only as its sets need it.
 struct Walk {
     entered: Vec<u32>,
     generation: u32,
@@ -322,11 +322,7 @@ impl Walk {
     /// Starts the set the walk comes to next, in a generation of its own.
     fn next_set(&mut self, machine: &Machine) {
         if self.entered.is_empty() {
-            let states = machine.states();
-            self.entered = vec![0; states];
-            self.pending = Vec::with_capacity(states);
-            self.now = Vec::with_capacity(states);
-            self.next = Vec::with_capacity(states);
+            self.entered = vec![0; machine.states()];
         }
         if self.generation == u32::MAX {
             // A loop of its own and not `fill`: it goes over every state of the machine, and is one a
@@ -402,8 +398,8 @@ impl Walk {
 /// [`Cache::keep`] over the slots it looks in, the set it copies and the row it makes,
 /// [`Cache::same`] over a kept set, and [`Cache::grow`] over the kept sets; and
 /// [`Walk::next_set`], over every state, once in four billion sets. Making room is not a loop here:
-/// `vec!` makes `entered` once, and a list grows in `push` by doubling, which for the walk's own
-/// lists never happens, as `Walk` says. The test `the_walk_names_every_loop_it_has` holds this list to
+/// `vec!` makes `entered` once, and a list grows in `push` by doubling, as far as the most states
+/// the walk has held in it at once, as `Walk` says. The test `the_walk_names_every_loop_it_has` holds this list to
 /// the functions with a loop in them.
 pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bool {
     let classes = machine.classes.count();
@@ -667,38 +663,55 @@ mod tests {
     fn walk_paths() {
         extern crate std;
         use std::time::{Duration, Instant};
-        fn time(mut f: impl FnMut()) -> Duration {
-            let (start, mut times) = (Instant::now(), 0u32);
+        /// The mean time of `f` over about a second of calls, each after `before`, which is out of
+        /// the time.
+        fn time(mut before: impl FnMut(), mut f: impl FnMut()) -> Duration {
+            let (start, mut times, mut timed) = (Instant::now(), 0u32, Duration::ZERO);
             while start.elapsed() < Duration::from_secs(1) || times < 3 {
+                before();
+                let each = Instant::now();
                 f();
+                timed += each.elapsed();
                 times += 1;
             }
-            start.elapsed() / times
+            timed / times
         }
 
         let (large, a) = paths::large();
         let mut alone = large.matcher();
         alone.matches(&a);
-        let without = time(|| {
-            core::hint::black_box(alone.matches(&a));
-        });
+        let without = time(
+            || {},
+            || {
+                core::hint::black_box(alone.matches(&a));
+            },
+        );
 
         let (tenth, subject) = paths::tenth();
-        let new = time(|| {
-            core::hint::black_box(tenth.matches(&subject));
-        });
+        let new = time(
+            || {},
+            || {
+                core::hint::black_box(tenth.matches(&subject));
+            },
+        );
 
         let mut kept = tenth.matcher();
         kept.matches(&subject);
-        let steps = time(|| {
-            core::hint::black_box(kept.matches(&subject));
-        });
-        // Forgetting the steps is timed too, and is a small part: one write for each class of
-        // each kept set, where the match moves the states of most of them.
-        let found = time(|| {
-            paths::forget_steps(&mut kept.cache);
-            core::hint::black_box(kept.matches(&subject));
-        });
+        let steps = time(
+            || {},
+            || {
+                core::hint::black_box(kept.matches(&subject));
+            },
+        );
+        // The steps are forgotten before each match, out of its time; the cache is moved between
+        // the two by a cell, since both hold it.
+        let kept = core::cell::RefCell::new(kept);
+        let found = time(
+            || paths::forget_steps(&mut kept.borrow_mut().cache),
+            || {
+                core::hint::black_box(kept.borrow_mut().matches(&subject));
+            },
+        );
 
         std::println!(
             "{:<56} {without:>10.2?}",
@@ -842,52 +855,45 @@ mod tests {
         }
     }
 
-    /// The walk's lists of states are made as large as the machine once, and no match grows them:
-    /// not one that keeps a new set at most characters, nor one that looks kept sets up, nor one
-    /// that gives keeping them up and walks a state at a time.
+    /// Keeping a set takes no room from the walk: `next` has the room it had before, and the kept
+    /// set holds no more than its states, which is what [`KNOWN_BYTES`] counts. Moving `next` out of
+    /// the walk instead would leave it no room, to be grown again for every set after.
     #[test]
-    fn no_match_grows_the_walks_lists_of_states() {
+    fn keeping_a_set_takes_no_room_from_the_walk() {
+        let pattern = pattern("(?:a|b)*a(?:a|b){8}");
+        let super::super::Run::Steps(machine) = &pattern.run else {
+            unreachable!("a pattern read from text is walked by its steps")
+        };
+        let classes = machine.classes.count();
+        let mut matcher = pattern.matcher();
         let mut numbers = Numbers(7);
-        for (text, length) in [
-            ("(?:a|b)*a(?:a|b){8}", 400),
-            ("(?:a|b)*a(?:a|b){16}", 20_000),
-        ] {
-            let pattern = pattern(text);
-            let mut matcher = pattern.matcher();
-            matcher.matches("");
-            let walk = &matcher.cache.walk;
-            let room = [
-                walk.pending.capacity(),
-                walk.now.capacity(),
-                walk.next.capacity(),
-            ];
-            let super::super::Run::Steps(machine) = &pattern.run else {
-                unreachable!("a pattern read from text is walked by its steps")
-            };
-            assert!(
-                room.iter().all(|&each| each >= machine.states()),
-                "{text}: {room:?}"
-            );
-            for _ in 0..4 {
-                let subject: String = (0..length)
-                    .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
-                    .collect();
-                matcher.matches(&subject);
-                let walk = &matcher.cache.walk;
-                assert_eq!(
-                    [
-                        walk.pending.capacity(),
-                        walk.now.capacity(),
-                        walk.next.capacity()
-                    ],
-                    room,
-                    "{text}"
-                );
+        let subject: String = (0..400)
+            .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
+            .collect();
+        matcher.matches(&subject);
+        let cache = &mut matcher.cache;
+        let sets = cache.sets.clone();
+        assert!(sets.len() > 10, "{} sets kept", sets.len());
+        for (at, set) in sets.into_iter().enumerate() {
+            cache.forget();
+            cache.walk.next_set(machine);
+            for &q in &set {
+                cache.walk.enter(machine, q);
             }
+            let room = cache.walk.next.capacity();
+            let row = cache.keep(machine, classes);
+            assert_eq!(row, Some((0, false)), "set {at} is kept anew");
             assert_eq!(
-                matcher.cache.off,
-                length > 400,
-                "{text} took the way it is here for"
+                cache.walk.next.capacity(),
+                room,
+                "set {at} took the walk's room"
+            );
+            assert_eq!(cache.walk.next, set, "set {at} is still the walk's");
+            let held = &cache.sets[0];
+            assert_eq!(
+                held.capacity(),
+                held.len(),
+                "set {at} holds more than its states"
             );
         }
     }
