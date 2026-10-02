@@ -323,7 +323,8 @@ public final class PatternParser {
                 throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
             }
             if (peek() == '&' && at + 1 < regex.length() && regex.charAt(at + 1) == '&') {
-                at += 2;
+                take();
+                take();
                 throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
             }
             members.addAll(classMember().ranges());
@@ -419,7 +420,7 @@ public final class PatternParser {
     /** The refusal of the escape whose kind is the character here, quoting it with that
      *  character whole. */
     private Refused refusedAfter(PatternRead.Refusal why) {
-        at += Character.charCount(regex.codePointAt(at));
+        take();
         return refused(why);
     }
 
@@ -479,12 +480,7 @@ public final class PatternParser {
      * beside it is no character ({@link #symbol}).
      */
     private int literal() {
-        if (done()) {
-            throw refused(PatternRead.Refusal.SOMETHING_UNCLOSED);
-        }
-        int written = regex.codePointAt(at);
-        at += Character.charCount(written);
-        return symbol(written);
+        return symbol(take());
     }
 
     /**
@@ -550,11 +546,21 @@ public final class PatternParser {
         return done() ? END : regex.charAt(at);
     }
 
-    private char take() {
+    /**
+     * The character here, the reading moved past it whole.
+     *
+     * <p>{@link #at} counts units, as a refusal's place does, but a character past the basic plane
+     * is taken as one: moved past half of it, the reading would stop between the two halves of a
+     * pair, and a refusal would quote the first half, which is no text. Half a pair with no other
+     * half beside it is taken as the one unit it is.
+     */
+    private int take() {
         if (done()) {
             throw refused(PatternRead.Refusal.SOMETHING_UNCLOSED);
         }
-        return regex.charAt(at++);
+        int taken = regex.codePointAt(at);
+        at += Character.charCount(taken);
+        return taken;
     }
 
     private void expect(char c) {
