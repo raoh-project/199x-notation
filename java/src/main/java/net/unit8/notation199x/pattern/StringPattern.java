@@ -615,7 +615,7 @@ public final class StringPattern implements Predicate<String> {
         Room room = new Room(accepting.length);
         room.round = 1;
         int count = close(steps, 0, room.there, 0, room, null);
-        return Subsets.of(classes, budget, room, count);
+        return Subsets.of(classes, budget, room, count, accepting);
     }
 
     /**
@@ -1326,8 +1326,6 @@ public final class StringPattern implements Predicate<String> {
                                   @Nullable Checkpoint checkpoint) {
         int symbol = known.classes.some(each);
         room.round++;
-        room.hash = 0;
-        room.accepting = false;
         int count = 0;
         for (int state : from.states) {
             ask(checkpoint);
@@ -1340,7 +1338,7 @@ public final class StringPattern implements Predicate<String> {
                 }
             }
         }
-        Subset to = count == 0 ? known.nothing : known.held(room, count, checkpoint);
+        Subset to = count == 0 ? known.nothing : known.held(room, count, accepting, checkpoint);
         if (to == from) {
             from.staysOn(known.classes, each);
         }
@@ -1427,16 +1425,18 @@ public final class StringPattern implements Predicate<String> {
          * The sets a pattern keeps, holding the one of the {@code count} states first in
          * {@code started.there} that a walk starts in; or null where that one is past what they may
          * hold. It is kept as every other set is ({@link #keep}), so no set is held that is not
-         * counted.
+         * counted. {@code accepting} is the states a walk may stop at.
          */
-        static @Nullable Subsets of(SymbolClasses classes, Budget budget, Room started, int count) {
+        static @Nullable Subsets of(SymbolClasses classes, Budget budget, Room started, int count,
+                                    boolean[] accepting) {
             // No walk is in the set with no state in it, so no step from it is kept.
             Subset nothing = new Subset(new int[0], false, 0, 0);
             if (count == 0) {
                 return new Subsets(classes, budget, nothing, nothing);
             }
-            Subset start = new Subset(Arrays.copyOf(started.there, count), started.accepting,
-                    started.hash, classes.count());
+            Subset start = new Subset(Arrays.copyOf(started.there, count),
+                    acceptsAny(accepting, started.there, count, null),
+                    hashOf(started.there, count, null), classes.count());
             Subsets out = new Subsets(classes, budget, nothing, start);
             return out.keep(out.slot(start.hash), start) ? out : null;
         }
@@ -1456,10 +1456,13 @@ public final class StringPattern implements Predicate<String> {
         /**
          * The set of the {@code count} states first in {@code room.there}, which are the ones
          * {@code room.seen} marks with its round: the one kept where it is kept, and otherwise kept
-         * now. Null where it is one more than is kept.
+         * now. Null where it is one more than is kept. Its hash is summed here to look it up, and
+         * whether it accepts, of the states a walk may stop at ({@code accepting}), is asked only
+         * where it is kept.
          */
-        @Nullable Subset held(Room room, int count, @Nullable Checkpoint checkpoint) {
-            int hash = room.hash;
+        @Nullable Subset held(Room room, int count, boolean[] accepting,
+                              @Nullable Checkpoint checkpoint) {
+            int hash = hashOf(room.there, count, checkpoint);
             int mask = slots.length() - 1;
             @Nullable Subset made = null;
             int at = slot(hash);
@@ -1468,7 +1471,8 @@ public final class StringPattern implements Predicate<String> {
                 Subset held = slots.get(at);
                 if (held == null) {
                     if (made == null) {
-                        made = new Subset(Arrays.copyOf(room.there, count), room.accepting, hash,
+                        made = new Subset(Arrays.copyOf(room.there, count),
+                                acceptsAny(accepting, room.there, count, checkpoint), hash,
                                 classes.count());
                     }
                     if (keep(at, made)) {
@@ -1530,7 +1534,11 @@ public final class StringPattern implements Predicate<String> {
     /**
      * What a walk as sets of states is held in, as large as the machine: the
      * states it is in and is going into, which of them it has put in this round, and those it has
-     * yet to look past for steps for no character. With them, what the states last put in come to.
+     * yet to look past for steps for no character.
+     *
+     * <p>Every walk puts states in through {@link #close}, with sets kept or without, so nothing is
+     * held here that only one of them needs. What only keeping a set needs, its hash and whether it
+     * accepts, is worked out of the set where it is kept ({@link #hashOf}, {@link #acceptsAny}).
      */
     private static final class Room {
 
@@ -1539,10 +1547,6 @@ public final class StringPattern implements Predicate<String> {
         final int[] seen;
         final int[] pending;
         int round;
-        /** The sum of {@link #scatter} over the states put in since it was last set to nought. */
-        int hash;
-        /** Whether a walk may stop at any of the states put in since this was last set false. */
-        boolean accepting;
 
         Room(int states) {
             this.here = new int[states];
@@ -1550,6 +1554,32 @@ public final class StringPattern implements Predicate<String> {
             this.seen = new int[states];
             this.pending = new int[states];
         }
+    }
+
+    /** The sum of {@link #scatter} over the first {@code count} of {@code states}, the same in
+     *  whatever order they are in, asking before each. It is summed where a set is looked up and
+     *  not as each state is put in, so a walk that keeps no sets does not sum it. */
+    private static int hashOf(int[] states, int count, @Nullable Checkpoint checkpoint) {
+        int hash = 0;
+        for (int i = 0; i < count; i++) {
+            ask(checkpoint);
+            hash += scatter(states[i]);
+        }
+        return hash;
+    }
+
+    /** Whether a walk may stop at any of the first {@code count} of {@code states}, asking before
+     *  each: asked where a set is kept and where a walk without kept sets ends, and not as each state
+     *  is put in. */
+    private static boolean acceptsAny(boolean[] accepting, int[] states, int count,
+                                      @Nullable Checkpoint checkpoint) {
+        for (int i = 0; i < count; i++) {
+            ask(checkpoint);
+            if (accepting[states[i]]) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** A state's part of the hash of a set it is in, which is the same in whatever order the set's
@@ -1608,13 +1638,7 @@ public final class StringPattern implements Predicate<String> {
             there = was;
             count = next;
         }
-        for (int i = 0; i < count; i++) {
-            ask(checkpoint);
-            if (accepting[here[i]]) {
-                return true;
-            }
-        }
-        return false;
+        return acceptsAny(accepting, here, count, checkpoint);
     }
 
     /** {@code from} and every state it reaches for no character, put into {@code into} after its
@@ -1636,8 +1660,6 @@ public final class StringPattern implements Predicate<String> {
             ask(checkpoint);
             int state = pending[--top];
             into[held++] = state;
-            room.hash += scatter(state);
-            room.accepting |= accepting[state];
             for (int to : steps.free()[state]) {
                 ask(checkpoint);
                 if (seen[to] != round && live[to]) {
