@@ -1,6 +1,6 @@
 [package]
 name = "notation199x"
-version = "0.1.0"
+version = "0.2.0-dev"
 edition = "2024"
 rust-version = "1.88"
 description = "The rules for reading text that Raoh and Souther share: Unicode 18.0.0 case conversion and normalization, White_Space, order and length in scalar values, temporal text, and the pattern language"
