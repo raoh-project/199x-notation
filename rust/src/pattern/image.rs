@@ -1,38 +1,57 @@
-//! Reading an image of P1, as `image/P1.md` in the repository defines it.
+//! Reading an image of P1 or P2, as `image/P1.md` and `image/P2.md` in the repository define them.
 
 use alloc::collections::BTreeSet;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use super::machine::Machine;
+use super::spans::Spans;
 use super::symbols::Symbols;
 
-/// Text that is not an image of P1.
+/// Text that is not an image of a format this reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NotAnImage;
 
 impl core::fmt::Display for NotAnImage {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("not an image of P1")
+        f.write_str("not an image of P1 or P2")
     }
 }
 
 impl core::error::Error for NotAnImage {}
 
-/// The machine `image` is an image of, or [`NotAnImage`] where it is not one.
+/// What an image was read as: a machine of sets and steps from an image of P1, or the pieces and
+/// spans of an image of P2, each walked its own way.
+pub(crate) enum Read {
+    Steps(Machine),
+    Spans(Spans),
+}
+
+/// The machine `image` is an image of, in the format its marker names, or [`NotAnImage`] where it is
+/// not one.
 ///
-/// Every rule `P1.md` gives is asked before anything is matched, so a machine that was read answers
-/// every text it is asked about. Nothing is made ready for a count before what it counts has been
-/// read: a count may be as large as any number, and the image holds as many of what it counts as
-/// the count says or is not one, so what is made grows with what has been read.
-pub(crate) fn read(image: &str) -> Result<Machine, NotAnImage> {
+/// Every rule the format gives is asked before anything is matched, so a machine that was read
+/// answers every text it is asked about.
+pub(crate) fn read(image: &str) -> Result<Read, NotAnImage> {
     let mut numbers = Numbers {
         text: image.as_bytes(),
-        at: 0,
+        at: 2,
     };
-    if !image.starts_with("P1") {
-        return Err(NotAnImage);
+    if image.starts_with("P1") {
+        read_p1(&mut numbers).map(Read::Steps)
+    } else if image.starts_with("P2") {
+        read_p2(&mut numbers).map(Read::Spans)
+    } else {
+        Err(NotAnImage)
     }
-    numbers.at = 2;
+}
+
+/// The machine an image of P1 writes, read from after its marker.
+///
+/// Nothing is made ready for a count before what it counts has been read: a count may be as large
+/// as any number, and the image holds as many of what it counts as the count says or is not one,
+/// so what is made grows with what has been read.
+fn read_p1(numbers: &mut Numbers<'_>) -> Result<Machine, NotAnImage> {
     let deterministic = numbers.flag()?;
     let set_count = numbers.next()?;
     let mut sets = Vec::new();
@@ -64,6 +83,75 @@ pub(crate) fn read(image: &str) -> Result<Machine, NotAnImage> {
         return Err(NotAnImage);
     }
     Ok(machine)
+}
+
+/// The machine an image of P2 writes, read from after its marker.
+///
+/// Each rule `P2.md` gives is asked of the number being read and of what was read just before it,
+/// so what this does is as long as the image. The pieces end at U+10FFFF and a state's spans at the
+/// greatest class, and neither is counted; the states are, and nothing is made ready for them
+/// before they are read.
+fn read_p2(numbers: &mut Numbers<'_>) -> Result<Spans, NotAnImage> {
+    let mut lasts: Vec<u32> = Vec::new();
+    let mut classes: Vec<u32> = Vec::new();
+    let mut greatest = 0;
+    loop {
+        let last = numbers.next()?;
+        let class = numbers.next()?;
+        if char::from_u32(last).is_none() || lasts.last().is_some_and(|&before| last <= before) {
+            return Err(NotAnImage);
+        }
+        // The first piece is in class 0 and each later one in a class before it or the next.
+        let next = if classes.is_empty() { 0 } else { greatest + 1 };
+        if class > next || classes.last() == Some(&class) {
+            return Err(NotAnImage);
+        }
+        greatest = greatest.max(class);
+        lasts.push(last);
+        classes.push(class);
+        if last == u32::from(char::MAX) {
+            break;
+        }
+    }
+    let state_count = numbers.next()?;
+    if state_count == 0 {
+        return Err(NotAnImage);
+    }
+    let mut accepting = Vec::new();
+    let mut starts = vec![0];
+    let mut ends: Vec<u32> = Vec::new();
+    let mut to: Vec<u32> = Vec::new();
+    for _ in 0..state_count {
+        accepting.push(numbers.flag()?);
+        let from = ends.len();
+        loop {
+            let end = numbers.next()?;
+            let leads = numbers.below(state_count)?;
+            if end > greatest
+                || ends[from..].last().is_some_and(|&before| end <= before)
+                || to[from..].last() == Some(&leads)
+            {
+                return Err(NotAnImage);
+            }
+            ends.push(end);
+            to.push(leads);
+            if end == greatest {
+                break;
+            }
+        }
+        starts.push(ends.len());
+    }
+    if !numbers.done() {
+        return Err(NotAnImage);
+    }
+    Ok(Spans {
+        lasts,
+        classes,
+        accepting,
+        starts,
+        ends,
+        to,
+    })
 }
 
 /// The numbers of an image after its marker, each read after its comma.

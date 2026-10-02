@@ -5,6 +5,7 @@ mod anchors;
 mod image;
 mod machine;
 mod read;
+mod spans;
 mod states;
 mod symbols;
 mod tree;
@@ -38,7 +39,14 @@ pub enum PatternRead {
 
 /// A pattern that was read, as the strings it accepts.
 pub struct Pattern {
-    machine: Machine,
+    run: Run,
+}
+
+/// What a match walks: the machine of a pattern read from text or from an image of P1, or the
+/// spans of an image of P2.
+enum Run {
+    Steps(Machine),
+    Spans(spans::Spans),
 }
 
 impl Pattern {
@@ -67,26 +75,35 @@ impl Pattern {
         }
     }
 
-    /// The pattern `image` is an image of, in the format P1 that `image/P1.md` in the repository
-    /// defines, or [`NotAnImage`] where it is not one: every rule of the format is asked before
-    /// anything is matched.
+    /// The pattern `image` is an image of, in the format P1 or P2 that `image/P1.md` and
+    /// `image/P2.md` in the repository define, or [`NotAnImage`] where it is not one: every rule of
+    /// the format is asked before anything is matched.
     ///
     /// The image is the machine another implementation built, written out so that it runs here, and
     /// it accepts what the pattern it was written from accepts. It is held to the rules of the format
     /// and not to the limits a pattern read from text is held to: a reader reads every image a writer
-    /// writes, and may read a longer one. A match walks the machine as it is written, as the set of
-    /// states it may be in, so each scalar value of the subject may cost as many steps as the image
-    /// has.
+    /// writes, and may read a longer one.
     ///
-    /// Reading is not bounded by the image's length where the image says its machine is
-    /// deterministic. That no two steps out of one state are over sets with a scalar value in common
-    /// is asked once for each different group of sets a state steps over, and a set is written once
-    /// however many groups hold it, so in the worst case the work grows with the square of the
-    /// image's length. Java holds an image to the same rule the same way.
+    /// A machine of P1 is walked as it is written, as the set of states it may be in, so each scalar
+    /// value of the subject may cost as many steps as the image has. Reading one is not bounded by
+    /// the image's length where the image says its machine is deterministic. That no two steps out
+    /// of one state are over sets with a scalar value in common is asked once for each different
+    /// group of sets a state steps over, and a set is written once however many groups hold it, so
+    /// in the worst case the work grows with the square of the image's length. Java holds an image
+    /// to the same rule the same way, and writes no such image any more.
+    ///
+    /// An image of P2 cannot write a machine that is not deterministic, and reading one is as long
+    /// as the image. Its machine is walked one state at a time, each scalar value two searches of
+    /// what the image wrote.
     ///
     /// The crate writes no image.
     pub fn from_image(image: &str) -> Result<Pattern, NotAnImage> {
-        image::read(image).map(|machine| Pattern { machine })
+        image::read(image).map(|read| Pattern {
+            run: match read {
+                image::Read::Steps(machine) => Run::Steps(machine),
+                image::Read::Spans(spans) => Run::Spans(spans),
+            },
+        })
     }
 }
 
@@ -106,7 +123,10 @@ impl Matcher<'_> {
     /// Whether the whole of `subject` is one of the strings the pattern accepts, as
     /// [`Pattern::matches`] answers.
     pub fn matches(&mut self, subject: &str) -> bool {
-        walk::matches(&self.pattern.machine, &mut self.cache, subject)
+        match &self.pattern.run {
+            Run::Steps(machine) => walk::matches(machine, &mut self.cache, subject),
+            Run::Spans(spans) => spans.matches(subject),
+        }
     }
 }
 
@@ -264,7 +284,7 @@ pub fn read_pattern(text: &str) -> PatternRead {
         });
     }
     PatternRead::Pattern(Pattern {
-        machine: machine::build(tree, meaning),
+        run: Run::Steps(machine::build(tree, meaning)),
     })
 }
 

@@ -461,7 +461,10 @@ mod tests {
     fn state_at_a_time(pattern: &crate::Pattern, subject: &str) -> bool {
         let mut cache = Cache::new();
         cache.off = true;
-        matches(&pattern.machine, &mut cache, subject)
+        let super::super::Run::Steps(machine) = &pattern.run else {
+            unreachable!("a pattern read from text is walked by its steps")
+        };
+        matches(machine, &mut cache, subject)
     }
 
     /// Patterns made at random of a few symbols and every shape, and subjects of the same symbols:
