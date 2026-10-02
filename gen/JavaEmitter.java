@@ -46,8 +46,8 @@ final class JavaEmitter {
         out.append(" * <p>Generated from Unicode ").append(version).append("'s {@code UnicodeData.txt}, ")
                 .append("{@code SpecialCasing.txt} and {@code DerivedCoreProperties.txt}")
                 .append(" ({@code https://www.unicode.org/Public/").append(version).append("/ucd/})")
-                .append(" by {@code gen/GenerateCaseTables.java}. DO NOT EDIT — regenerate on a Unicode\n");
-        out.append(" * version bump with {@code java gen/GenerateCaseTables.java ucd/<version>}, which this file's\n");
+                .append(" by {@code gen/Generate.java}. DO NOT EDIT — regenerate on a Unicode\n");
+        out.append(" * version bump with {@code java gen/Generate.java ucd/<version>}, which this file's\n");
         out.append(" * source checksums let a reviewer confirm ran against the version it claims.\n");
         out.append(" *\n");
         out.append(" * <p>SHA-256, of the three input files as downloaded:\n");
@@ -152,11 +152,11 @@ final class JavaEmitter {
                 .append(" {@code CompositionExclusions.txt}\n")
                 .append(" * and {@code DerivedNormalizationProps.txt}'s quick checks")
                 .append(" ({@code https://www.unicode.org/Public/").append(version).append("/ucd/})\n")
-                .append(" * by {@code gen/GenerateNormalizationTables.java},")
+                .append(" * by {@code gen/Generate.java},")
                 .append(" checked against {@code DerivedNormalizationProps.txt}'s\n")
                 .append(" * {@code Full_Composition_Exclusion} at generation time.\n");
         out.append(" * DO NOT EDIT — regenerate on a Unicode version bump with")
-                .append(" {@code java gen/GenerateNormalizationTables.java ucd/<version>},\n");
+                .append(" {@code java gen/Generate.java ucd/<version>},\n");
         out.append(" * which this file's source checksums let a reviewer confirm ran against the version it claims.\n");
         out.append(" *\n");
         out.append(" * <p>SHA-256, of the three input files as downloaded:\n");

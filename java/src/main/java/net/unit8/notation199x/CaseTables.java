@@ -3,8 +3,8 @@ package net.unit8.notation199x;
 /**
  * The default case conversion tables {@link CaseConversion} reads: Unicode 18.0.0, untailored full mapping.
  *
- * <p>Generated from Unicode 18.0.0's {@code UnicodeData.txt}, {@code SpecialCasing.txt} and {@code DerivedCoreProperties.txt} ({@code https://www.unicode.org/Public/18.0.0/ucd/}) by {@code gen/GenerateCaseTables.java}. DO NOT EDIT — regenerate on a Unicode
- * version bump with {@code java gen/GenerateCaseTables.java ucd/<version>}, which this file's
+ * <p>Generated from Unicode 18.0.0's {@code UnicodeData.txt}, {@code SpecialCasing.txt} and {@code DerivedCoreProperties.txt} ({@code https://www.unicode.org/Public/18.0.0/ucd/}) by {@code gen/Generate.java}. DO NOT EDIT — regenerate on a Unicode
+ * version bump with {@code java gen/Generate.java ucd/<version>}, which this file's
  * source checksums let a reviewer confirm ran against the version it claims.
  *
  * <p>SHA-256, of the three input files as downloaded:
