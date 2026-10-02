@@ -37,34 +37,9 @@ final class ScalarValues
         }
         $length = strlen($s);
         for ($at = 0; $at < $length;) {
-            $b0 = ord($s[$at]);
-            if ($b0 < 0x80) {
-                $at++;
-                continue;
-            }
-            // The least and the greatest second byte each first byte allows, as RFC 3629 states
-            // them: what keeps out an overlong form, a surrogate and what is past U+10FFFF.
-            [$width, $low, $high] = match (true) {
-                $b0 >= 0xC2 && $b0 <= 0xDF => [2, 0x80, 0xBF],
-                $b0 === 0xE0 => [3, 0xA0, 0xBF],
-                $b0 >= 0xE1 && $b0 <= 0xEC, $b0 === 0xEE, $b0 === 0xEF => [3, 0x80, 0xBF],
-                $b0 === 0xED => [3, 0x80, 0x9F],
-                $b0 === 0xF0 => [4, 0x90, 0xBF],
-                $b0 >= 0xF1 && $b0 <= 0xF3 => [4, 0x80, 0xBF],
-                $b0 === 0xF4 => [4, 0x80, 0x8F],
-                default => [0, 0, 0],
-            };
-            if ($width === 0 || $at + $width > $length) {
+            [$cp, $width] = Internal\Utf8::scalarAt($s, $at);
+            if ($cp < 0) {
                 return $at;
-            }
-            $b1 = ord($s[$at + 1]);
-            if ($b1 < $low || $b1 > $high) {
-                return $at;
-            }
-            for ($i = 2; $i < $width; $i++) {
-                if ((ord($s[$at + $i]) & 0xC0) !== 0x80) {
-                    return $at;
-                }
             }
             $at += $width;
         }

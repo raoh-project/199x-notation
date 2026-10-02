@@ -6,6 +6,7 @@ namespace Raoh\Notation199x\Internal\Pattern;
 
 use Raoh\Notation199x\Internal\PatternAlphabetTables;
 use Raoh\Notation199x\Internal\Ranges;
+use Raoh\Notation199x\Internal\Utf8;
 use Raoh\Notation199x\PatternBeyond;
 use Raoh\Notation199x\PatternLimit;
 use Raoh\Notation199x\PatternRefusal;
@@ -373,7 +374,7 @@ final class Reader
         }
         // The whole character after the backslash, so that one past the basic plane is classified
         // as the character it is.
-        [$kind] = $this->characterHere();
+        [$kind] = Utf8::scalarAt($this->text, $this->at);
         switch ($kind) {
             // The shorthands, as the language defines them: the digits are the ten ASCII ones, a
             // word character is ASCII with the underscore, and the whitespace is six characters.
@@ -530,7 +531,7 @@ final class Reader
             $this->at++;
             return $byte;
         }
-        [$written, $width] = $this->characterHere();
+        [$written, $width] = Utf8::scalarAt($this->text, $this->at);
         $this->at += $width;
         if ($written < 0) {
             $this->refuse(PatternRefusal::ACharacterNoStringHolds);
@@ -613,7 +614,7 @@ final class Reader
             $this->refuse(PatternRefusal::SomethingUnclosed);
         }
         $first = ord($this->text[$this->at]);
-        $this->at += $first < 0x80 ? 1 : $this->characterHere()[1];
+        $this->at += $first < 0x80 ? 1 : Utf8::scalarAt($this->text, $this->at)[1];
         return $first;
     }
 
@@ -626,47 +627,6 @@ final class Reader
             $this->refuse(PatternRefusal::SomethingUnclosed);
         }
         $this->take();
-    }
-
-    /**
-     * The scalar value whose UTF-8 begins here and how many bytes it takes, or -1 and one byte
-     * where the bytes here are not UTF-8.
-     *
-     * @return array{int, int}
-     */
-    private function characterHere(): array
-    {
-        $b0 = ord($this->text[$this->at]);
-        if ($b0 < 0x80) {
-            return [$b0, 1];
-        }
-        // The least and the greatest second byte each first byte allows, as RFC 3629 states them.
-        [$width, $low, $high, $bits] = match (true) {
-            $b0 >= 0xC2 && $b0 <= 0xDF => [2, 0x80, 0xBF, $b0 & 0x1F],
-            $b0 === 0xE0 => [3, 0xA0, 0xBF, 0],
-            $b0 >= 0xE1 && $b0 <= 0xEC, $b0 === 0xEE, $b0 === 0xEF => [3, 0x80, 0xBF, $b0 & 0x0F],
-            $b0 === 0xED => [3, 0x80, 0x9F, 0x0D],
-            $b0 === 0xF0 => [4, 0x90, 0xBF, 0],
-            $b0 >= 0xF1 && $b0 <= 0xF3 => [4, 0x80, 0xBF, $b0 & 0x07],
-            $b0 === 0xF4 => [4, 0x80, 0x8F, 0x04],
-            default => [0, 0, 0, 0],
-        };
-        if ($width === 0 || $this->at + $width > $this->length) {
-            return [-1, 1];
-        }
-        $b1 = ord($this->text[$this->at + 1]);
-        if ($b1 < $low || $b1 > $high) {
-            return [-1, 1];
-        }
-        $cp = ($bits << 6) | ($b1 & 0x3F);
-        for ($i = 2; $i < $width; $i++) {
-            $b = ord($this->text[$this->at + $i]);
-            if (($b & 0xC0) !== 0x80) {
-                return [-1, 1];
-            }
-            $cp = ($cp << 6) | ($b & 0x3F);
-        }
-        return [$cp, $width];
     }
 
     /**
