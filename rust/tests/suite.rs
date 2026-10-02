@@ -150,3 +150,62 @@ fn temporal_text_answers_every_line_of_the_suite() {
         (answer.is_ok() != admitted).then(|| format!("{} as {kind:?} is {answer:?}", shown(&text)))
     });
 }
+
+fn limit_named(name: &str) -> PatternLimit {
+    match name {
+        "REPETITION_COUNT" => PatternLimit::RepetitionCount,
+        "NESTING_DEPTH" => PatternLimit::NestingDepth,
+        _ => PatternLimit::MachineStates,
+    }
+}
+
+#[test]
+fn patterns_are_read_as_every_line_of_the_suite_says() {
+    each_line("suite/pattern-read.txt", 3, |line| {
+        let pattern = line.text(0);
+        let outcome = line.one_of(1, &["READ", "REFUSED", "BEYOND"]);
+        let limit = if outcome == "BEYOND" {
+            line.one_of_or_nothing(2, &["REPETITION_COUNT", "NESTING_DEPTH", "MACHINE_STATES"])
+        } else {
+            line.empty(2);
+            None
+        };
+        let read = read_pattern(&pattern);
+        let as_said = match &read {
+            PatternRead::Pattern(_) => outcome == "READ",
+            PatternRead::Refused(_) => outcome == "REFUSED",
+            PatternRead::Beyond(beyond) => {
+                outcome == "BEYOND" && limit.is_none_or(|limit| beyond.limit == limit_named(limit))
+            }
+        };
+        (!as_said).then(|| format!("{} is {read:?}, not {outcome} {limit:?}", shown(&pattern)))
+    });
+}
+
+/// The states the specifications state the limit in, which the file's rule is written against: not
+/// the one this implementation holds, which is what is tested.
+const MOST_STATES: usize = 250_000;
+
+#[test]
+fn pattern_states_are_counted_as_every_line_of_the_suite_says() {
+    each_line("suite/pattern-states.txt", 2, |line| {
+        let pattern = line.text(0);
+        let states = line.number(1);
+        let at = read_pattern(&format!(
+            "(?:{pattern})|a{{0,{}}}",
+            MOST_STATES - 5 - states
+        ));
+        let past = read_pattern(&format!(
+            "(?:{pattern})|a{{0,{}}}",
+            MOST_STATES - 4 - states
+        ));
+        if !matches!(at, PatternRead::Pattern(_)) {
+            return Some(format!("{} at the limit is {at:?}", shown(&pattern)));
+        }
+        if !matches!(&past, PatternRead::Beyond(beyond) if beyond.limit == PatternLimit::MachineStates)
+        {
+            return Some(format!("{} past the limit is {past:?}", shown(&pattern)));
+        }
+        None
+    });
+}

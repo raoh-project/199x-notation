@@ -26,13 +26,13 @@ mod case_tables;
 #[rustfmt::skip]
 mod normalization_tables;
 #[rustfmt::skip]
-#[allow(dead_code)]
 mod pattern_alphabet_tables;
 #[rustfmt::skip]
 mod white_space_tables;
 
 mod case;
 mod normalization;
+mod pattern;
 mod tables;
 mod temporal;
 mod text;
@@ -40,6 +40,9 @@ mod white_space;
 
 pub use case::{lowercase, lowercase_within, uppercase, uppercase_within};
 pub use normalization::{Form, normalize, normalize_within};
+pub use pattern::{
+    Pattern, PatternBeyond, PatternLimit, PatternRead, PatternRefusal, PatternRefused, read_pattern,
+};
 pub use temporal::{
     INSTANT_MAX, INSTANT_MIN, TemporalKind, TemporalRefusal, YEAR_MAX, YEAR_MIN, check_temporal,
 };
