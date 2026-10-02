@@ -396,12 +396,15 @@ impl Walk {
 /// ([`Cache::keep`]). Where sets are not kept, every character is worked out so ([`Cache::walk_alone`]).
 ///
 /// The loops whose count turns on the subject, the machine or the kept sets are these, and no other:
-/// [`run_known`] and [`Cache::walk_alone`] over the subject; [`Walk::advance`] and [`Walk::enter`] over the
-/// steps and free steps of the states they move; [`hash_of`] and [`accepts`] over a set;
+/// [`matches`] over the places the subject leads out of the kept steps, [`read_classes`], which
+/// `run_known` reads through, and [`Cache::walk_alone`] over the subject; [`Walk::advance`] and [`Walk::enter`]
+/// over the steps and free steps of the states they move; [`hash_of`] and [`accepts`] over a set;
 /// [`Cache::keep`] over the slots it looks in, the set it copies and the row it makes,
-/// [`Cache::same`] over a kept set,
-/// and [`Cache::grow`] over the kept sets; and
-/// [`Walk::next_set`], over every state, once in four billion sets.
+/// [`Cache::same`] over a kept set, and [`Cache::grow`] over the kept sets; and
+/// [`Walk::next_set`], over every state, once in four billion sets. Making room is not a loop here:
+/// `vec!` makes `entered` once, and a list grows in `push` by doubling, which for the walk's own
+/// lists never happens, as `Walk` says. The test `the_walk_names_every_loop_it_has` holds this list to
+/// the functions with a loop in them.
 pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bool {
     let classes = machine.classes.count();
     if cache.walks_alone() {
@@ -713,6 +716,130 @@ mod tests {
             "{:<56} {found:>10.2?}",
             "kept sets found by their hash, 400 bytes"
         );
+    }
+
+    /// The list of loops in [`matches`]'s doc is held to the code: each function of this file with a
+    /// loop in it is named, each name is a function with a loop, here or in `subject.rs`, and the
+    /// code calls nothing that goes over a list out of sight. The list was written by hand and once
+    /// named a function with no loop and left out one with a loop, as Go's did before its test.
+    #[test]
+    fn the_walk_names_every_loop_it_has() {
+        use alloc::collections::BTreeSet;
+        use alloc::string::ToString;
+        use alloc::vec::Vec;
+
+        /// The code of `source` before its tests, each line without what follows `//`.
+        fn code(source: &str) -> Vec<&str> {
+            let before = source.find("#[cfg(test)]").unwrap_or(source.len());
+            source[..before]
+                .lines()
+                .map(|line| line.find("//").map_or(line, |at| &line[..at]))
+                .collect()
+        }
+
+        /// Each function of `lines` with a loop in it, named as the doc names it.
+        fn looping(lines: &[&str]) -> BTreeSet<String> {
+            let mut out = BTreeSet::new();
+            let mut within = None;
+            let mut function: Option<String> = None;
+            for line in lines {
+                if let Some(rest) = line.strip_prefix("impl ") {
+                    within = rest.split_whitespace().next().map(|name| name.to_string());
+                } else if line.starts_with('}') {
+                    within = None;
+                }
+                let trimmed = line.trim_start();
+                let named = trimmed
+                    .strip_prefix("pub(crate) fn ")
+                    .or_else(|| trimmed.strip_prefix("fn "));
+                if let Some(rest) = named {
+                    let name = &rest[..rest.find(['(', '<']).expect("a function's name ends")];
+                    let top = !line.starts_with(' ');
+                    function = Some(match (&within, top) {
+                        (Some(owner), false) => format!("{owner}::{name}"),
+                        _ => name.to_string(),
+                    });
+                    if top {
+                        within = None;
+                    }
+                }
+                let loops = trimmed.starts_with("for ")
+                    || trimmed.starts_with("while ")
+                    || trimmed.contains("loop {");
+                if loops && let Some(name) = &function {
+                    out.insert(name.clone());
+                }
+            }
+            out
+        }
+
+        let walk = code(include_str!("walk.rs"));
+        let subject = code(include_str!("subject.rs"));
+        let doc: String = include_str!("walk.rs")
+            .lines()
+            .skip_while(|line| !line.starts_with("/// The loops whose count"))
+            .take_while(|line| line.starts_with("///"))
+            .collect();
+        let named: BTreeSet<String> = doc
+            .split("[`")
+            .skip(1)
+            .map(|link| link[..link.find("`]").expect("a link ends")].to_string())
+            .collect();
+        let here = looping(&walk);
+        let elsewhere = looping(&subject);
+        for name in &here {
+            assert!(
+                named.contains(name),
+                "{name} has a loop the doc does not name"
+            );
+        }
+        for name in &named {
+            assert!(
+                here.contains(name) || elsewhere.contains(name),
+                "{name} is named and has no loop"
+            );
+        }
+        // What goes over a list in one call, out of sight of the loops above.
+        let hidden = [
+            ".extend(",
+            ".clone()",
+            ".to_vec()",
+            ".collect",
+            ".sort",
+            ".fill(",
+            ".resize(",
+            ".contains(",
+            ".retain(",
+            ".drain(",
+            "copy_from_slice(",
+            ".iter()",
+            ".into_iter()",
+            ".concat(",
+            ".join(",
+            ".repeat(",
+            ".position(",
+            ".any(",
+            ".all(",
+            ".sum(",
+        ];
+        for (at, line) in walk.iter().enumerate() {
+            for call in hidden {
+                assert!(!line.contains(call), "line {}: {call}", at + 1);
+            }
+            if line.starts_with("use ") {
+                assert!(
+                    [
+                        "use alloc::vec;",
+                        "use alloc::vec::Vec;",
+                        "use super::machine::{Classes, Machine};",
+                        "use super::subject::read_classes;",
+                    ]
+                    .contains(line),
+                    "line {}: {line}",
+                    at + 1
+                );
+            }
+        }
     }
 
     /// The walk's lists of states are made as large as the machine once, and no match grows them:
