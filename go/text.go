@@ -8,6 +8,12 @@ import "unicode/utf8"
 // A surrogate written in UTF-8's form, such as the bytes ED A0 80, is not UTF-8: a surrogate is
 // half of a UTF-16 pair and no scalar value.
 func InvalidUTF8At(s string) int {
+	// Most text is valid, and utf8.ValidString, which reads ASCII a word at a
+	// time, says so far faster than a scan for where it is not. Only text
+	// that is not is gone over again for the place.
+	if utf8.ValidString(s) {
+		return -1
+	}
 	for at := 0; at < len(s); {
 		if s[at] < utf8.RuneSelf {
 			at++
