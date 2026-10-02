@@ -203,6 +203,23 @@ func BenchmarkAMatchOfAFewStates(b *testing.B) {
 	}
 }
 
+// A walk that has kept no sets comes to a new one at most characters, and keeps each: what a
+// character costs where its set is not kept yet, besides moving the states.
+func BenchmarkAMatchThatKeepsANewSetAtMostCharacters(b *testing.B) {
+	read := ReadPattern("(?:a|b)*a(?:a|b){8}").(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	m := read.compiled.machine
+	var subject strings.Builder
+	rng := uint32(9)
+	for range 400 {
+		rng = rng*1664525 + 1013904223
+		subject.WriteByte("ab"[rng>>31])
+	}
+	for range b.N {
+		m.matchesIn(m.newWalk(), subject.String())
+	}
+}
+
 // Which sets a walk keeps, and whether it keeps any, changes how fast it is and no answer: every
 // pattern accepts the same subjects with nothing kept, with so little kept that it is forgotten
 // every few characters, and with the room a walk is given.
@@ -249,6 +266,61 @@ func TestWhatAWalkKeepsChangesNoAnswer(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A set is the same set in whatever order a walk put its states in, and is kept once.
+func TestASetPutInInAnotherOrderIsTheSetKept(t *testing.T) {
+	m := machineOf(t, "(?:a|b|c)*d")
+	w := m.newWalk()
+	put := func(states ...int32) {
+		w.now.clear()
+		for _, q := range states {
+			w.now.add(q)
+		}
+	}
+	put(1, 2, 3)
+	first, _ := w.known.keep(m, w)
+	put(3, 1, 2)
+	again, _ := w.known.keep(m, w)
+	if again != first || w.known.made != 1 {
+		t.Fatalf("{3, 1, 2} was kept apart from {1, 2, 3}: %d sets kept", w.known.made)
+	}
+}
+
+// Two sets with the same hash are told apart by their states, so a hash two sets share changes no
+// answer.
+func TestSetsWithTheSameHashAreToldApart(t *testing.T) {
+	m := machineOf(t, "(?:a|b|c)*d")
+	w := m.newWalk()
+	w.now.clear()
+	w.now.add(1)
+	w.now.add(3)
+	held, _ := w.known.keep(m, w)
+	w.now.clear()
+	w.now.add(1)
+	w.now.add(2)
+	if same(held, w.now) {
+		t.Fatal("{1, 3} is taken for {1, 2}")
+	}
+	if found := w.known.find(w.now, held.hash); found != nil {
+		t.Fatalf("{1, 2} was found as %v", found.states)
+	}
+	// {1, 2} kept with the hash of {1, 3}, in the slot past it.
+	made := &knownSet{states: []int32{2, 1}, hash: held.hash}
+	w.known.slots[w.known.free(held.hash)] = made
+	if again := w.known.find(w.now, held.hash); again != made {
+		t.Fatal("{1, 2} is not found once kept beside {1, 3} with the same hash")
+	}
+}
+
+func machineOf(t *testing.T, pattern string) *machine {
+	t.Helper()
+	read := ReadPattern(pattern).(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	if len(read.compiled.machine.states) < 4 {
+		t.Fatalf("%q has too few states", pattern)
+	}
+	return read.compiled.machine
 }
 
 // A room that gave up keeping sets tries again once it has read what it waits for, keeps sets for
