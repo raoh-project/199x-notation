@@ -64,13 +64,19 @@ caller takes. A caller that runs a pattern where it reads it takes the matcher. 
 machine elsewhere, as a compiler writing it into a class does, writes it out as an image, and what
 runs the class runs a match from the image: writing an image and running a match from one are two
 entry points, and an implementation may have either without the other. Only the image has a size of
-its own. An image begins with the format it is written in. The formats are this repository's, one
-set whichever implementation writes or reads an image, and an implementation that runs a match from
-an image reads every format this repository has defined up to that implementation's release: an
-image in any of them runs on it, whichever implementation wrote it, so a class Souther compiled
-against one release runs against a later one. P1, the one format so far, is written down only in the
-Java implementation. Before another implementation runs a match from an image, it is written down
-apart from any implementation's code, so that each reads one definition.
+its own: a writer writes no image of more than 8,388,608 characters, and answers that there is none
+where the machine it writes would take more. What an image accepts is what the pattern does, and
+which of the machines that accept it is written is the writer's: Java writes the smallest
+deterministic machine where it makes one and its image fits, and the machine the pattern's shape
+makes otherwise. So whether a pattern has an image can differ between implementations, which says
+nothing about what the pattern means. An image begins with the format it is written in. The formats
+are this repository's, one set whichever implementation writes or reads an image, and an
+implementation that runs a match from an image reads every format this repository has defined up to
+that implementation's release: an image in any of them runs on it, whichever implementation wrote
+it, so a class Souther compiled against one release runs against a later one. An image one
+implementation writes is read by every implementation that reads its format, and accepts the same
+strings there. P1, the one format so far, is defined in [`image/P1.md`](image/P1.md), apart from any
+implementation's code.
 
 What a caller asks about the patterns it holds beyond that, and how much it is willing to spend on
 an answer, is the caller's. The operations on machines take their limits as an argument. Souther's
@@ -107,6 +113,7 @@ One directory per language, beside the data they are all generated from and chec
 | `ucd/` | The Unicode Character Database files of the pinned version, with their checksums |
 | `gen/` | The program that generates the tables from `ucd/` |
 | `suite/` | Test vectors every implementation runs |
+| `image/` | The image formats, each with the fixtures every implementation that reads it runs |
 | `java/` | Maven artifact `net.unit8.199x:199x-notation`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
 | `go/` | Package `notation199x` |
@@ -126,9 +133,10 @@ every language's tables are the same data. No table is written by hand or read f
 run time.
 
 The vectors in `suite/` are what every implementation is held to, in a format each language reads
-with its standard library; `suite/README.md` states it.
+with its standard library; `suite/README.md` states it. The fixtures of a format in `image/` are
+written the same way, and what reads that format is held to them.
 
-The Java tests read `ucd/` and `suite/`, so they run in `java/`:
+The Java tests read `ucd/`, `suite/` and `image/`, so they run in `java/`:
 
 ```sh
 cd java && mvn test

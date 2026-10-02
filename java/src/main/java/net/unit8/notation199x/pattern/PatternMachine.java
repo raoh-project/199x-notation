@@ -99,9 +99,13 @@ public final class PatternMachine {
      * ({@link StringPattern#of(java.util.List)}), or that it takes more characters than one image
      * is given.
      *
-     * <p>The deterministic machine where its image fits, and otherwise the shape's, which is never
-     * larger. Past {@link PatternImage#MOST_CHARACTERS} for both, there is no image, and that is a
-     * limit of carrying a machine and not of the pattern: {@link #pattern} runs it all the same.
+     * <p>The deterministic machine where there is one and its image fits, and otherwise the shape's.
+     * Either accepts what the pattern does, and which is written is this implementation's choice:
+     * the shape's image is often the larger, since the deterministic machine is the smallest there
+     * is, and a pattern may have an image here that another implementation, writing another machine,
+     * finds too large. Past {@link PatternImage#MOST_CHARACTERS} for the one tried last, there is no
+     * image, and that is a limit of carrying a machine and not of the pattern: {@link #pattern} runs
+     * it all the same.
      *
      * @return the image, or {@link PatternImage.MoreCharacters} where it is too large
      */
