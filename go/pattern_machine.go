@@ -1,7 +1,6 @@
 package notation199x
 
 import (
-	"slices"
 	"sync"
 	"unicode/utf8"
 )
@@ -142,6 +141,9 @@ func buildsNoState(m *meaning) bool {
 //
 // Each state's place is held in sparse for as long as it is in the set, which is what has asks
 // of. So nothing outside these methods writes to either list.
+//
+// Every walk puts states in through add, with kept sets or without, so add does only what both
+// need. What only keeping a set needs, such as its hash, is worked out where a set is kept.
 type stateSet struct {
 	dense  []int32
 	sparse []int32
@@ -164,20 +166,19 @@ func (s *stateSet) add(q int32) {
 
 func (s *stateSet) clear() { s.dense = s.dense[:0] }
 
-// states is the states of the set, in the order they were put in it or, after sort, ascending.
-// The slice is the set's own and is read only.
+// states is the states of the set, in the order they were put in it, which says nothing about the
+// set. The slice is the set's own and is read only.
 func (s *stateSet) states() []int32 { return s.dense }
-
-// sort puts the states in ascending order, writing each one's place again.
-func (s *stateSet) sort() {
-	slices.Sort(s.dense)
-	for i, q := range s.dense {
-		s.sparse[q] = int32(i)
-	}
-}
 
 // walk is the room one match works in: the sets of states it moves between, the sets it has
 // already worked out where a character leads from, and which of the two it is going by.
+//
+// What a walk does that grows with the subject, the machine or the sets kept is done in these
+// loops and in no library call, so a checkpoint added to a match later asks in each of them:
+// [machine.matchesIn] over the subject; [machine.advance] over the states and their steps, and
+// [machine.enter] over the steps for nothing; [hashOf], [same] and [knownSets.keep] over a set;
+// [knownSets.find] and [knownSets.free] over the slots; and [knownSets.grow] over the sets kept.
+// TestTheWalkNamesEveryLoopItHas holds this list to the functions with a loop in them.
 type walk struct {
 	now, next *stateSet
 	pending   []int32
@@ -204,7 +205,10 @@ func (m *machine) matches(subject string) bool {
 
 // newWalk is a walk of m that has kept no sets.
 func (m *machine) newWalk() *walk {
-	w := &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states))}
+	// pending holds a state at most once at a time, so it never grows past the machine's states
+	// in an append.
+	w := &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states)),
+		pending: make([]int32, 0, len(m.states))}
 	w.known.forget()
 	return w
 }
@@ -262,21 +266,21 @@ func (m *machine) take(w *walk, r rune) bool {
 		}
 		return len(w.now.states()) > 0
 	}
-	m.advance(w, r)
+	m.advance(w, w.now.states(), r)
 	// The one place a walk without kept sets steps, so what such walks walk is counted here,
 	// whether keeping sets was given up on before the walk or during it.
 	w.known.walkedAlone(utf8.RuneLen(r))
 	return len(w.now.states()) > 0
 }
 
-// advance moves the set the walk is in, w.now, over one symbol: from each state, each step over r,
-// and the states the steps for nothing reach from where those lead. It is the one place states
-// are moved, and its work is the steps out of the set and the states it comes to, at most the
-// machine's. Keeping a set it has not kept before is work of the same size besides
-// (knownSets.keep), so a checkpoint added to a match later asks in both.
-func (m *machine) advance(w *walk, r rune) {
+// advance puts the walk, in w.now, where from leads over one symbol: from each state, each step
+// over r, and the states the steps for nothing reach from where those lead. from is w.now's states
+// or a kept set's, which is moved from as it is and not put back in w.now first. It is the one
+// place states are moved, and its work is the steps out of from and the states it comes to, at
+// most the machine's.
+func (m *machine) advance(w *walk, from []int32, r rune) {
 	w.next.clear()
-	for _, q := range w.now.states() {
+	for _, q := range from {
 		for _, s := range m.states[q].steps {
 			if s.over.has(r) {
 				m.enter(w, w.next, s.to)

@@ -1,10 +1,6 @@
 package notation199x
 
-import (
-	"encoding/binary"
-	"math"
-	"slices"
-)
+import "math"
 
 // knownBytes is about how much one walk keeps of the sets it has worked out, before it forgets
 // them and starts again.
@@ -35,8 +31,11 @@ func grown(a, b int) int {
 // A set leads to another by pointer and not by a place in a list, so a set that is forgotten is
 // still the set it was to whatever holds it: nothing can be held that names a different set.
 type knownSet struct {
-	// states is the states of the set, ascending, every step for nothing already taken.
-	states  []int32
+	// states is the states of the set, every step for nothing already taken, in the order the walk
+	// put them in, which says nothing about the set.
+	states []int32
+	// hash is the sum of scatter over states, by which the set is looked up.
+	hash    uint32
 	accepts bool
 	// none is whether the set has no state, so that no string from here on is accepted.
 	none bool
@@ -61,11 +60,15 @@ const utf8RuneSelf = 0x80
 // again as long as the first. A machine whose sets are large, or subjects that keep coming to new
 // ones, are walked a state at a time as without them, but for the tries.
 //
-// Keeping a set goes over it: it is put in order, its key is written and it is copied, which for
-// a set of k states is k log k. So a character that comes to a set not kept costs that besides
-// moving the states (advance), and a checkpoint added to a match later asks in these loops too.
+// A set is looked up in slots by its hash, a sum over its states that is the same in whatever
+// order the walk put them in, so the set is never put in order. The hash is summed where a set is
+// looked up (hashOf) and not as each state is put in, which a walk without kept sets does too.
+// What goes over a set, over the slots or over the sets kept is a loop of its own, among those
+// walk lists.
 type knownSets struct {
-	index map[string]*knownSet
+	// slots holds each kept set at its hash or past it, a power of two of them and at least twice
+	// as many as are kept, or none before a set is kept.
+	slots []*knownSet
 	// first is the set a walk starts in, or nil where it is not known.
 	first *knownSet
 	bytes int
@@ -77,17 +80,12 @@ type knownSets struct {
 	off             bool
 	offWork, offFor int
 	retrying        bool
-	// key is the room a set's key is written in to look it up.
-	key []byte
 }
 
 // forget forgets every set kept. A set held across it is still the set it was, and is no longer
 // looked up.
 func (k *knownSets) forget() {
-	if k.index == nil {
-		k.index = make(map[string]*knownSet)
-	}
-	clear(k.index)
+	k.slots = nil
 	k.first = nil
 	k.bytes, k.made, k.read = 0, 0, 0
 }
@@ -117,11 +115,7 @@ func (k *knownSets) after(m *machine, w *walk, from *knownSet, r rune) *knownSet
 	} else if next, ok := from.other[r]; ok {
 		return next
 	}
-	w.now.clear()
-	for _, q := range from.states {
-		w.now.add(q)
-	}
-	m.advance(w, r)
+	m.advance(w, from.states, r)
 	next, forgot := k.keep(m, w)
 	if next == nil || forgot {
 		// from was forgotten to make room, and is not looked up again.
@@ -142,16 +136,14 @@ func (k *knownSets) after(m *machine, w *walk, from *knownSet, r rune) *knownSet
 // keep is the set w.now holds, kept where it is not already, or nil where keeping sets is given
 // up on. forgot is whether the sets kept before were forgotten to make room for it.
 func (k *knownSets) keep(m *machine, w *walk) (set *knownSet, forgot bool) {
-	// A set is the same set in any order, and its key is written of its states in order.
-	w.now.sort()
-	k.key = k.key[:0]
-	for _, q := range w.now.states() {
-		k.key = binary.LittleEndian.AppendUint32(k.key, uint32(q))
-	}
-	if set, ok := k.index[string(k.key)]; ok {
+	now := w.now
+	hash := hashOf(now)
+	if set := k.find(now, hash); set != nil {
 		return set, false
 	}
-	cost := 2*len(k.key) + 8*utf8RuneSelf + 64
+	// The set's states, where it leads for each ASCII character, and its part of the slots and of
+	// what holds it.
+	cost := 4*len(now.states()) + 8*utf8RuneSelf + 64
 	if k.bytes+cost > knownBytes {
 		gaveUp := k.read < 10*k.made || cost > knownBytes
 		k.forget()
@@ -164,12 +156,86 @@ func (k *knownSets) keep(m *machine, w *walk) (set *knownSet, forgot bool) {
 		k.offFor, k.retrying = 0, false
 		forgot = true
 	}
-	states := slices.Clone(w.now.states())
-	set = &knownSet{states: states, accepts: slices.Contains(states, m.accept), none: len(states) == 0}
-	k.index[string(k.key)] = set
+	if (k.made+1)*2 > len(k.slots) {
+		k.grow()
+	}
+	states := make([]int32, len(now.states()))
+	for i, q := range now.states() {
+		states[i] = q
+	}
+	set = &knownSet{states: states, hash: hash, accepts: now.has(m.accept), none: len(states) == 0}
+	k.slots[k.free(set.hash)] = set
 	k.bytes += cost
 	k.made++
 	return set, forgot
+}
+
+// hashOf is the sum of scatter over the states now holds. It is summed here and not as each state
+// is put in, so a walk that keeps no sets does not sum it.
+func hashOf(now *stateSet) uint32 {
+	var hash uint32
+	for _, q := range now.states() {
+		hash += scatter(q)
+	}
+	return hash
+}
+
+// scatter is a state's part of the hash of a set it is in.
+func scatter(q int32) uint32 {
+	mixed := uint32(q) * 0x9E3779B9
+	return mixed ^ mixed>>15
+}
+
+// find is the kept set that is the set now holds, whose hash is hash, or nil where it is not kept:
+// the slots from hash on are probed until an empty one.
+func (k *knownSets) find(now *stateSet, hash uint32) *knownSet {
+	if len(k.slots) == 0 {
+		return nil
+	}
+	mask := len(k.slots) - 1
+	for at := int(hash) & mask; k.slots[at] != nil; at = (at + 1) & mask {
+		if held := k.slots[at]; held.hash == hash && same(held, now) {
+			return held
+		}
+	}
+	return nil
+}
+
+// same is whether held is the set now holds: as many states, each of which now has, asked one at
+// a time. Sets with the same hash are told apart here, so a hash shared by two sets changes no
+// answer.
+func same(held *knownSet, now *stateSet) bool {
+	if len(held.states) != len(now.states()) {
+		return false
+	}
+	for _, q := range held.states {
+		if !now.has(q) {
+			return false
+		}
+	}
+	return true
+}
+
+// free is the first empty slot from hash on.
+func (k *knownSets) free(hash uint32) int {
+	mask := len(k.slots) - 1
+	at := int(hash) & mask
+	for k.slots[at] != nil {
+		at = (at + 1) & mask
+	}
+	return at
+}
+
+// grow makes twice the slots, or sixteen, and puts each kept set in them again by its hash. What is
+// gone over is the kept sets, at most what knownBytes holds.
+func (k *knownSets) grow() {
+	old := k.slots
+	k.slots = make([]*knownSet, max(16, 2*len(old)))
+	for _, set := range old {
+		if set != nil {
+			k.slots[k.free(set.hash)] = set
+		}
+	}
 }
 
 // wait is how much is walked without kept sets before keeping them is tried again.
