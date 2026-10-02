@@ -22,11 +22,15 @@ final class HostTest extends TestCase
     ];
 
     /**
-     * What the sources may not name either: a checksum or a hash. Where a set is held once, it is by
-     * a key that is the set (see SymbolSets); under a checksum, sets that differ share a key, and
-     * text written to make many of them share one makes every one added search through the rest.
+     * What the sources may not call either: PHP's checksums and hashes, by their names and, after
+     * them, the start of a name. A set is not held by a checksum or a hash standing for it: where
+     * one is held once, it is by a key that is the set (see SymbolSets), and where it is looked up
+     * by a hash, as a machine's kept sets are, the hash only says where to look and the set is
+     * asked whether it is the one (Machine::same), so sets that share a hash change no answer.
+     * Such a hash is summed by the sources, over what they can count, and not handed to PHP.
      */
-    private const NO_CHECKSUM = ['crc32', 'md5', 'sha1', 'hash'];
+    private const NO_CHECKSUM = ['crc32', 'md5', 'md5_file', 'sha1', 'sha1_file', 'hash'];
+    private const NO_CHECKSUM_PREFIX = ['hash_'];
 
     /** The one PCRE call the sources make, and where. */
     private const PCRE_ASKED = ['ScalarValues.php' => 1];
@@ -99,10 +103,13 @@ final class HostTest extends TestCase
                     continue;
                 }
                 $name = strtolower(ltrim($token[1], '\\'));
-                foreach ([...self::ASKED_NOTHING, ...self::NO_CHECKSUM] as $prefix) {
+                foreach ([...self::ASKED_NOTHING, ...self::NO_CHECKSUM_PREFIX] as $prefix) {
                     if (str_starts_with($name, $prefix)) {
                         $named[] = $file->getFilename() . ': ' . $token[1];
                     }
+                }
+                if (in_array($name, self::NO_CHECKSUM, true)) {
+                    $named[] = $file->getFilename() . ': ' . $token[1];
                 }
                 if (str_starts_with($name, 'preg_')) {
                     $pcre[$file->getFilename()] = ($pcre[$file->getFilename()] ?? 0) + 1;

@@ -130,6 +130,40 @@ final class MachineTest extends TestCase
     }
 
     /**
+     * Two sets with the same hash are told apart by their states, so a hash two sets share changes
+     * no answer: {1, 1352} and {4, 1349} sum to the same hash, and each is kept as a set of its
+     * own and found again as itself, whichever was kept first and in whatever order its states
+     * were entered.
+     */
+    public function testSetsWithTheSameHashAreToldApart(): void
+    {
+        $read = Pattern::read('a{1400}');
+        self::assertInstanceOf(Pattern::class, $read);
+        $read->matches('');
+        $m = (new \ReflectionProperty(Pattern::class, 'machine'))->getValue($read);
+        self::assertInstanceOf(Machine::class, $m);
+        $hashOf = new \ReflectionMethod(Machine::class, 'hashOf');
+        $find = new \ReflectionMethod(Machine::class, 'find');
+        $keep = new \ReflectionMethod(Machine::class, 'keep');
+        $one = [1 => true, 1352 => true];
+        $other = [4 => true, 1349 => true];
+        $hash = $hashOf->invoke($m, $one);
+        self::assertSame($hash, $hashOf->invoke($m, $other), 'the two sets do not share a hash');
+        $kept = $keep->invoke($m, $one);
+        self::assertIsArray($kept);
+        $kept = $kept[0];
+        self::assertSame(-1, $find->invoke($m, $other, $hash), '{4, 1349} is taken for {1, 1352}');
+        $beside = $keep->invoke($m, $other);
+        self::assertIsArray($beside);
+        $beside = $beside[0];
+        self::assertNotSame($kept, $beside);
+        self::assertSame($kept, $find->invoke($m, $one, $hash));
+        self::assertSame($beside, $find->invoke($m, $other, $hash));
+        self::assertSame([$kept, false], $keep->invoke($m, [1352 => true, 1 => true]));
+        self::assertSame([$beside, false], $keep->invoke($m, [1349 => true, 4 => true]));
+    }
+
+    /**
      * A count that only grows is held at the most an int holds, and a wait doubled past it is that.
      */
     public function testCountsThatOnlyGrowAreHeldAtTheMostAnIntHolds(): void

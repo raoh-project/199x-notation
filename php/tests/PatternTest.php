@@ -13,6 +13,7 @@ use Raoh\Notation199x\PatternBeyond;
 use Raoh\Notation199x\PatternLimit;
 use Raoh\Notation199x\PatternRefusal;
 use Raoh\Notation199x\PatternRefused;
+use Raoh\Notation199x\ScalarValues;
 
 final class PatternTest extends TestCase
 {
@@ -282,6 +283,51 @@ final class PatternTest extends TestCase
             }
         }
         self::assertTrue(self::read('.')->matches("\u{FFFD}"), 'U+FFFD written as itself is a character');
+    }
+
+    /**
+     * Bytes that are not UTF-8 are turned away where the walk meets them, which is where a
+     * character is read for a step not known: after a run gone past at once, after characters whose
+     * steps are known, and where a character a step is known for is cut short or ends otherwise.
+     * Whatever bytes a subject is, (?:.|\n)* accepts it where it is UTF-8 and nowhere else.
+     */
+    public function testBytesThatAreNotUtf8AreTurnedAwayWhereverTheWalkMeetsThem(): void
+    {
+        $valid = ['aé😀a', str_repeat('a', 50) . 'é😀', 'é😀' . str_repeat('a', 50)];
+        $invalid = [
+            str_repeat('a', 50) . "\xff", "a\xc3", "aé\xc3", "é😀\xf0\x9f\x98", "\xc3\x28", "aé\xffé",
+            "\xc0\xaf", "\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\x80", "é\x80", "\xf8\x88\x80\x80\x80",
+        ];
+        $palette = ['a', "\n", 'é', '😀', "\xc3", "\xa9", "\x80", "\xff", "\xed\xa0", "\xf0\x9f", "\xe0\x80"];
+        $was = Machine::$knownBytes;
+        try {
+            foreach ([0, 2 << 20] as $room) {
+                Machine::$knownBytes = $room;
+                foreach (['.*', '[^x]*', '(?:é|😀|a)*', '(?:.|\n)*'] as $pattern) {
+                    $read = self::read($pattern);
+                    for ($round = 0; $round < 2; $round++) {
+                        foreach ($valid as $subject) {
+                            self::assertTrue($read->matches($subject), "$pattern $subject");
+                        }
+                        foreach ($invalid as $subject) {
+                            self::assertFalse($read->matches($subject), $pattern . ' ' . bin2hex($subject));
+                        }
+                    }
+                }
+                $read = self::read('(?:.|\n)*');
+                $rng = 3;
+                for ($i = 0; $i < 2000; $i++) {
+                    $subject = '';
+                    for ($k = 0; $k < 6; $k++) {
+                        $rng = ($rng * 1664525 + 1013904223) & 0xFFFFFFFF;
+                        $subject .= $palette[($rng >> 8) % count($palette)];
+                    }
+                    self::assertSame(ScalarValues::invalidUtf8At($subject) === null, $read->matches($subject), bin2hex($subject));
+                }
+            }
+        } finally {
+            Machine::$knownBytes = $was;
+        }
     }
 
     /**
