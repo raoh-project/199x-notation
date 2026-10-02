@@ -1,11 +1,14 @@
 # suite
 
-The vectors every implementation runs. An implementation agrees with another because both answer
-every line here, and not because their code happens to. Each language has a test that reads these
-files with its standard library and holds the implementation to every line.
+The vectors every implementation runs. Every implementation is held to the same lines, taken from
+the sources and not from any implementation's own tests, so on each of them the implementations
+answer alike. A finite set of lines does not make two implementations the same everywhere; it holds
+them alike where a rule is easiest to read two ways. A test in each language reads these files with
+its standard library and holds the implementation to every line; Java's is the first.
 
-Normalization is not here: it is held to `ucd/18.0.0/NormalizationTest.txt`, which Unicode publishes
-for that and which is read the same way.
+Normalization without a bound is not here: it is held to `ucd/18.0.0/NormalizationTest.txt`, which
+Unicode publishes for that and which is read the same way. Normalization in a bound is here, and the
+normalized text of each line is the one that file states.
 
 ## What a line holds
 
@@ -23,11 +26,22 @@ what it quotes, is tested in that implementation's own language.
 
 A field is added to a file once a source decides it, and not before.
 
+The lines of a file are chosen from what its sources state, rule by rule, and not from the cases an
+implementation happens to test. For each bound, range or end of a set a source states, a file holds
+lines that tell the stated answer from the readings next to it: the comparison read as `<` or `==`
+where it says `<=`, an end of a range or a set left out or taken in, or no bound at all. A reviewer
+checks a file by naming those readings for each such rule and finding, for each, a line it answers
+otherwise. How many lines that takes is the rule's to say. A bounded normalization takes three, one
+below the answer's length, at it and one above, since `==` passes the first two; a limit of 250000
+states takes two, at it and one past it. And each kind a source names, every form, direction and
+kind of temporal text, has lines of its own.
+
 ## Files
 
 | File | A line | What is held |
 | --- | --- | --- |
 | `case.txt` | text ; direction ; bound ; outcome ; mapped | Default case conversion, with `Final_Sigma` and the bounded forms |
+| `normalization-bound.txt` | text ; form ; bound ; outcome ; normalized | Normalization in the four forms, in a bound |
 | `white-space.txt` | code point | The `White_Space` set, every member of it |
 | `scalar-length.txt` | text ; length | Length in scalar values |
 | `scalar-order.txt` | a ; b ; order | Order by scalar values |
@@ -55,7 +69,7 @@ Every file is UTF-8, and a line of vectors is ASCII.
   more spaces. The empty text is an empty field. A surrogate is no scalar value, so no text here holds
   one.
 - A number is unsigned decimal, and each file says what it counts: the length of a text and a bound
-  on a conversion count scalar values, and a pattern's states count states.
+  on a conversion or a normalization count scalar values, and a pattern's states count states.
 - Anything else, a direction, an outcome or a limit, is an upper case identifier the file's comment
   lists, and a yes or no is `true` or `false`.
 
