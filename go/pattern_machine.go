@@ -140,23 +140,14 @@ func buildsNoState(m *meaning) bool {
 // of many states that is in few of them costs the few.
 //
 // Each state's place is held in sparse for as long as it is in the set, which is what has asks
-// of. So nothing outside these methods writes to either list. As each state is put in, the set's
-// hash and whether it accepts are kept with it, so neither is worked out again by going over the
-// set.
+// of. So nothing outside these methods writes to either list.
 type stateSet struct {
 	dense  []int32
 	sparse []int32
-	// accept is the state a walk may stop at.
-	accept int32
-	// hash is the sum of scatter over the states in the set, the same in whatever order they were
-	// put in.
-	hash uint32
-	// accepting is whether accept is in the set.
-	accepting bool
 }
 
-func newStateSet(size int, accept int32) *stateSet {
-	return &stateSet{dense: make([]int32, 0, size), sparse: make([]int32, size), accept: accept}
+func newStateSet(size int) *stateSet {
+	return &stateSet{dense: make([]int32, 0, size), sparse: make([]int32, size)}
 }
 
 func (s *stateSet) has(q int32) bool {
@@ -168,25 +159,13 @@ func (s *stateSet) has(q int32) bool {
 func (s *stateSet) add(q int32) {
 	s.sparse[q] = int32(len(s.dense))
 	s.dense = append(s.dense, q)
-	s.hash += scatter(q)
-	s.accepting = s.accepting || q == s.accept
 }
 
-func (s *stateSet) clear() {
-	s.dense = s.dense[:0]
-	s.hash = 0
-	s.accepting = false
-}
+func (s *stateSet) clear() { s.dense = s.dense[:0] }
 
 // states is the states of the set, in the order they were put in it, which says nothing about the
 // set. The slice is the set's own and is read only.
 func (s *stateSet) states() []int32 { return s.dense }
-
-// scatter is a state's part of the hash of a set it is in.
-func scatter(q int32) uint32 {
-	mixed := uint32(q) * 0x9E3779B9
-	return mixed ^ mixed>>15
-}
 
 // walk is the room one match works in: the sets of states it moves between, the sets it has
 // already worked out where a character leads from, and which of the two it is going by.
@@ -216,7 +195,7 @@ func (m *machine) matches(subject string) bool {
 
 // newWalk is a walk of m that has kept no sets.
 func (m *machine) newWalk() *walk {
-	w := &walk{now: newStateSet(len(m.states), m.accept), next: newStateSet(len(m.states), m.accept)}
+	w := &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states))}
 	w.known.forget()
 	return w
 }
@@ -249,7 +228,7 @@ func (m *machine) matchesIn(w *walk, subject string) bool {
 	if w.in != nil {
 		return w.in.accepts
 	}
-	return w.now.accepting
+	return w.now.has(m.accept)
 }
 
 // begin puts the walk in the state it starts in, with every state the steps for nothing reach

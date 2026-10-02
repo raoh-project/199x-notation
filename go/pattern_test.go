@@ -282,18 +282,16 @@ func TestSetsWithTheSameHashAreToldApart(t *testing.T) {
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(2)
-	w.now.hash = held.hash
 	if same(held, w.now) {
 		t.Fatal("{1, 3} is taken for {1, 2}")
 	}
-	if found := w.known.find(w.now); found != nil {
+	if found := w.known.find(w.now, held.hash); found != nil {
 		t.Fatalf("{1, 2} was found as %v", found.states)
 	}
-	made, _ := w.known.keep(m, w)
-	if made == held || w.known.made != 2 {
-		t.Fatalf("{1, 2} was not kept apart from {1, 3}: %d sets kept", w.known.made)
-	}
-	if again := w.known.find(w.now); again != made {
+	// {1, 2} kept with the hash of {1, 3}, in the slot past it.
+	made := &knownSet{states: []int32{2, 1}, hash: held.hash}
+	w.known.slots[w.known.free(held.hash)] = made
+	if again := w.known.find(w.now, held.hash); again != made {
 		t.Fatal("{1, 2} is not found once kept beside {1, 3} with the same hash")
 	}
 }

@@ -60,11 +60,11 @@ const utf8RuneSelf = 0x80
 // again as long as the first. A machine whose sets are large, or subjects that keep coming to new
 // ones, are walked a state at a time as without them, but for the tries.
 //
-// A set is looked up in slots by its hash, which the walk summed as it put each state in, so
-// nothing is worked out of the set to look it up. What goes over a set, or over the sets kept, is
-// each a loop of its own: probing the slots (find), asking of each state of a kept set with the
-// same hash whether the walk is in it (same), copying the set to keep it (keep), and putting the
-// kept sets in slots twice as many (grow). A character that comes to a set not kept costs these
+// A set is looked up in slots by its hash, a sum over its states that is the same in whatever
+// order the walk put them in, so the set is never put in order. What goes over a set, or over the
+// sets kept, is each a loop of its own: summing the hash (hashOf), probing the slots (find), asking
+// of each state of a kept set with the same hash whether the walk is in it (same), copying the set
+// to keep it (keep), and putting the kept sets in slots twice as many (grow). A character that comes to a set not kept costs these
 // besides moving the states (advance), and a checkpoint added to a match later asks in these loops
 // too.
 type knownSets struct {
@@ -143,7 +143,8 @@ func (k *knownSets) after(m *machine, w *walk, from *knownSet, r rune) *knownSet
 // up on. forgot is whether the sets kept before were forgotten to make room for it.
 func (k *knownSets) keep(m *machine, w *walk) (set *knownSet, forgot bool) {
 	now := w.now
-	if set := k.find(now); set != nil {
+	hash := hashOf(now)
+	if set := k.find(now, hash); set != nil {
 		return set, false
 	}
 	// The set's states, where it leads for each ASCII character, and its part of the slots and of
@@ -168,22 +169,38 @@ func (k *knownSets) keep(m *machine, w *walk) (set *knownSet, forgot bool) {
 	for i, q := range now.states() {
 		states[i] = q
 	}
-	set = &knownSet{states: states, hash: now.hash, accepts: now.accepting, none: len(states) == 0}
+	set = &knownSet{states: states, hash: hash, accepts: now.has(m.accept), none: len(states) == 0}
 	k.slots[k.free(set.hash)] = set
 	k.bytes += cost
 	k.made++
 	return set, forgot
 }
 
-// find is the kept set that is the set now holds, or nil where it is not kept: the slots from its
-// hash on are probed until an empty one.
-func (k *knownSets) find(now *stateSet) *knownSet {
+// hashOf is the sum of scatter over the states now holds. It is summed here and not as each state
+// is put in, so a walk that keeps no sets does not sum it.
+func hashOf(now *stateSet) uint32 {
+	var hash uint32
+	for _, q := range now.states() {
+		hash += scatter(q)
+	}
+	return hash
+}
+
+// scatter is a state's part of the hash of a set it is in.
+func scatter(q int32) uint32 {
+	mixed := uint32(q) * 0x9E3779B9
+	return mixed ^ mixed>>15
+}
+
+// find is the kept set that is the set now holds, whose hash is hash, or nil where it is not kept:
+// the slots from hash on are probed until an empty one.
+func (k *knownSets) find(now *stateSet, hash uint32) *knownSet {
 	if len(k.slots) == 0 {
 		return nil
 	}
 	mask := len(k.slots) - 1
-	for at := int(now.hash) & mask; k.slots[at] != nil; at = (at + 1) & mask {
-		if held := k.slots[at]; held.hash == now.hash && same(held, now) {
+	for at := int(hash) & mask; k.slots[at] != nil; at = (at + 1) & mask {
+		if held := k.slots[at]; held.hash == hash && same(held, now) {
 			return held
 		}
 	}
