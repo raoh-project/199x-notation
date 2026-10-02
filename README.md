@@ -33,9 +33,10 @@ The normative definitions are in the
 This repository implements them and defines no rule about text of its own: which text is a date, a
 pattern or white space, and what a conversion answers, is theirs to say.
 
-What it does define is how its implementations are called, the same way in every language: the
-machines and images below, the checkpoints, and the bounded forms. For those, and only for those,
-this README is the source. A bounded case conversion or normalization takes the most scalar values
+What it does define is how its implementations are called: the bounded forms, and the machines,
+images and checkpoints below. For those, and only for those, this README is the source. Every
+implementation has the bounded forms. The machines, images and checkpoints are in a language whose callers
+need them, and are called the same way in each language that has them. A bounded case conversion or normalization takes the most scalar values
 its answer may hold, answers what the unbounded one does where that answer is no longer than the
 bound, and answers nothing where it is longer.
 
@@ -71,6 +72,11 @@ work. What the platform does in one operation, such as copying the answer into a
 asked inside. A rule that was stopped answers that it was stopped, apart from its own answers,
 so a stopped match is neither accepted nor refused. The same rules run without a checkpoint answer
 as they did.
+
+The checkpoints are in Java, for Souther, which evaluates example rows under a step limit and a
+deadline and has to stop a rule inside one of those calls. A language gains them when a caller of
+its own has to stop a rule part of the way through, and they are added beside the forms without one,
+so nothing that calls those changes.
 
 Every rule is stated of text that is a sequence of Unicode scalar values. Where a language's string
 can hold something else, as a Java `String` can hold half of a surrogate pair, the implementation
