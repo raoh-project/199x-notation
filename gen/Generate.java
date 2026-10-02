@@ -2,6 +2,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -27,7 +29,14 @@ public final class Generate {
             System.exit(1);
         }
         UcdModel model = UcdModel.read(Path.of(args[0]));
-        Map<Path, String> sources = JavaEmitter.render(model);
+        Map<Path, String> sources = new LinkedHashMap<>();
+        for (Map<Path, String> rendered : List.of(JavaEmitter.render(model), GoEmitter.render(model))) {
+            rendered.forEach((path, text) -> {
+                if (sources.putIfAbsent(path, text) != null) {
+                    throw new IllegalStateException("two emitters write " + path);
+                }
+            });
+        }
         for (Map.Entry<Path, String> source : sources.entrySet()) {
             Files.writeString(source.getKey(), source.getValue(), StandardCharsets.UTF_8);
             System.out.println("wrote " + source.getKey());

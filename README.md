@@ -11,9 +11,9 @@ the same way everywhere.
 
 ## Status
 
-The Java implementation is here, moved from Souther's runtime and compiler. Souther and raoh-java
-do not depend on it yet, and it is the first implementation held to `suite/`. The Rust, Go and PHP
-implementations are not here yet. See the issues.
+The Java implementation is here, moved from Souther's runtime and compiler, and the Go
+implementation beside it. Souther, raoh-java and raoh-go do not depend on them yet, and both are held
+to `suite/`. The Rust and PHP implementations are not here yet. See the issues.
 
 ## What belongs here
 
@@ -116,8 +116,11 @@ One directory per language, beside the data they are all generated from and chec
 | `image/` | The image formats, each with the fixtures every implementation that reads it runs |
 | `java/` | Maven artifact `net.unit8.199x:199x-notation`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
-| `go/` | Package `notation199x` |
+| `go/` | Module `github.com/raoh-project/199x-notation/go`, package `notation199x` |
 | `php/` | Package `notation199x` |
+
+An identifier cannot begin with a digit in any of these languages, so code spells the name
+`notation199x`.
 
 Tables are generated from `ucd/` and checked in. Generation is run by hand and never during a
 build: taking a later Unicode version is a change to the specifications, not a dependency update.
@@ -142,16 +145,31 @@ The Java tests read `ucd/`, `suite/` and `image/`, so they run in `java/`:
 cd java && mvn test
 ```
 
-Both packages are `@NullMarked`, and NullAway checks the main sources against that on every
+Both Java packages are `@NullMarked`, and NullAway checks the main sources against that on every
 compile. Nothing else of Error Prone runs.
 
+The Go tests read `ucd/` and `suite/` too, and run in `go/`:
+
+```sh
+cd go && go test ./...
+```
+
+A Go module made from a subdirectory holds only what is under it, so a copy of the module that `go`
+fetched has neither `ucd/` nor `suite/`. Where they are not there the tests that read them are
+skipped, so that a caller's `go test all` does not fail on files this module was never published
+with. CI sets `NOTATION199X_REQUIRE_SUITE`, which makes a missing file a failure instead.
+
 CI checks the files in `ucd/` against their checksums, runs the generator and fails if the
-checked-in tables differ, and runs the tests.
+checked-in tables differ, and runs the tests of each implementation.
 
 ## Releasing
 
-These are the Java artifact's releases. Another implementation's are written beside them when it is
-first published (#11, #12).
+Each implementation is released on its own, and its version is its own: it says what changed in
+that implementation's API, and a Java release and a Go release with the same number have nothing
+to do with each other. What the implementations agree on is held by the commit, the pinned Unicode
+version and `suite/`, not by a version number.
+
+### Java
 
 `develop` holds the next version as a snapshot, `X.Y.Z-SNAPSHOT`, and a release is that version
 without the suffix. A snapshot is deployed from anywhere with `cd java && mvn clean deploy`. A
@@ -178,8 +196,21 @@ release is deployed from the commit its tag names, so what Central holds is what
    cd java && mvn versions:set -DnewVersion=<next version>-SNAPSHOT -DgenerateBackupPoms=false
    ```
 
-An identifier cannot begin with a digit in any of these languages, so code spells the name
-`notation199x`.
+### Go
+
+The module is `github.com/raoh-project/199x-notation/go`, and a release of it is a tag: nothing in
+`go/` names its version. A tag on a module in a subdirectory begins with the subdirectory, so the
+module's version `vX.Y.Z` is the tag `go/vX.Y.Z`. The first release is `go/v0.1.0`.
+
+1. Merge what is to be released into `main`, as for a Java release.
+2. Tag the commit on `main` `go/vX.Y.Z` and push the tag. CI runs the Go tests on it.
+3. Ask the module proxy for the version, so that it holds what the tag holds from then on:
+   ```sh
+   GOPROXY=https://proxy.golang.org go list -m github.com/raoh-project/199x-notation/go@vX.Y.Z
+   ```
+
+A tag that has been pushed is never moved: the proxy and the checksum database keep the first
+contents a version had, and a module fetched by version is checked against them.
 
 ## The name
 
