@@ -9,86 +9,126 @@
 # form is NFC, NFD, NFKC or NFKD. bound is the most scalar values the normalized text may hold.
 # outcome is NORMALIZED, with the normalized text, or PAST where that is longer than the bound,
 # with normalized empty. Normalization without a bound is held to ucd/18.0.0/NormalizationTest.txt,
-# and every normalized text here is the one that file states for the text. Each is held at the
-# bound it fills exactly and one below it.
+# and every normalized text here is the one that file states for the text. The bound is held on
+# every side of where it decides: one below the normalized text's length, at it, and one above.
 
-# The empty text fits a bound of nought, and a text of one character does not.
+# The empty text fits a bound of nought and any above it, and a text of one character fits one.
  ; NFC ; 0 ; NORMALIZED ;
+ ; NFC ; 1 ; NORMALIZED ;
 0061 ; NFC ; 0 ; PAST ;
+0061 ; NFC ; 1 ; NORMALIZED ; 0061
+0061 ; NFC ; 2 ; NORMALIZED ; 0061
  ; NFD ; 0 ; NORMALIZED ;
+ ; NFD ; 1 ; NORMALIZED ;
 0061 ; NFD ; 0 ; PAST ;
+0061 ; NFD ; 1 ; NORMALIZED ; 0061
+0061 ; NFD ; 2 ; NORMALIZED ; 0061
  ; NFKC ; 0 ; NORMALIZED ;
+ ; NFKC ; 1 ; NORMALIZED ;
 0061 ; NFKC ; 0 ; PAST ;
+0061 ; NFKC ; 1 ; NORMALIZED ; 0061
+0061 ; NFKC ; 2 ; NORMALIZED ; 0061
  ; NFKD ; 0 ; NORMALIZED ;
+ ; NFKD ; 1 ; NORMALIZED ;
 0061 ; NFKD ; 0 ; PAST ;
+0061 ; NFKD ; 1 ; NORMALIZED ; 0061
+0061 ; NFKD ; 2 ; NORMALIZED ; 0061
 
 # One character that decomposes into two.
-1E0A ; NFC ; 1 ; NORMALIZED ; 1E0A
 1E0A ; NFC ; 0 ; PAST ;
-1E0A ; NFD ; 2 ; NORMALIZED ; 0044 0307
+1E0A ; NFC ; 1 ; NORMALIZED ; 1E0A
+1E0A ; NFC ; 2 ; NORMALIZED ; 1E0A
 1E0A ; NFD ; 1 ; PAST ;
-1E0A ; NFKC ; 1 ; NORMALIZED ; 1E0A
+1E0A ; NFD ; 2 ; NORMALIZED ; 0044 0307
+1E0A ; NFD ; 3 ; NORMALIZED ; 0044 0307
 1E0A ; NFKC ; 0 ; PAST ;
-1E0A ; NFKD ; 2 ; NORMALIZED ; 0044 0307
+1E0A ; NFKC ; 1 ; NORMALIZED ; 1E0A
+1E0A ; NFKC ; 2 ; NORMALIZED ; 1E0A
 1E0A ; NFKD ; 1 ; PAST ;
+1E0A ; NFKD ; 2 ; NORMALIZED ; 0044 0307
+1E0A ; NFKD ; 3 ; NORMALIZED ; 0044 0307
 
 # Two characters that compose into one and decompose into three: the bound is on the answer, not
 # the text.
-0112 0300 ; NFC ; 1 ; NORMALIZED ; 1E14
 0112 0300 ; NFC ; 0 ; PAST ;
-0112 0300 ; NFD ; 3 ; NORMALIZED ; 0045 0304 0300
+0112 0300 ; NFC ; 1 ; NORMALIZED ; 1E14
+0112 0300 ; NFC ; 2 ; NORMALIZED ; 1E14
 0112 0300 ; NFD ; 2 ; PAST ;
-0112 0300 ; NFKC ; 1 ; NORMALIZED ; 1E14
+0112 0300 ; NFD ; 3 ; NORMALIZED ; 0045 0304 0300
+0112 0300 ; NFD ; 4 ; NORMALIZED ; 0045 0304 0300
 0112 0300 ; NFKC ; 0 ; PAST ;
-0112 0300 ; NFKD ; 3 ; NORMALIZED ; 0045 0304 0300
+0112 0300 ; NFKC ; 1 ; NORMALIZED ; 1E14
+0112 0300 ; NFKC ; 2 ; NORMALIZED ; 1E14
 0112 0300 ; NFKD ; 2 ; PAST ;
+0112 0300 ; NFKD ; 3 ; NORMALIZED ; 0045 0304 0300
+0112 0300 ; NFKD ; 4 ; NORMALIZED ; 0045 0304 0300
 
 # A character whose compatibility forms are other characters than its canonical ones.
-1E9B ; NFC ; 1 ; NORMALIZED ; 1E9B
 1E9B ; NFC ; 0 ; PAST ;
-1E9B ; NFD ; 2 ; NORMALIZED ; 017F 0307
+1E9B ; NFC ; 1 ; NORMALIZED ; 1E9B
+1E9B ; NFC ; 2 ; NORMALIZED ; 1E9B
 1E9B ; NFD ; 1 ; PAST ;
-1E9B ; NFKC ; 1 ; NORMALIZED ; 1E61
+1E9B ; NFD ; 2 ; NORMALIZED ; 017F 0307
+1E9B ; NFD ; 3 ; NORMALIZED ; 017F 0307
 1E9B ; NFKC ; 0 ; PAST ;
-1E9B ; NFKD ; 2 ; NORMALIZED ; 0073 0307
+1E9B ; NFKC ; 1 ; NORMALIZED ; 1E61
+1E9B ; NFKC ; 2 ; NORMALIZED ; 1E61
 1E9B ; NFKD ; 1 ; PAST ;
+1E9B ; NFKD ; 2 ; NORMALIZED ; 0073 0307
+1E9B ; NFKD ; 3 ; NORMALIZED ; 0073 0307
 
 # A ligature that compatibility decomposes into three letters.
-FB03 ; NFC ; 1 ; NORMALIZED ; FB03
 FB03 ; NFC ; 0 ; PAST ;
-FB03 ; NFD ; 1 ; NORMALIZED ; FB03
+FB03 ; NFC ; 1 ; NORMALIZED ; FB03
+FB03 ; NFC ; 2 ; NORMALIZED ; FB03
 FB03 ; NFD ; 0 ; PAST ;
-FB03 ; NFKC ; 3 ; NORMALIZED ; 0066 0066 0069
+FB03 ; NFD ; 1 ; NORMALIZED ; FB03
+FB03 ; NFD ; 2 ; NORMALIZED ; FB03
 FB03 ; NFKC ; 2 ; PAST ;
-FB03 ; NFKD ; 3 ; NORMALIZED ; 0066 0066 0069
+FB03 ; NFKC ; 3 ; NORMALIZED ; 0066 0066 0069
+FB03 ; NFKC ; 4 ; NORMALIZED ; 0066 0066 0069
 FB03 ; NFKD ; 2 ; PAST ;
+FB03 ; NFKD ; 3 ; NORMALIZED ; 0066 0066 0069
+FB03 ; NFKD ; 4 ; NORMALIZED ; 0066 0066 0069
 
 # A square ideograph that compatibility decomposes into four.
-337F ; NFC ; 1 ; NORMALIZED ; 337F
 337F ; NFC ; 0 ; PAST ;
-337F ; NFD ; 1 ; NORMALIZED ; 337F
+337F ; NFC ; 1 ; NORMALIZED ; 337F
+337F ; NFC ; 2 ; NORMALIZED ; 337F
 337F ; NFD ; 0 ; PAST ;
-337F ; NFKC ; 4 ; NORMALIZED ; 682A 5F0F 4F1A 793E
+337F ; NFD ; 1 ; NORMALIZED ; 337F
+337F ; NFD ; 2 ; NORMALIZED ; 337F
 337F ; NFKC ; 3 ; PAST ;
-337F ; NFKD ; 4 ; NORMALIZED ; 682A 5F0F 4F1A 793E
+337F ; NFKC ; 4 ; NORMALIZED ; 682A 5F0F 4F1A 793E
+337F ; NFKC ; 5 ; NORMALIZED ; 682A 5F0F 4F1A 793E
 337F ; NFKD ; 3 ; PAST ;
+337F ; NFKD ; 4 ; NORMALIZED ; 682A 5F0F 4F1A 793E
+337F ; NFKD ; 5 ; NORMALIZED ; 682A 5F0F 4F1A 793E
 
 # A Hangul syllable, decomposed by rule into two jamo.
-AC00 ; NFC ; 1 ; NORMALIZED ; AC00
 AC00 ; NFC ; 0 ; PAST ;
-AC00 ; NFD ; 2 ; NORMALIZED ; 1100 1161
+AC00 ; NFC ; 1 ; NORMALIZED ; AC00
+AC00 ; NFC ; 2 ; NORMALIZED ; AC00
 AC00 ; NFD ; 1 ; PAST ;
-AC00 ; NFKC ; 1 ; NORMALIZED ; AC00
+AC00 ; NFD ; 2 ; NORMALIZED ; 1100 1161
+AC00 ; NFD ; 3 ; NORMALIZED ; 1100 1161
 AC00 ; NFKC ; 0 ; PAST ;
-AC00 ; NFKD ; 2 ; NORMALIZED ; 1100 1161
+AC00 ; NFKC ; 1 ; NORMALIZED ; AC00
+AC00 ; NFKC ; 2 ; NORMALIZED ; AC00
 AC00 ; NFKD ; 1 ; PAST ;
+AC00 ; NFKD ; 2 ; NORMALIZED ; 1100 1161
+AC00 ; NFKD ; 3 ; NORMALIZED ; 1100 1161
 
 # A character past the basic plane that every form decomposes, since it is excluded from composing.
-1D15E ; NFC ; 2 ; NORMALIZED ; 1D157 1D165
 1D15E ; NFC ; 1 ; PAST ;
-1D15E ; NFD ; 2 ; NORMALIZED ; 1D157 1D165
+1D15E ; NFC ; 2 ; NORMALIZED ; 1D157 1D165
+1D15E ; NFC ; 3 ; NORMALIZED ; 1D157 1D165
 1D15E ; NFD ; 1 ; PAST ;
-1D15E ; NFKC ; 2 ; NORMALIZED ; 1D157 1D165
+1D15E ; NFD ; 2 ; NORMALIZED ; 1D157 1D165
+1D15E ; NFD ; 3 ; NORMALIZED ; 1D157 1D165
 1D15E ; NFKC ; 1 ; PAST ;
-1D15E ; NFKD ; 2 ; NORMALIZED ; 1D157 1D165
+1D15E ; NFKC ; 2 ; NORMALIZED ; 1D157 1D165
+1D15E ; NFKC ; 3 ; NORMALIZED ; 1D157 1D165
 1D15E ; NFKD ; 1 ; PAST ;
+1D15E ; NFKD ; 2 ; NORMALIZED ; 1D157 1D165
+1D15E ; NFKD ; 3 ; NORMALIZED ; 1D157 1D165

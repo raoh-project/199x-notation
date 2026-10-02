@@ -85,3 +85,37 @@
 0061 007B 0032 002C 0036 007D ; 0061 0061 ; true
 0061 007B 0032 002C 0036 007D ; 0061 0061 0061 0061 0061 0061 ; true
 0061 007B 0032 002C 0036 007D ; 0061 0061 0061 0061 0061 0061 0061 ; false
+
+# A set is held at each of its ends and one past it: a run, the shorthands, and what a dot leaves.
+005B 005C 0078 007B 0031 0030 0030 0030 0030 007D 002D 005C 0078 007B 0031 0030 0034 0030 0030 007D 005D ; 10000 ; true
+005B 0061 002D 0061 005D ; 0061 ; true
+005B 0061 002D 0061 005D ; 0062 ; false
+005C 0064 ; 002F ; false
+005C 0064 ; 0030 ; true
+005C 0064 ; 0039 ; true
+005C 0064 ; 003A ; false
+005C 0077 ; 0040 ; false
+005C 0077 ; 0041 ; true
+005C 0077 ; 005A ; true
+005C 0077 ; 005B ; false
+005C 0077 ; 0060 ; false
+005C 0077 ; 0061 ; true
+005C 0077 ; 007A ; true
+005C 0077 ; 007B ; false
+005C 0077 ; 002F ; false
+005C 0077 ; 0030 ; true
+005C 0077 ; 0039 ; true
+005C 0077 ; 003A ; false
+005C 0077 ; 005E ; false
+005C 0073 ; 0008 ; false
+005C 0073 ; 000D ; true
+005C 0073 ; 000E ; false
+005C 0073 ; 001F ; false
+005C 0073 ; 0021 ; false
+002E ; 000B ; true
+002E ; 0084 ; true
+002E ; 0086 ; true
+002E ; 2027 ; true
+002E ; 202A ; true
+005C 0030 0033 0037 0037 ; 00FF ; true
+005C 0030 0037 ; 0007 ; true

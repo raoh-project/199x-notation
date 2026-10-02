@@ -24,6 +24,13 @@ what it quotes, is tested in that implementation's own language.
 
 A field is added to a file once a source decides it, and not before.
 
+The lines of a file are chosen from what its sources state, rule by rule, and not from the cases an
+implementation happens to test. Where a rule draws a line, a bound, a range or the ends of a set, a
+file holds it on every side: an answer is held one below a bound, at it and one above it, and a range
+at each end and one past each end. So an implementation that draws the line one place over, at `<`
+where the rule says `<=`, does not answer every line. And each kind a source names, every form,
+direction and kind of temporal text, has lines of its own.
+
 ## Files
 
 | File | A line | What is held |
