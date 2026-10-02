@@ -397,6 +397,29 @@ public final class StringPattern implements Predicate<String> {
         return subsets != null ? Way.SETS_KEPT : Way.EVERY_STATE;
     }
 
+    /** How many sets of states this pattern keeps, none where it keeps none: what a test of which way
+     *  a walk went asks, and no walk. */
+    int setsKept() {
+        Subsets known = subsets;
+        return known == null ? 0 : known.count.get();
+    }
+
+    /** How many steps from the sets kept, each where one class leads from one set, are worked out. */
+    int stepsKnown() {
+        Subsets known = subsets;
+        return known == null ? 0 : known.stepsKnown();
+    }
+
+    /** Forgets every step worked out from the sets kept, and what a walk stays in each on, and keeps
+     *  the sets: a walk after works out each step again, and finds the set it leads to among those
+     *  kept. What a test or a timing of that way does, and no walk. */
+    void forgetSteps() {
+        Subsets known = subsets;
+        if (known != null) {
+            known.forgetSteps();
+        }
+    }
+
     /** Each set the steps are over, once however many steps are over it. */
     private static List<int[]> distinct(int[][][] over) {
         Map<int[], Boolean> seen = new IdentityHashMap<>();
@@ -1418,7 +1441,7 @@ public final class StringPattern implements Predicate<String> {
         final Subset start;
         private final Budget budget;
         private final AtomicReferenceArray<Subset> slots;
-        private final AtomicInteger count = new AtomicInteger();
+        final AtomicInteger count = new AtomicInteger();
         private final AtomicLong remembered = new AtomicLong();
 
         /**
@@ -1490,6 +1513,33 @@ public final class StringPattern implements Predicate<String> {
                 at = (at + 1) & mask;
             }
             return null;
+        }
+
+        /** {@link StringPattern#stepsKnown}. */
+        int stepsKnown() {
+            int known = 0;
+            for (int at = 0; at < slots.length(); at++) {
+                Subset held = slots.get(at);
+                if (held != null) {
+                    for (Subset to : held.next) {
+                        if (to != null) {
+                            known++;
+                        }
+                    }
+                }
+            }
+            return known;
+        }
+
+        /** {@link StringPattern#forgetSteps}. */
+        void forgetSteps() {
+            for (int at = 0; at < slots.length(); at++) {
+                Subset held = slots.get(at);
+                if (held != null) {
+                    Arrays.fill(held.next, null);
+                    held.stay = SymbolClasses.Stay.NONE;
+                }
+            }
         }
 
         /** Whether {@code held} is the set {@code room} marks, asking before each state of it. */

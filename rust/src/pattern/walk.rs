@@ -573,6 +573,148 @@ mod tests {
         }
     }
 
+    /// The paths a match goes by, each timed apart by [`walk_paths`] and held here to the way it is
+    /// named, so that what a time says is of that way. Work put in a step every path takes for the
+    /// sake of one is paid by the others, so a change is compared on each: one time over all would
+    /// let what one loses be hidden by what another gains.
+    mod paths {
+        use super::*;
+
+        /// The sets of `(?:a?){49998}` are as large as the machine, so the first match gives keeping
+        /// them up, and the matcher walks every match after it a state at a time.
+        pub(super) fn large() -> (crate::Pattern, String) {
+            (pattern("(?:a?){49998}"), "a".repeat(100))
+        }
+
+        /// The tenth character from the end is an a, and the subject is at random: a match that has
+        /// kept nothing comes to a new set at most characters.
+        pub(super) fn tenth() -> (crate::Pattern, String) {
+            let mut seed = 9u32;
+            let subject = (0..400)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    if seed >> 31 == 0 { 'a' } else { 'b' }
+                })
+                .collect();
+            (pattern("(?:a|b)*a(?:a|b){8}"), subject)
+        }
+
+        /// Forgets where each class leads from each kept set, and keeps the sets: the next match
+        /// works out each step again, and finds the set it comes to among those kept by its hash.
+        pub(super) fn forget_steps(cache: &mut Cache) {
+            cache.next.fill(UNKNOWN);
+        }
+    }
+
+    /// Each path [`walk_paths`] times goes the way it is named: a match with no kept sets keeps
+    /// none; one with nothing kept keeps a new set at most characters; one over steps already worked
+    /// out reads the whole subject by them; and one whose steps are forgotten finds the set at most
+    /// characters lead to among those kept, keeping no new one.
+    #[test]
+    fn each_timed_path_goes_the_way_it_is_named() {
+        let (large, a) = paths::large();
+        let mut alone = large.matcher();
+        alone.matches(&a);
+        assert!(alone.cache.off, "the first match gave keeping sets up");
+        assert!(
+            alone.cache.sets.is_empty() && alone.cache.off_work < alone.cache.off_for,
+            "kept none, and walks the next match a state at a time"
+        );
+
+        let (tenth, subject) = paths::tenth();
+        let mut fresh = tenth.matcher();
+        fresh.matches(&subject);
+        assert!(
+            fresh.cache.made * 2 > subject.len() && !fresh.cache.off,
+            "a new set at {} of {} characters",
+            fresh.cache.made,
+            subject.len()
+        );
+
+        let made = fresh.cache.made;
+        let read = fresh.cache.read;
+        fresh.matches(&subject);
+        assert_eq!(fresh.cache.made, made, "no set made over steps worked out");
+        assert_eq!(
+            fresh.cache.read - read,
+            subject.len(),
+            "every character read by them"
+        );
+
+        paths::forget_steps(&mut fresh.cache);
+        let read = fresh.cache.read;
+        fresh.matches(&subject);
+        let found = subject.len() - (fresh.cache.read - read);
+        assert_eq!(fresh.cache.made, made, "no set made where each is kept");
+        assert!(
+            found * 2 > subject.len() && !fresh.cache.off,
+            "a kept set found at {found} of {} characters",
+            subject.len()
+        );
+    }
+
+    /// How long a match takes on each path, which [`each_timed_path_goes_the_way_it_is_named`]
+    /// holds to its name. Not run with the others:
+    ///
+    /// ```sh
+    /// cargo test --release --lib walk_paths -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "a timing, run by hand"]
+    fn walk_paths() {
+        extern crate std;
+        use std::time::{Duration, Instant};
+        fn time(mut f: impl FnMut()) -> Duration {
+            let (start, mut times) = (Instant::now(), 0u32);
+            while start.elapsed() < Duration::from_secs(1) || times < 3 {
+                f();
+                times += 1;
+            }
+            start.elapsed() / times
+        }
+
+        let (large, a) = paths::large();
+        let mut alone = large.matcher();
+        alone.matches(&a);
+        let without = time(|| {
+            core::hint::black_box(alone.matches(&a));
+        });
+
+        let (tenth, subject) = paths::tenth();
+        let new = time(|| {
+            core::hint::black_box(tenth.matches(&subject));
+        });
+
+        let mut kept = tenth.matcher();
+        kept.matches(&subject);
+        let steps = time(|| {
+            core::hint::black_box(kept.matches(&subject));
+        });
+        // Forgetting the steps is timed too, and is a small part: one write for each class of
+        // each kept set, where the match moves the states of most of them.
+        let found = time(|| {
+            paths::forget_steps(&mut kept.cache);
+            core::hint::black_box(kept.matches(&subject));
+        });
+
+        std::println!(
+            "{:<56} {without:>10.2?}",
+            "without kept sets, (?:a?){49998} against 100 a"
+        );
+        std::println!(
+            "{:<56} {new:>10.2?}",
+            "a new set kept at most characters, 400 bytes"
+        );
+        std::println!(
+            "{:<56} {steps:>10.2?}",
+            "steps already worked out, 400 bytes"
+        );
+        std::println!(
+            "{:<56} {found:>10.2?}",
+            "kept sets found by their hash, 400 bytes"
+        );
+    }
+
     /// The walk's lists of states are made as large as the machine once, and no match grows them:
     /// not one that keeps a new set at most characters, nor one that looks kept sets up, nor one
     /// that gives keeping them up and walks a state at a time.
