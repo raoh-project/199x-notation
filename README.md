@@ -12,8 +12,8 @@ the same way everywhere.
 ## Status
 
 The Java implementation is here, moved from Souther's runtime and compiler. Souther and raoh-java
-do not depend on it yet. The Rust, Go and PHP implementations and `suite/` are not here yet. See the
-issues.
+do not depend on it yet, and it is the first implementation held to `suite/`. The Rust, Go and PHP
+implementations are not here yet. See the issues.
 
 ## What belongs here
 
@@ -91,7 +91,16 @@ build: taking a later Unicode version is a change to the specifications, not a d
 java gen/Generate.java ucd/18.0.0
 ```
 
-The Java tests read `ucd/`, so they run in `java/`:
+The generator reads the database once into one model, where every table is derived and checked
+against the properties Unicode publishes, and writes each language's tables from that model with an
+emitter of its own. An emitter decides how its language holds the data and nothing about Unicode, so
+every language's tables are the same data. No table is written by hand or read from a resource at
+run time.
+
+The vectors in `suite/` are what every implementation is held to, in a format each language reads
+with its standard library; `suite/README.md` states it.
+
+The Java tests read `ucd/` and `suite/`, so they run in `java/`:
 
 ```sh
 cd java && mvn test
@@ -100,7 +109,7 @@ cd java && mvn test
 Both packages are `@NullMarked`, and NullAway checks the main sources against that on every
 compile. Nothing else of Error Prone runs.
 
-CI checks the files in `ucd/` against their checksums, runs the generators and fails if the
+CI checks the files in `ucd/` against their checksums, runs the generator and fails if the
 checked-in tables differ, and runs the tests.
 
 ## Releasing
