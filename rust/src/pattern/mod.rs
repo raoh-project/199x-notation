@@ -2,10 +2,12 @@
 //! the strings a pattern accepts.
 
 mod anchors;
+mod class_rows;
 mod image;
 mod machine;
 mod read;
 mod states;
+mod subject;
 mod symbols;
 mod tree;
 mod walk;
@@ -38,23 +40,36 @@ pub enum PatternRead {
 
 /// A pattern that was read, as the strings it accepts.
 pub struct Pattern {
-    machine: Machine,
+    run: Run,
+}
+
+/// What a match walks: a machine held as its steps, built from a pattern read from text or read
+/// from an image of P1, or one held as its classes and rows, read from an image of P2.
+enum Run {
+    Steps(Machine),
+    Rows(class_rows::ClassRows),
 }
 
 impl Pattern {
     /// Whether the whole of `subject` is one of the strings the pattern accepts.
     ///
-    /// The subject is read a scalar value at a time, once, and never gone back over: the machine the
-    /// pattern means is walked as the set of states it may be in, so for a pattern a match takes
-    /// time linear in the subject. The machine is built from the shape of the pattern, its
-    /// repetitions written out, and no deterministic machine is built ahead of a match. A match keeps
-    /// the sets of states it comes to and where each class of characters leads from them, so a
-    /// character read from a set before is one lookup; a character that leads somewhere not yet
-    /// worked out may cost as many steps as the machine has states, which for a pattern read from
-    /// text is at most 250,000.
+    /// The subject is read a scalar value at a time, once, and never gone back over, so a match takes
+    /// time linear in the subject. How the machine is walked turns on how the pattern came to be, and
+    /// never changes the answer.
     ///
-    /// What one match keeps is dropped when it ends. A caller that matches the pattern again and
-    /// again keeps it between them with a [`Matcher`].
+    /// A pattern read from text, or from an image of P1, is a machine held as its steps, walked as
+    /// the set of states it may be in. For a pattern read from text the machine is built from the
+    /// shape of the pattern, its repetitions written out, and no deterministic machine is built ahead
+    /// of a match. A match keeps the sets of states it comes to and where each class of characters
+    /// leads from them, so a character read from a set before is one lookup; a character that leads
+    /// somewhere not yet worked out may cost as many steps as the machine has states, which for a
+    /// pattern read from text is at most 250,000. What one match keeps is dropped when it ends. A
+    /// caller that matches the pattern again and again keeps it between them with a [`Matcher`].
+    ///
+    /// A pattern read from an image of P2 is a deterministic machine held as its classes and rows,
+    /// walked one state at a time: a scalar value is a lookup of its class and of where that leads,
+    /// or a search of the state's spans where the machine is too large for a table. Nothing is kept
+    /// between matches, and none is needed.
     pub fn matches(&self, subject: &str) -> bool {
         self.matcher().matches(subject)
     }
@@ -67,34 +82,43 @@ impl Pattern {
         }
     }
 
-    /// The pattern `image` is an image of, in the format P1 that `image/P1.md` in the repository
-    /// defines, or [`NotAnImage`] where it is not one: every rule of the format is asked before
-    /// anything is matched.
+    /// The pattern `image` is an image of, in the format P1 or P2 that `image/P1.md` and
+    /// `image/P2.md` in the repository define, or [`NotAnImage`] where it is not one: every rule of
+    /// the format is asked before anything is matched.
     ///
     /// The image is the machine another implementation built, written out so that it runs here, and
     /// it accepts what the pattern it was written from accepts. It is held to the rules of the format
     /// and not to the limits a pattern read from text is held to: a reader reads every image a writer
-    /// writes, and may read a longer one. A match walks the machine as it is written, as the set of
-    /// states it may be in, so each scalar value of the subject may cost as many steps as the image
-    /// has.
+    /// writes, and may read a longer one.
     ///
-    /// Reading is not bounded by the image's length where the image says its machine is
-    /// deterministic. That no two steps out of one state are over sets with a scalar value in common
-    /// is asked once for each different group of sets a state steps over, and a set is written once
-    /// however many groups hold it, so in the worst case the work grows with the square of the
-    /// image's length. Java holds an image to the same rule the same way.
+    /// A machine of P1 is walked as it is written, as the set of states it may be in, so each scalar
+    /// value of the subject may cost as many steps as the image has. Reading one is not bounded by
+    /// the image's length where the image says its machine is deterministic. That no two steps out
+    /// of one state are over sets with a scalar value in common is asked once for each different
+    /// group of sets a state steps over, and a set is written once however many groups hold it, so
+    /// in the worst case the work grows with the square of the image's length. Java holds an image
+    /// to the same rule the same way, and writes no such image any more.
+    ///
+    /// An image of P2 cannot write a machine that is not deterministic, and reading one is as long
+    /// as the image. Its machine is held as its classes and rows and walked one state at a time.
     ///
     /// The crate writes no image.
     pub fn from_image(image: &str) -> Result<Pattern, NotAnImage> {
-        image::read(image).map(|machine| Pattern { machine })
+        image::read(image).map(|read| Pattern {
+            run: match read {
+                image::Read::Steps(machine) => Run::Steps(machine),
+                image::Read::Rows(rows) => Run::Rows(rows),
+            },
+        })
     }
 }
 
-/// A [`Pattern`] and what its matches have worked out: the sets of states they came to and where
-/// each class of characters leads from them, kept within about two megabytes. A match against a
-/// subject that comes to sets an earlier one came to looks them up rather than working them out
-/// again, which is what most characters of most subjects cost. What is kept changes how fast a match
-/// is and never what it answers.
+/// A [`Pattern`] and what its matches have worked out. For a machine held as its steps, that is the
+/// sets of states they came to and where each class of characters leads from them, kept within
+/// about two megabytes: a match against a subject that comes to sets an earlier one came to looks
+/// them up rather than working them out again, which is what most characters of most subjects cost.
+/// A machine read from an image of P2 is walked one state at a time and nothing is worked out, so
+/// its matcher keeps nothing. What is kept changes how fast a match is and never what it answers.
 ///
 /// A `Matcher` is not shared: each thread that matches makes its own from the pattern, which is.
 pub struct Matcher<'a> {
@@ -106,7 +130,10 @@ impl Matcher<'_> {
     /// Whether the whole of `subject` is one of the strings the pattern accepts, as
     /// [`Pattern::matches`] answers.
     pub fn matches(&mut self, subject: &str) -> bool {
-        walk::matches(&self.pattern.machine, &mut self.cache, subject)
+        match &self.pattern.run {
+            Run::Steps(machine) => walk::matches(machine, &mut self.cache, subject),
+            Run::Rows(rows) => rows.matches(subject),
+        }
     }
 }
 
@@ -264,7 +291,7 @@ pub fn read_pattern(text: &str) -> PatternRead {
         });
     }
     PatternRead::Pattern(Pattern {
-        machine: machine::build(tree, meaning),
+        run: Run::Steps(machine::build(tree, meaning)),
     })
 }
 

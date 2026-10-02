@@ -358,6 +358,30 @@ public final class Automaton {
     }
 
     /**
+     * The classes a walk one state at a time looks a symbol up among, or null where this is not a
+     * machine walked that way: what an image of P2 writes as its pieces. Read and not written to.
+     */
+    @Nullable SymbolPartition classesOfWalk() {
+        return rows == null ? null : rows.classes();
+    }
+
+    /**
+     * Where class {@code each} of {@link #classesOfWalk} leads from {@code state}: what an image of
+     * P2 writes as the state's spans.
+     *
+     * @param state a state of the machine
+     * @param each  one of its classes
+     * @return the state it leads to
+     */
+    int leadsTo(int state, int each) {
+        if (rows == null) {
+            throw new IllegalStateException("where a class leads is asked of a machine made"
+                    + " deterministic");
+        }
+        return rows.next()[state][each];
+    }
+
+    /**
      * Whether the whole of {@code value} is accepted, walked one state at a time.
      *
      * <p>Asked only of a machine made one where a walk is only ever in one state ({@link #rows}): a

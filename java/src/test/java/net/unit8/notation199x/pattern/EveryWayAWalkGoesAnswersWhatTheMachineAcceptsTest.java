@@ -1,6 +1,7 @@
 package net.unit8.notation199x.pattern;
 
 import net.unit8.notation199x.Outcome;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -50,8 +51,10 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             Automaton shaped = machine.shaped();
             List<StringPattern> runs = new ArrayList<>(List.of(machine.pattern()));
             runs.addAll(everyWay(shaped, false));
-            if (machine.deterministic() != null) {
-                runs.addAll(everyWay(machine.deterministic(), true));
+            Automaton deterministic = deterministic(machine);
+            if (deterministic != null) {
+                runs.addAll(everyWay(deterministic, true));
+                runs.addAll(everyWayOfP2(deterministic));
             }
             for (int each = 0; each < 400; each++) {
                 String subject = subject(random);
@@ -110,10 +113,12 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
     void aDeterministicWalkAsksOnceACharacterWhicheverWayItGoes() {
         PatternMachine machine = PatternMachine.of(((PatternRead.Read) PatternParser.read("[a-zぁ-ん😀]*,\\d+"))
                 .meaning());
-        Automaton deterministic = machine.deterministic();
+        Automaton deterministic = java.util.Objects.requireNonNull(deterministic(machine));
         String subject = "abcあいう😀😀xyz".repeat(20) + ",123";
         int characters = subject.codePointCount(0, subject.length());
-        for (StringPattern run : everyWay(deterministic, true)) {
+        List<StringPattern> every = new ArrayList<>(everyWay(deterministic, true));
+        every.addAll(everyWayOfP2(deterministic));
+        for (StringPattern run : every) {
             if (run.way() == StringPattern.Way.SETS_KEPT || run.way() == StringPattern.Way.EVERY_STATE) {
                 // Walked as sets of states, which asks as such a walk does.
                 continue;
@@ -136,8 +141,15 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> new StringPattern.Budget(-1, 0, 0, 0, 0, 0));
         assertEquals(StringPattern.Way.EVERY_STATE, StringPattern.of(Automaton.of(
-                ((PatternRead.Read) PatternParser.read("a*")).meaning(), Held.roomy()), false,
+                ((PatternRead.Read) PatternParser.read("a*")).meaning(), Held.roomy()),
                 new StringPattern.Budget(0, 0, 0, 0, 0, 0)).way());
+    }
+
+    /** The deterministic machine {@code machine}'s rows were taken from, made again from its shape
+     *  within what it was made in: a machine runs and keeps only the rows, and the walks over steps
+     *  are held here to the same machine. Null where it has none. */
+    private static @Nullable Automaton deterministic(PatternMachine machine) {
+        return machine.rows() == null ? null : machine.shaped().canonical(PatternMachine.deterministicRun());
     }
 
     /** {@code machine} run each way a walk may go over it, as budgets that run out where each does
@@ -172,9 +184,39 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         return out;
     }
 
+    /** {@code machine} written as an image of P2 and read back, walked over a table and, where
+     *  the budget gives it none, over the spans the image writes, with and without ASCII looked up
+     *  in a table of its own and with and without the classes' tables. */
+    private static List<StringPattern> everyWayOfP2(Automaton machine) {
+        List<String> image = ((PatternImage.Written) PatternImages.p2(machine)).strings();
+        StringPattern.Budget given = StringPattern.Budget.DEFAULT;
+        StringPattern.Budget noTable = new StringPattern.Budget(given.classWork(), 0,
+                given.asciiEntries(), given.runs(), given.subsets(), given.remembered());
+        StringPattern.Budget noAscii = new StringPattern.Budget(given.classWork(), 0, 0,
+                given.runs(), given.subsets(), given.remembered());
+        StringPattern.Budget noClasses = new StringPattern.Budget(0, given.tableEntries(), 0,
+                given.runs(), given.subsets(), given.remembered());
+        return List.of(
+                wayOfP2(StringPattern.Way.TABLE, image, given),
+                wayOfP2(StringPattern.Way.ASCII_AND_SPANS, image, noTable),
+                wayOfP2(StringPattern.Way.SPANS, image, noAscii),
+                wayOfP2(StringPattern.Way.SPANS, image, noClasses));
+    }
+
+    private static StringPattern wayOfP2(StringPattern.Way expected, List<String> image,
+                                         StringPattern.Budget budget) {
+        StringPattern run = StringPattern.of(image, budget);
+        assertEquals(expected, run.way(), "P2 " + budget);
+        return run;
+    }
+
+    /** {@code machine} walked as {@code budget} has it walk, held as its steps: read from an image
+     *  of P1 that says it is deterministic where it is, and as it is where it is not. */
     private static StringPattern way(StringPattern.Way expected, Automaton machine, boolean deterministic,
                                      StringPattern.Budget budget) {
-        StringPattern run = StringPattern.of(machine, deterministic, budget);
+        StringPattern run = deterministic
+                ? StringPattern.of(Held.saidDeterministicInP1(machine), budget)
+                : StringPattern.of(machine, budget);
         assertEquals(expected, run.way(), budget.toString());
         return run;
     }
@@ -188,7 +230,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         Automaton shaped = PatternMachine.of(((PatternRead.Read) PatternParser.read("(a?){50}b")).meaning())
                 .shaped();
         StringPattern.Budget given = StringPattern.Budget.DEFAULT;
-        StringPattern run = StringPattern.of(shaped, false, new StringPattern.Budget(given.classWork(),
+        StringPattern run = StringPattern.of(shaped, new StringPattern.Budget(given.classWork(),
                 given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(), 10));
         assertEquals(StringPattern.Way.EVERY_STATE, run.way());
         assertTrue(run.matches("a".repeat(50) + "b"));
@@ -218,7 +260,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
 
         Automaton shaped = Automaton.of(((PatternRead.Read) PatternParser.read(regex.toString())).meaning(),
                 Held.roomy());
-        StringPattern run = StringPattern.of(shaped, false);
+        StringPattern run = StringPattern.of(shaped);
         assertEquals(StringPattern.Way.EVERY_STATE, run.way());
         assertTrue(run.matches(text.toString()));
         assertFalse(run.matches(text.substring(1) + "a"));
@@ -237,8 +279,9 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             for (int round = 0; round < 3; round++) {
                 // Made anew each round, so that what each walk keeps is found by the threads at once.
                 List<StringPattern> runs = new ArrayList<>(everyWay(shaped, false));
-                if (machine.deterministic() != null) {
-                    runs.addAll(everyWay(machine.deterministic(), true));
+                Automaton deterministic = deterministic(machine);
+                if (deterministic != null) {
+                    runs.addAll(everyWay(deterministic, true));
                 }
                 ExecutorService threads = Executors.newFixedThreadPool(8);
                 try {

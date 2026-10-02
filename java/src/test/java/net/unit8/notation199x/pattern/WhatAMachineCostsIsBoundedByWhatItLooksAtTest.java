@@ -60,7 +60,7 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
             Meter meter = Held.roomy();
             assertTrue(Held.canonical(meaning, meter) != null);
             assertNull(meter.stoppedBy());
-            assertTrue(PatternMachine.of(meaning).deterministic() != null,
+            assertTrue(PatternMachine.of(meaning).rows() != null,
                     "within what a faster run is worth");
         });
     }
@@ -103,8 +103,8 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
         assertEquals(3, sets.size(), "the class, the rest, and every symbol out of where a walk is done");
         assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
             for (int i = 0; i < 20; i++) {
-                assertEquals(StringPattern.Way.TABLE, StringPattern.of(deterministic, true).way());
-                assertInstanceOf(PatternImage.Written.class, PatternImages.of(deterministic, true));
+                assertEquals(StringPattern.Way.TABLE, StringPattern.of(ClassRows.of(deterministic)).way());
+                assertInstanceOf(PatternImage.Written.class, PatternImages.p2(deterministic));
                 assertTrue(deterministic.shortest() != null);
             }
         });
@@ -133,6 +133,38 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
             assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10002)
                     .toString()));
             assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10001).toString()));
+        });
+    }
+
+    /**
+     * An image of P2 is read in one pass, however many states step over the same wide classes: the
+     * machine of issue #27, two classes of a hundred thousand runs each that every state steps over
+     * to states of its own, which an image of P1 that says it is deterministic makes a reader hold
+     * against each other at every state.
+     */
+    @Test
+    void anImageOfP2IsReadInOnePassHoweverManyStatesStepOverWideClasses() {
+        int runs = 100_000;
+        int states = 100_000;
+        int dead = states - 1;
+        StringBuilder image = new StringBuilder("P2");
+        for (int i = 0; i < runs; i++) {
+            int at = 0x10000 + 4 * i;
+            image.append(',').append(at - 1).append(",0,").append(at).append(",1,")
+                    .append(at + 1).append(",0,").append(at + 2).append(",2");
+        }
+        image.append(",1114111,0,").append(states);
+        for (int state = 0; state < dead; state++) {
+            image.append(",1,0,").append(dead).append(",1,").append((state + 1) % dead)
+                    .append(",2,").append((state + 2) % dead);
+        }
+        image.append(",0,2,").append(dead);
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            StringPattern run = StringPattern.of(List.of(image.toString()));
+            assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10006)
+                    .toString()));
+            assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10001).toString()));
+            assertTrue(run.matches(""));
         });
     }
 
@@ -225,7 +257,7 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
     /** A writer says it is past its limit as it goes, and writes nothing out once it is. */
     @Test
     void aWriterPastItsLimitSaysSoAndWritesNothing() {
-        StringPattern.Writer out = new StringPattern.Writer(false, 40);
+        StringPattern.P1Writer out = new StringPattern.P1Writer(40);
         int at = out.state(false);
         assertTrue(out.holds());
         for (int i = 0; i < 20 && out.holds(); i++) {
