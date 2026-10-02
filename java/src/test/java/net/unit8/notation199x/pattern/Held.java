@@ -36,6 +36,21 @@ final class Held {
         return new Held(made == null ? null : made.canonical(meter));
     }
 
+    /**
+     * {@code machine}, a machine made deterministic, as an image of P1 that says it is: what an
+     * earlier release wrote and every release reads, and the one way a machine held as its steps
+     * comes to be walked one state at a time. Written as P1 is now written and said deterministic,
+     * which it is and which reading it holds it to.
+     */
+    static java.util.List<String> saidDeterministicInP1(Automaton machine) {
+        String written = String.join("",
+                ((PatternImage.Written) PatternImages.p1(machine)).strings());
+        if (!written.startsWith("P1,0,")) {
+            throw new IllegalStateException("an image of P1 is written as no deterministic machine");
+        }
+        return java.util.List.of("P1,1," + written.substring("P1,0,".length()));
+    }
+
     /** The smallest machine for {@code meaning}, or null where it is past {@code meter}. */
     static Automaton canonical(PatternMeaning meaning, Meter meter) {
         Automaton shaped = Automaton.of(meaning, meter);

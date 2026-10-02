@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::machine::{Classes, Machine};
+use super::subject::read_classes;
 
 /// About how many bytes one cache keeps of the sets it has worked out, before it forgets them and
 /// starts again.
@@ -385,8 +386,7 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
 /// Reads `subject` from byte `i` by the steps kept in `next`, from the kept set whose row begins at
 /// `at`, moving both, until the end, where it answers `None`, or until a character whose step from
 /// where it is is not one to a kept set, where it answers the slot of `next` that step is in and the
-/// character, neither read. An ASCII character is its byte, and its class is looked up by it; any
-/// other is decoded.
+/// character, neither read. The subject is read as every walk reads one ([`read_classes`]).
 fn run_known(
     next: &[u32],
     classes: &Classes,
@@ -394,69 +394,22 @@ fn run_known(
     i: &mut usize,
     at: &mut u32,
 ) -> Option<(usize, char)> {
-    let bytes = subject.as_bytes();
-    let ascii = classes.ascii();
-    let (mut here, mut row) = (*i, *at);
-    let stop = 'read: loop {
-        // Four ASCII characters at a time where there are four, each step still waiting on the one
-        // before it: written out, the steps cost about a quarter of what they cost one to a turn of
-        // the loop.
-        while let Some(&[a, b, c, d]) = bytes
-            .get(here..here + 4)
-            .and_then(|four| <&[u8; 4]>::try_from(four).ok())
-            && u32::from_ne_bytes([a, b, c, d]) & 0x8080_8080 == 0
-        {
-            let step = |row: u32, byte: u8| {
-                let slot = row as usize + ascii[usize::from(byte)];
-                (slot, next[slot])
-            };
-            let (slot, one) = step(row, a);
-            if one >= NONE {
-                break 'read Some(slot);
-            }
-            let (slot, two) = step(one, b);
-            if two >= NONE {
-                (here, row) = (here + 1, one);
-                break 'read Some(slot);
-            }
-            let (slot, three) = step(two, c);
-            if three >= NONE {
-                (here, row) = (here + 2, two);
-                break 'read Some(slot);
-            }
-            let (slot, four) = step(three, d);
-            if four >= NONE {
-                (here, row) = (here + 3, three);
-                break 'read Some(slot);
-            }
-            (here, row) = (here + 4, four);
-        }
-        let Some(&byte) = bytes.get(here) else {
-            break None;
-        };
-        let (class, width) = if byte < 0x80 {
-            (ascii[usize::from(byte)], 1)
-        } else {
-            let c = subject[here..]
-                .chars()
-                .next()
-                .expect("a byte past ASCII begins a character here");
-            (classes.class(c), c.len_utf8())
-        };
-        let slot = row as usize + class;
-        let known = next[slot];
-        // A kept set is the place its row begins, below both of the values that are not one.
-        if known >= NONE {
-            break Some(slot);
-        }
-        row = known;
-        here += width;
-    };
-    (*i, *at) = (here, row);
-    stop.map(|slot| {
+    let mut row = *at;
+    // A kept set is the place its row begins, below both of the values that are not one.
+    let stopped = read_classes(
+        subject,
+        i,
+        classes.ascii(),
+        |c| classes.class_of(c),
+        &mut row,
+        |row, class| next[row as usize + class],
+        |known| known >= NONE,
+    );
+    *at = row;
+    stopped.map(|class| {
         (
-            slot,
-            subject[here..]
+            row as usize + class,
+            subject[*i..]
                 .chars()
                 .next()
                 .expect("a character begins here"),
@@ -509,7 +462,10 @@ mod tests {
     fn state_at_a_time(pattern: &crate::Pattern, subject: &str) -> bool {
         let mut cache = Cache::new();
         cache.off = true;
-        matches(&pattern.machine, &mut cache, subject)
+        let super::super::Run::Steps(machine) = &pattern.run else {
+            unreachable!("a pattern read from text is walked by its steps")
+        };
+        matches(machine, &mut cache, subject)
     }
 
     /// Patterns made at random of a few symbols and every shape, and subjects of the same symbols:

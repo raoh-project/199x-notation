@@ -67,16 +67,18 @@ entry points, and an implementation may have either without the other. Only the 
 its own: a writer writes no image of more than 8,388,608 characters, and answers that there is none
 where the machine it writes would take more. What an image accepts is what the pattern does, and
 which of the machines that accept it is written is the writer's: Java writes the smallest
-deterministic machine where it makes one and its image fits, and the machine the pattern's shape
-makes otherwise. So whether a pattern has an image can differ between implementations, which says
+deterministic machine as P2 where it makes one and its image fits, and the machine the pattern's
+shape makes as P1 otherwise. It writes no deterministic machine as P1, since a reader's check of
+one is not bounded by the image's length. So whether a pattern has an image can differ between implementations, which says
 nothing about what the pattern means. An image begins with the format it is written in. The formats
 are this repository's, one set whichever implementation writes or reads an image, and an
 implementation that runs a match from an image reads every format this repository has defined up to
 that implementation's release: an image in any of them runs on it, whichever implementation wrote
 it, so a class Souther compiled against one release runs against a later one. An image one
 implementation writes is read by every implementation that reads its format, and accepts the same
-strings there. P1, the one format so far, is defined in [`image/P1.md`](image/P1.md), apart from any
-implementation's code.
+strings there. The formats are defined apart from any implementation's code: P1 in
+[`image/P1.md`](image/P1.md), and P2, which writes only deterministic machines, in
+[`image/P2.md`](image/P2.md).
 
 What a caller asks about the patterns it holds beyond that, and how much it is willing to spend on
 an answer, is the caller's. The operations on machines take their limits as an argument. Souther's
@@ -172,7 +174,7 @@ library provides the global allocator. It is built, linted and tested with the R
 `rust/rust-toolchain.toml` names, and CI also builds it with the oldest Rust its `rust-version` says
 it builds with.
 
-Rust reads images of P1 and writes none. Java's tests write the image of each pattern in
+Rust reads images of P1 and P2 and writes none. Java's tests write the image of each pattern in
 `suite/pattern-match.txt` to `java/target/images/pattern-match.txt`, which is never checked in, and
 the Rust tests read each of those images and hold it to what the suite says the pattern accepts,
 where `NOTATION199X_JAVA_IMAGES` names the file:

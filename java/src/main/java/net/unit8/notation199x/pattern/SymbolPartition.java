@@ -150,6 +150,51 @@ final class SymbolPartition {
         return new SymbolPartition(cuts, classOf, count, Arrays.copyOf(least, count), classesOf);
     }
 
+    /**
+     * The classes an image of P2 writes, as its pieces: piece {@code p} ends at {@code lasts[p]},
+     * begins at the scalar value after the one before it ends, and is in class {@code classOf[p]}.
+     *
+     * <p>The image numbers its classes in the order their first piece comes in, which is the order
+     * this numbers them in, so they are taken as they are. A piece of the image may hold scalar
+     * values on both sides of the surrogates, and is cut in two around them here. No set is given,
+     * so none has classes ({@link #classesOf}).
+     *
+     * @param lasts   where each piece ends, ascending, the last at U+10FFFF
+     * @param classOf the class of each piece
+     * @param count   how many classes there are
+     */
+    static SymbolPartition ofPieces(int[] lasts, int[] classOf, int count) {
+        int[] cuts = new int[lasts.length + 3];
+        int[] classes = new int[lasts.length + 2];
+        int[] least = new int[count];
+        Arrays.fill(least, -1);
+        int pieces = 0;
+        int from = 0;
+        for (int at = 0; at < lasts.length; at++) {
+            int of = classOf[at];
+            if (from == SURROGATES_FROM) {
+                cuts[pieces] = SURROGATES_FROM;
+                classes[pieces++] = -1;
+                from = SURROGATES_PAST;
+            }
+            if (least[of] < 0) {
+                least[of] = from;
+            }
+            cuts[pieces] = from;
+            classes[pieces++] = of;
+            if (from < SURROGATES_FROM && lasts[at] >= SURROGATES_PAST) {
+                cuts[pieces] = SURROGATES_FROM;
+                classes[pieces++] = -1;
+                cuts[pieces] = SURROGATES_PAST;
+                classes[pieces++] = of;
+            }
+            from = lasts[at] + 1;
+        }
+        cuts[pieces] = Character.MAX_CODE_POINT + 1;
+        return new SymbolPartition(Arrays.copyOf(cuts, pieces + 1), Arrays.copyOf(classes, pieces),
+                count, least, new int[0][]);
+    }
+
     /** Every symbol where a set begins or where one ends before the last, and both ends of the
      *  surrogates, ascending, between nought and one past the last symbol. */
     private static int[] cuts(List<int[]> sets) {

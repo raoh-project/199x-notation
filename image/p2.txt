@@ -1,0 +1,161 @@
+# Images of P2 and text that is not one, and what each image accepts.
+#
+# Source:
+#   image/P2.md — What an image is written in, The numbers in order, What makes an image one, What an image accepts
+#
+# image ; subject ; outcome
+#
+# image is the text as it is, in printable ASCII, but for a space and any character outside printable
+# ASCII, each written <U+XXXX> with its scalar value in hex: so a line can hold an image with a space
+# or a line break at either end, which a line otherwise drops. subject is a text as its scalar values
+# in hex, as in suite/. outcome is ACCEPTED or NOT_ACCEPTED for an image and the
+# subject, or REFUSED for text that is not an image of P2, whose subject is empty. Every line is
+# written by hand from image/P2.md, not by a writer.
+
+# a+: class 0 is every scalar value but a, in two pieces, and class 1 is a.
+P2,96,0,97,1,1114111,0,3,0,0,2,1,1,1,0,2,1,1,0,1,2 ; ; NOT_ACCEPTED
+P2,96,0,97,1,1114111,0,3,0,0,2,1,1,1,0,2,1,1,0,1,2 ; 0061 ; ACCEPTED
+P2,96,0,97,1,1114111,0,3,0,0,2,1,1,1,0,2,1,1,0,1,2 ; 0061 0061 ; ACCEPTED
+P2,96,0,97,1,1114111,0,3,0,0,2,1,1,1,0,2,1,1,0,1,2 ; 0061 0062 ; NOT_ACCEPTED
+P2,96,0,97,1,1114111,0,3,0,0,2,1,1,1,0,2,1,1,0,1,2 ; 0062 ; NOT_ACCEPTED
+
+# One piece, one class and one state, which leads to itself: every text where the state accepts,
+# and none where it does not.
+P2,1114111,0,1,1,0,0 ; ; ACCEPTED
+P2,1114111,0,1,1,0,0 ; 0061 ; ACCEPTED
+P2,1114111,0,1,1,0,0 ; 0000 10FFFF ; ACCEPTED
+P2,1114111,0,1,0,0,0 ; ; NOT_ACCEPTED
+P2,1114111,0,1,0,0,0 ; 0061 ; NOT_ACCEPTED
+
+# A piece is the scalar values between two lasts, and the surrogates are none of them: a piece that
+# ends at U+D7FF is followed by one that begins at U+E000. Here class 0 is U+0000 to U+D7FF and
+# U+E001 to U+10FFFF, and class 1 is U+E000 alone; one character of class 1 is accepted.
+P2,55295,0,57344,1,1114111,0,3,0,0,2,1,1,1,1,2,0,1,2 ; E000 ; ACCEPTED
+P2,55295,0,57344,1,1114111,0,3,0,0,2,1,1,1,1,2,0,1,2 ; D7FF ; NOT_ACCEPTED
+P2,55295,0,57344,1,1114111,0,3,0,0,2,1,1,1,1,2,0,1,2 ; E001 ; NOT_ACCEPTED
+P2,55295,0,57344,1,1114111,0,3,0,0,2,1,1,1,1,2,0,1,2 ; 0000 ; NOT_ACCEPTED
+P2,55295,0,57344,1,1114111,0,3,0,0,2,1,1,1,1,2,0,1,2 ; 10FFFF ; NOT_ACCEPTED
+P2,55295,0,57344,1,1114111,0,3,0,0,2,1,1,1,1,2,0,1,2 ; E000 E000 ; NOT_ACCEPTED
+P2,55295,0,57344,1,1114111,0,3,0,0,2,1,1,1,1,2,0,1,2 ; ; NOT_ACCEPTED
+
+# A piece may hold scalar values on both sides of the surrogates: class 0 is U+0000 to U+E000, and
+# one character of it is accepted.
+P2,57344,0,1114111,1,3,0,0,1,1,2,1,1,2,0,1,2 ; 0000 ; ACCEPTED
+P2,57344,0,1114111,1,3,0,0,1,1,2,1,1,2,0,1,2 ; D7FF ; ACCEPTED
+P2,57344,0,1114111,1,3,0,0,1,1,2,1,1,2,0,1,2 ; E000 ; ACCEPTED
+P2,57344,0,1114111,1,3,0,0,1,1,2,1,1,2,0,1,2 ; E001 ; NOT_ACCEPTED
+P2,57344,0,1114111,1,3,0,0,1,1,2,1,1,2,0,1,2 ; 10FFFF ; NOT_ACCEPTED
+
+# [ac]b: a and c are one class, in two pieces, and a state's spans may lead to one state on either
+# side of another.
+P2,96,0,97,1,98,2,99,1,1114111,0,4,0,0,3,1,1,2,3,0,1,3,2,2,1,2,3,0,2,3 ; 0061 0062 ; ACCEPTED
+P2,96,0,97,1,98,2,99,1,1114111,0,4,0,0,3,1,1,2,3,0,1,3,2,2,1,2,3,0,2,3 ; 0063 0062 ; ACCEPTED
+P2,96,0,97,1,98,2,99,1,1114111,0,4,0,0,3,1,1,2,3,0,1,3,2,2,1,2,3,0,2,3 ; 0062 0062 ; NOT_ACCEPTED
+P2,96,0,97,1,98,2,99,1,1114111,0,4,0,0,3,1,1,2,3,0,1,3,2,2,1,2,3,0,2,3 ; 0061 0063 ; NOT_ACCEPTED
+P2,96,0,97,1,98,2,99,1,1114111,0,4,0,0,3,1,1,2,3,0,1,3,2,2,1,2,3,0,2,3 ; 0061 ; NOT_ACCEPTED
+P2,96,0,97,1,98,2,99,1,1114111,0,4,0,0,3,1,1,2,3,0,1,3,2,2,1,2,3,0,2,3 ; 0061 0062 0062 ; NOT_ACCEPTED
+
+# One span may cover every class.
+P2,96,0,1114111,1,1,1,1,0 ; ; ACCEPTED
+P2,96,0,1114111,1,1,1,1,0 ; 0000 0061 ; ACCEPTED
+
+# A state no walk reaches may be written, and two states may lead to the same states on every class.
+P2,1114111,0,3,1,0,0,0,0,0,1,0,0 ; ; ACCEPTED
+P2,1114111,0,3,1,0,0,0,0,0,1,0,0 ; 0061 ; ACCEPTED
+
+# The pieces go on until one ends at U+10FFFF, and each ends after the one before it: a number that
+# comes before that is a piece's last, whatever was meant by it.
+P2,96,0,97,1 ; ; REFUSED
+P2,96,0,97 ; ; REFUSED
+P2,1114111 ; ; REFUSED
+P2,1114110,0 ; ; REFUSED
+P2,1114110,0,1,1,0,0 ; ; REFUSED
+P2,96,0,97,1,100,0,3,0,0,2,1,1,1,0,2,1,1,0,1,2 ; ; REFUSED
+P2,96,0,96,1,1114111,0,1,1,1,0 ; ; REFUSED
+P2,97,0,96,1,1114111,0,1,1,1,0 ; ; REFUSED
+
+# A piece's last is a scalar value up to U+10FFFF, and no surrogate.
+P2,1114112,0,1,1,0,0 ; ; REFUSED
+P2,96,0,1114112,1,1,1,1,0 ; ; REFUSED
+P2,2147483647,0,1,1,0,0 ; ; REFUSED
+P2,55296,0,1114111,1,1,1,1,0 ; ; REFUSED
+P2,57343,0,1114111,1,1,1,1,0 ; ; REFUSED
+
+# The first piece is in class 0, a later one in a class before it or the one after the greatest of
+# those, and two pieces next to each other are in different classes.
+P2,1114111,1,1,1,1,0 ; ; REFUSED
+P2,96,1,1114111,0,1,1,1,0 ; ; REFUSED
+P2,96,0,97,2,1114111,0,1,1,2,0 ; ; REFUSED
+P2,96,0,1114111,0,1,1,0,0 ; ; REFUSED
+
+# There is at least one state, as many as the count says, and whether each accepts is 0 or 1.
+P2,1114111,0,0 ; ; REFUSED
+P2,1114111,0,1,2,0,0 ; ; REFUSED
+P2,1114111,0,2,1,0,0 ; ; REFUSED
+P2,1114111,0,3,1,0,0,0,0,0 ; ; REFUSED
+P2,1114111,0,2147483647,1,0,0 ; ; REFUSED
+
+# A span names a state the image has, one less than the count or less, and it may name one written
+# after it.
+P2,1114111,0,1,1,0,1 ; ; REFUSED
+P2,96,0,1114111,1,2,0,0,1,1,0,1,1,1 ; 0060 ; ACCEPTED
+P2,96,0,1114111,1,2,0,0,1,1,0,1,1,1 ; 0061 0030 ; ACCEPTED
+P2,96,0,1114111,1,2,0,0,1,1,0,1,1,1 ; 0061 ; NOT_ACCEPTED
+P2,96,0,1114111,1,2,0,0,1,1,0,1,1,1 ; ; NOT_ACCEPTED
+P2,96,0,1114111,1,2,0,0,2,1,0,1,1,1 ; ; REFUSED
+
+# A state's spans go on until one ends at the greatest class, each ends after the one before it and
+# none past the greatest, and two spans next to each other lead to different states.
+P2,96,0,1114111,1,2,0,0,1 ; ; REFUSED
+P2,96,0,1114111,1,2,0,0,1,1 ; ; REFUSED
+P2,96,0,1114111,1,2,0,0 ; ; REFUSED
+P2,96,0,97,1,98,2,99,1,1114111,0,1,1,1,0 ; ; REFUSED
+P2,96,0,1114111,1,2,0,0,1,0,0,1,1,1,1 ; ; REFUSED
+P2,96,0,97,1,98,2,99,1,1114111,0,4,0,1,3,0,1,2,3,0,1,3,2,2,1,2,3,0,2,3 ; ; REFUSED
+P2,96,0,1114111,1,2,0,0,1,2,0,1,1,1 ; ; REFUSED
+P2,1114111,0,1,1,1,0 ; ; REFUSED
+P2,96,0,1114111,1,2,0,0,1,1,1,1,1,1 ; ; REFUSED
+
+# Nothing follows the last state.
+P2,1114111,0,1,1,0,0,0 ; ; REFUSED
+P2,1114111,0,1,1,0,0,1,0,0 ; ; REFUSED
+
+# It begins with the marker P2, and every number after it follows a comma.
+ ; ; REFUSED
+P2 ; ; REFUSED
+P2, ; ; REFUSED
+1114111,0,1,1,0,0 ; ; REFUSED
+p2,1114111,0,1,1,0,0 ; ; REFUSED
+P1,1114111,0,1,1,0,0 ; ; REFUSED
+P3,1114111,0,1,1,0,0 ; ; REFUSED
+P2,1114111,0,1,1,0,0, ; ; REFUSED
+P2,1114111,0,1,1,,0,0 ; ; REFUSED
+P2,,1114111,0,1,1,0,0 ; ; REFUSED
+
+# A number is 0 or digits that do not begin with 0, and nothing else.
+P2,01114111,0,1,1,0,0 ; ; REFUSED
+P2,1114111,00,1,1,0,0 ; ; REFUSED
+P2,1114111,0,+1,1,0,0 ; ; REFUSED
+P2,1114111,0,1<U+0020>,1,0,0 ; ; REFUSED
+P2,1114111,0,<U+0661>,1,0,0 ; ; REFUSED
+P2,1114111,0,x,1,0,0 ; ; REFUSED
+
+# Nothing comes before the marker or after the last number, not even a space or a line break.
+<U+0020>P2,1114111,0,1,1,0,0 ; ; REFUSED
+<U+FEFF>P2,1114111,0,1,1,0,0 ; ; REFUSED
+P2,1114111,0,1,1,0,0<U+0020> ; ; REFUSED
+P2,1114111,0,1,1,0,0<U+000A> ; ; REFUSED
+P2,1114111,0,1,1,0,0<U+000D><U+000A> ; ; REFUSED
+P2,1114111,0,1,1,0,0<U+0000> ; ; REFUSED
+P2,1114111,0,1,<U+000A>1,0,0 ; ; REFUSED
+P2,1114111,0,1,<U+0009>1,0,0 ; ; REFUSED
+
+# Every number is at most 2147483647, and a place may allow less: a number past 2147483647 is refused
+# in every place, however many digits it has.
+P2,99999999999999999999,0,1,1,0,0 ; ; REFUSED
+P2,1114111,4294967296,1,1,0,0 ; ; REFUSED
+P2,1114111,0,2147483648,1,0,0 ; ; REFUSED
+P2,1114111,0,99999999999999999999,1,0,0 ; ; REFUSED
+P2,1114111,0,1,2147483648,0,0 ; ; REFUSED
+P2,1114111,0,1,1,2147483648,0 ; ; REFUSED
+P2,1114111,0,1,1,0,2147483648 ; ; REFUSED

@@ -15,8 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * pattern that was read answers every text it is asked about, and what a writer writes is an image
  * that is read.
  *
- * <p>An image is: the format's marker, the kind, the sets (each a count of runs and the runs), the states, and for each
- * state whether a walk stops there, its steps as a set and a state, and its free steps.
+ * <p>Each image is held to the rules of the format its marker names before anything is matched;
+ * what those are is {@code image/P1.md}'s and {@code image/P2.md}'s, and not this.
  */
 class AnImageIsHeldToWritingAMachineTest {
 
@@ -61,27 +61,80 @@ class AnImageIsHeldToWritingAMachineTest {
 
     @Test
     void aWriterWritesOnlyWhatIsRead() {
-        StringPattern.Writer unsorted = new StringPattern.Writer(true, 1_000);
+        StringPattern.P1Writer unsorted = new StringPattern.P1Writer(1_000);
         assertThrows(IllegalArgumentException.class, () -> unsorted.set(new int[] {'b', 'b', 'a', 'a'}));
         assertThrows(IllegalArgumentException.class, () -> unsorted.set(new int[] {0xD800, 0xD800}));
 
-        StringPattern.Writer noSuchSet = new StringPattern.Writer(true, 1_000);
+        StringPattern.P1Writer noSuchSet = new StringPattern.P1Writer(1_000);
         int only = noSuchSet.state(true);
         assertThrows(IllegalArgumentException.class, () -> noSuchSet.step(only, 0, only));
 
-        StringPattern.Writer noSuchState = new StringPattern.Writer(true, 1_000);
+        StringPattern.P1Writer noSuchState = new StringPattern.P1Writer(1_000);
         int from = noSuchState.state(true);
         noSuchState.step(from, noSuchState.set(new int[] {'a', 'a'}), 7);
         assertThrows(IllegalStateException.class, noSuchState::image);
 
-        assertThrows(IllegalStateException.class, () -> new StringPattern.Writer(false, 1_000).image());
+        assertThrows(IllegalStateException.class, () -> new StringPattern.P1Writer(1_000).image());
 
         // A state may be stepped to before it is made.
-        StringPattern.Writer ahead = new StringPattern.Writer(true, 1_000);
+        StringPattern.P1Writer ahead = new StringPattern.P1Writer(1_000);
         int first = ahead.state(false);
         ahead.step(first, ahead.set(new int[] {'a', 'a'}), 1);
         ahead.state(true);
         assertEquals(true, StringPattern.of(ahead.image()).matches("a"));
+    }
+
+    /**
+     * A machine made deterministic is written as P2 from its rows as they are, and read back as the
+     * same rows; and an image past its limit is not written.
+     */
+    @Test
+    void aMachineMadeDeterministicIsWrittenAsItsRows() {
+        Automaton machine = java.util.Objects.requireNonNull(java.util.Objects.requireNonNull(Automaton.of(
+                ((PatternRead.Read) PatternParser.read("a+")).meaning(), Held.roomy())).canonical(Held.roomy()));
+        ClassRows rows = ClassRows.of(machine);
+        List<String> image = java.util.Objects.requireNonNull(StringPattern.imageOfP2(rows, 1_000));
+        // a+: class 0 is every scalar value but a and class 1 is a; state 1 is where a walk that
+        // read anything but a is, and leads to itself.
+        assertEquals(List.of("P2,96,0,97,1,1114111,0,3,0,0,1,1,2,0,1,1,1,0,1,1,2"), image);
+        StringPattern read = StringPattern.of(image);
+        assertTrue(read.matches("aa"));
+        assertFalse(read.matches("ab"));
+        assertEquals(StringPattern.Way.TABLE, read.way());
+        assertEquals(null, StringPattern.imageOfP2(rows, image.get(0).length() - 1));
+        assertEquals(image, StringPattern.imageOfP2(rows, image.get(0).length()));
+    }
+
+    /** A machine that is not made deterministic has no rows to be written from. */
+    @Test
+    void aMachineNotMadeDeterministicHasNoRows() {
+        Automaton shaped = java.util.Objects.requireNonNull(Automaton.of(
+                ((PatternRead.Read) PatternParser.read("a+")).meaning(), Held.roomy()));
+        assertThrows(IllegalArgumentException.class, () -> ClassRows.of(shaped));
+    }
+
+    /** A class on both sides of the surrogates, or in pieces nothing comes between, is one piece of
+     *  an image of P2, as the image may not write it as two. */
+    @Test
+    void aClassThatNothingCutsIsOnePieceOfP2() {
+        PatternImage.Written image = (PatternImage.Written) PatternMachine.of(
+                ((PatternRead.Read) PatternParser.read("[\\x{D7FF}\\x{E000}]")).meaning()).image();
+        assertTrue(image.strings().get(0).startsWith("P2,55294,0,57344,1,1114111,0,"),
+                image.strings().get(0));
+        assertTrue(image.pattern().matches("\uE000"));
+        assertFalse(image.pattern().matches("\uE001"));
+    }
+
+    /** No machine is written as a deterministic image of P1, the shape's or any other. */
+    @Test
+    void noImageOfP1SaysItsMachineIsDeterministic() {
+        PatternMeaning meaning = ((PatternRead.Read) PatternParser.read("[a-z]+@[a-z]+")).meaning();
+        List<String> shaped = java.util.Objects.requireNonNull(PatternImages.shaped(meaning, Held.roomy()));
+        assertTrue(shaped.get(0).startsWith("P1,0,"), shaped.get(0));
+        Automaton deterministic = java.util.Objects.requireNonNull(
+                java.util.Objects.requireNonNull(Automaton.of(meaning, Held.roomy())).canonical(Held.roomy()));
+        PatternImage.Written p1 = (PatternImage.Written) PatternImages.p1(deterministic);
+        assertTrue(p1.strings().get(0).startsWith("P1,0,"), p1.strings().get(0));
     }
 
     @Test
@@ -89,7 +142,7 @@ class AnImageIsHeldToWritingAMachineTest {
         PatternMachine machine = PatternMachine.of(
                 ((PatternRead.Read) PatternParser.read("[a-z]+@[a-z]+")).meaning());
         PatternImage.Written image = (PatternImage.Written) machine.image();
-        assertTrue(image.strings().get(0).startsWith("P1,"), image.strings().get(0));
+        assertTrue(image.strings().get(0).startsWith("P2,"), image.strings().get(0));
         assertTrue(image.pattern().matches("a@b"));
     }
 
@@ -98,7 +151,7 @@ class AnImageIsHeldToWritingAMachineTest {
         String body = SOUND.substring("P1,".length());
         Map<String, String> unread = Map.of(
                 body, "begins with \"1\"",
-                "P2," + body, "format \"P2\"",
+                "P3," + body, "format \"P3\"",
                 "p1," + body, "format \"p1\"",
                 "P1", "ends before its machine does",
                 "", "begins with \"\"",
@@ -108,7 +161,7 @@ class AnImageIsHeldToWritingAMachineTest {
                     () -> StringPattern.of(List.of(each.getKey())), each.getKey());
             assertTrue(refused.getMessage().contains(each.getValue()), refused.getMessage());
             if (!each.getKey().equals("P1")) {
-                assertTrue(refused.getMessage().endsWith("this reads [P1]"), refused.getMessage());
+                assertTrue(refused.getMessage().endsWith("this reads [P1, P2]"), refused.getMessage());
             }
         }
     }
@@ -128,7 +181,7 @@ class AnImageIsHeldToWritingAMachineTest {
                     // .*a.{20} has no deterministic machine within what a test allows.
                     continue;
                 }
-                StringPattern.Writer out = new StringPattern.Writer(deterministic, Long.MAX_VALUE);
+                StringPattern.P1Writer out = new StringPattern.P1Writer(Long.MAX_VALUE);
                 for (int state = 0; state < machine.size(); state++) {
                     out.state(machine.stopsAt(state));
                 }

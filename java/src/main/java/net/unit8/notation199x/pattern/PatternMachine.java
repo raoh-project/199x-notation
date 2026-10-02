@@ -18,16 +18,21 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>The deterministic machine where making it stays within {@link #deterministicRun}; otherwise
  * the machine the pattern's shape builds, steps for nothing and all. Both accept the same strings,
- * so which one is held decides how fast a run is and nothing about its answer.
+ * so which one is held decides how fast a run is and nothing about its answer. The deterministic
+ * machine is run and written as its classes and rows ({@link ClassRows}), which are what making it
+ * proved: they are taken from it once, and neither a run nor an image works them out again.
  */
 public final class PatternMachine {
 
     private final Automaton shaped;
-    private final @Nullable Automaton deterministic;
+    /** The deterministic machine as its classes and rows, or null where making it was past
+     *  {@link #deterministicRun}. The machine they were taken from is not kept: its rows, as wide
+     *  as its classes, are what these hold in spans. */
+    private final @Nullable ClassRows rows;
 
     private PatternMachine(Automaton shaped, @Nullable Automaton deterministic) {
         this.shaped = shaped;
-        this.deterministic = deterministic;
+        this.rows = deterministic == null ? null : ClassRows.of(deterministic);
     }
 
     /**
@@ -89,9 +94,7 @@ public final class PatternMachine {
      * @return the matcher
      */
     public StringPattern pattern() {
-        return deterministic != null
-                ? StringPattern.of(deterministic, true)
-                : StringPattern.of(shaped, false);
+        return rows != null ? StringPattern.of(rows) : StringPattern.of(shaped);
     }
 
     /**
@@ -99,7 +102,9 @@ public final class PatternMachine {
      * ({@link StringPattern#of(java.util.List)}), or that it takes more characters than one image
      * is given.
      *
-     * <p>The deterministic machine where there is one and its image fits, and otherwise the shape's.
+     * <p>The deterministic machine as P2 where there is one and its image fits, and otherwise the
+     * shape's as P1. No machine is written as a deterministic image of P1, which a reader would have
+     * to hold to leading one way at a cost the image's length does not bound.
      * Either accepts what the pattern does, and which is written is this implementation's choice:
      * the shape's image is often the larger, since the deterministic machine is the smallest there
      * is, and a pattern may have an image here that another implementation, writing another machine,
@@ -110,13 +115,13 @@ public final class PatternMachine {
      * @return the image, or {@link PatternImage.MoreCharacters} where it is too large
      */
     public PatternImage image() {
-        if (deterministic != null) {
-            PatternImage one = PatternImages.of(deterministic, true);
+        if (rows != null) {
+            PatternImage one = PatternImages.p2(rows);
             if (one instanceof PatternImage.Written) {
                 return one;
             }
         }
-        return PatternImages.of(shaped, false);
+        return PatternImages.p1(shaped);
     }
 
     /** The machine the shape builds, for a check holding it against the deterministic one. */
@@ -124,15 +129,16 @@ public final class PatternMachine {
         return shaped;
     }
 
-    /** The deterministic machine, or null where making it was past {@link #deterministicRun}. */
-    @Nullable Automaton deterministic() {
-        return deterministic;
+    /** The rows the deterministic machine is run and written as, or null where making it was past
+     *  {@link #deterministicRun}. */
+    @Nullable ClassRows rows() {
+        return rows;
     }
 
     @Override
     public String toString() {
-        return deterministic != null
-                ? "a deterministic machine of " + deterministic.size() + " states"
+        return rows != null
+                ? "a deterministic machine of " + rows.states() + " states"
                 : "a machine of " + shaped.size() + " states";
     }
 }

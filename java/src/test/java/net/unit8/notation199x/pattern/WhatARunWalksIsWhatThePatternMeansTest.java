@@ -162,13 +162,14 @@ class WhatARunWalksIsWhatThePatternMeansTest {
 
     /**
      * A deterministic machine whose characters are all told apart, and whose states are many, is
-     * past the table a walk looks its classes up in, and walks by its runs with the same answers.
+     * past the table a walk looks its classes up in, and walks by the spans its image of P2 writes
+     * with the same answers.
      *
      * <p>Every ASCII character written in turn, twenty-five times over: each character is a class
      * of its own and there is a state for each place in the text.
      */
     @Test
-    void aMachineTooWideForItsTableAnswersByItsRuns() {
+    void aMachineTooWideForItsTableAnswersByItsSpans() {
         StringBuilder regex = new StringBuilder();
         StringBuilder text = new StringBuilder();
         for (int copy = 0; copy < 25; copy++) {
@@ -180,7 +181,7 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
         StringPattern run = StringPattern.of(PatternImages.deterministic(meaning, plenty()));
         String whole = text.toString();
-        assertEquals(StringPattern.Way.RUNS, run.way());
+        assertEquals(StringPattern.Way.SPANS, run.way());
 
         assertTrue(run.matches(whole));
         assertFalse(run.matches(whole.substring(0, whole.length() - 1)));
@@ -191,7 +192,8 @@ class WhatARunWalksIsWhatThePatternMeansTest {
 
     /**
      * A deterministic machine whose classes are many, and whose ASCII characters are of few kinds,
-     * is past the table of its classes and still looks its ASCII characters up in one.
+     * is past the table of its classes and walks its rows' spans, and still looks its ASCII
+     * characters up in a table of their own.
      *
      * <p>Each place takes a letter or a character of its own past ASCII, so every place is a class of
      * its own, and ASCII is the letters and the rest.
@@ -204,7 +206,7 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         }
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
         StringPattern run = PatternMachine.of(meaning).pattern();
-        assertEquals(StringPattern.Way.ASCII_AND_RUNS, run.way());
+        assertEquals(StringPattern.Way.ASCII_AND_SPANS, run.way());
 
         assertTrue(run.matches("a".repeat(600)));
         assertTrue(run.matches("a".repeat(300) + "\u022C" + "a".repeat(299)));
