@@ -159,8 +159,30 @@ fetched has neither `ucd/` nor `suite/`. Where they are not there the tests that
 skipped, so that a caller's `go test all` does not fail on files this module was never published
 with. CI sets `NOTATION199X_REQUIRE_SUITE`, which makes a missing file a failure instead.
 
+The Rust tests read `ucd/`, `suite/` and `image/`, and run in `rust/`:
+
+```sh
+cd rust && cargo test
+```
+
+A crate packaged from `rust/` holds only what is under it, so as for Go, the tests that read files
+outside it are skipped where the files are not there, and `NOTATION199X_REQUIRE_SUITE` makes that a
+failure. The crate is `no_std` and allocates through `alloc`; a run time without the standard
+library provides the global allocator.
+
+Rust reads images of P1 and writes none. Java's tests write the image of each pattern in
+`suite/pattern-match.txt` to `java/target/images/pattern-match.txt`, which is never checked in, and
+the Rust tests read each of those images and hold it to what the suite says the pattern accepts,
+where `NOTATION199X_JAVA_IMAGES` names the file:
+
+```sh
+cd java && mvn test
+cd ../rust && NOTATION199X_JAVA_IMAGES=../java/target/images/pattern-match.txt cargo test --test java_images
+```
+
 CI checks the files in `ucd/` against their checksums, runs the generator and fails if the
-checked-in tables differ, and runs the tests of each implementation.
+checked-in tables differ, runs the tests of each implementation, and has Rust read the images Java
+wrote in that run.
 
 ## Releasing
 

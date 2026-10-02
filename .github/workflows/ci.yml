@@ -28,6 +28,13 @@ jobs:
       - name: Test
         working-directory: java
         run: mvn --batch-mode test
+      # The images the tests wrote of the suite's patterns, for the implementations that read P1.
+      - name: Keep the images of the suite's patterns
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-images
+          path: java/target/images/pattern-match.txt
+          if-no-files-found: error
       # Every public type and member is documented, its tags included, and a warning fails.
       - name: Javadoc
         working-directory: java
@@ -89,6 +96,26 @@ jobs:
         env:
           NOTATION199X_REQUIRE_SUITE: '1'
         run: cargo test
+
+  # Java writes an image of each pattern of the suite, and Rust reads it and answers what the suite
+  # says the pattern accepts. Apart from the rust job, so that what Rust answers alone is not held up
+  # by Java.
+  java-images-in-rust:
+    needs: java
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: java-images
+          path: java-images
+      - name: Read the images Java wrote
+        working-directory: rust
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+          NOTATION199X_JAVA_IMAGES: ${{ github.workspace }}/java-images/pattern-match.txt
+        run: cargo test --test java_images
 
   # A tag names a release: vX.Y.Z on a commit whose version is X.Y.Z. Checked when it is pushed,
   # before anything is deployed from it.
