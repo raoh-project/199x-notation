@@ -168,13 +168,14 @@ impl Cache {
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins: found
-    /// where it is kept, and otherwise kept now, as a copy of `walk.next` as long as the set. `None`
-    /// where keeping sets is given up on. The set is still in `walk.next` either way. The second
-    /// answer is whether the sets kept before were forgotten to make room for it.
+    /// where it is kept, and otherwise kept now, as a copy of the set's states in a list of its own.
+    /// `None` where keeping sets is given up on. The set is still in `walk.next` either way. The
+    /// second answer is whether the sets kept before were forgotten to make room for it.
     ///
     /// The set is copied and not moved out of the walk: moved, it would leave `walk.next` with no
-    /// room, to be grown again for each set after it, and it would hold the room it had grown to,
-    /// more than the four bytes a state that [`KNOWN_BYTES`] counts.
+    /// room, to be grown again for each set after it, and it would keep the room `walk.next` had
+    /// grown to, up to twice its states. The copy asks for room for its states, the four bytes a
+    /// state that [`KNOWN_BYTES`] counts.
     fn keep(&mut self, machine: &Machine, classes: usize) -> Option<(u32, bool)> {
         if self.walk.next.is_empty() {
             return Some((NONE, false));
@@ -308,7 +309,7 @@ fn scatter(q: u32) -> u32 {
 ///
 /// `pending`, `now` and `next` start with no room and grow as a walk holds more states in them, as
 /// many as it has held at once and never more than the machine's states. Nothing takes that room away
-/// from the walk: a kept set is a copy of `next` as long as the set ([`Cache::keep`]), so the next
+/// from the walk: a kept set is a copy of the states in `next` ([`Cache::keep`]), so the next
 /// set is put in the room the last one had, and a walk pays for room only as its sets need it.
 struct Walk {
     entered: Vec<u32>,
@@ -855,9 +856,10 @@ mod tests {
         }
     }
 
-    /// Keeping a set takes no room from the walk: `next` has the room it had before, and the kept
-    /// set holds no more than its states, which is what [`KNOWN_BYTES`] counts. Moving `next` out of
-    /// the walk instead would leave it no room, to be grown again for every set after.
+    /// Keeping a set takes no room from the walk: `next` has the room it had before, and still holds
+    /// the set. Moving `next` out of the walk instead would leave it no room, to be grown again for
+    /// every set after. How much room the kept copy has is the allocator's to say, at least its
+    /// states, and is not held here.
     #[test]
     fn keeping_a_set_takes_no_room_from_the_walk() {
         let pattern = pattern("(?:a|b)*a(?:a|b){8}");
@@ -889,12 +891,7 @@ mod tests {
                 "set {at} took the walk's room"
             );
             assert_eq!(cache.walk.next, set, "set {at} is still the walk's");
-            let held = &cache.sets[0];
-            assert_eq!(
-                held.capacity(),
-                held.len(),
-                "set {at} holds more than its states"
-            );
+            assert_eq!(cache.sets[0], set, "set {at} is kept as it is");
         }
     }
 
