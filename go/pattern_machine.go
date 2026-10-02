@@ -196,16 +196,28 @@ type walk struct {
 func (m *machine) matches(subject string) bool {
 	w, _ := m.scratch.Get().(*walk)
 	if w == nil {
-		w = &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states))}
-		w.known.forget()
+		w = m.newWalk()
 	}
 	defer m.scratch.Put(w)
+	return m.matchesIn(w, subject)
+}
+
+// newWalk is a walk of m that has kept no sets.
+func (m *machine) newWalk() *walk {
+	w := &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states))}
+	w.known.forget()
+	return w
+}
+
+// matchesIn is whether the whole of subject is accepted, walked in w, which keeps what it works
+// out for the next walk in it.
+func (m *machine) matchesIn(w *walk, subject string) bool {
 	m.begin(w)
 	for at := 0; at < len(subject); {
 		if c := subject[at]; c < utf8.RuneSelf && w.in != nil {
 			if next := w.in.ascii[c]; next != nil {
 				w.in = next
-				w.known.read++
+				w.known.read = grown(w.known.read, 1)
 				if next.none {
 					return false
 				}
@@ -251,6 +263,9 @@ func (m *machine) take(w *walk, r rune) bool {
 		return len(w.now.states()) > 0
 	}
 	m.advance(w, r)
+	// The one place a walk without kept sets steps, so what such walks walk is counted here,
+	// whether keeping sets was given up on before the walk or during it.
+	w.known.walkedAlone(utf8.RuneLen(r))
 	return len(w.now.states()) > 0
 }
 
