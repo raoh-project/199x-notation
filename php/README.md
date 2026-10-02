@@ -58,4 +58,4 @@ raoh-php keeps its types out of its own API.
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[Apache License 2.0](https://github.com/raoh-project/199x-notation/blob/main/LICENSE)
