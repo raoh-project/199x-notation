@@ -63,6 +63,33 @@ jobs:
           NOTATION199X_REQUIRE_SUITE: '1'
         run: go test ./...
 
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      # rustfmt leaves every file as it is; the generated tables are skipped where they are declared.
+      - name: Format
+        working-directory: rust
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings
+      # The crate is no_std, and a target with no standard library builds it.
+      - name: Build without the standard library
+        working-directory: rust
+        run: cargo build --target wasm32-unknown-unknown
+      # A checkout holds ucd/, suite/ and image/, and a test that does not find them fails rather than
+      # skips.
+      - name: Test
+        working-directory: rust
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: cargo test
+
   # A tag names a release: vX.Y.Z on a commit whose version is X.Y.Z. Checked when it is pushed,
   # before anything is deployed from it.
   release-tag:
