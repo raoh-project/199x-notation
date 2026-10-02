@@ -80,8 +80,10 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
 /// [`normalize_within`] worked out by the algorithm from byte `from` of `text`, taking the text
 /// before it, `kept` scalar values long, as it is.
 ///
-/// The three steps are taken one combining run at a time, as the text is read, and every step is
-/// taken in this loop and the [`Composing`] it feeds: each code point is decomposed as it arrives,
+/// The three steps are taken one combining run at a time, as the text is read, in this loop and the
+/// [`Composing`] it feeds; the scan for the trivial limit in [`normalize_within`] is the one other
+/// place a code point is read, and the putting in order in [`Composing::settle`] the one place the
+/// marks of a run are gone over. Each code point is decomposed as it arrives,
 /// the marks after a starter are held until the next starter, and then they are put in canonical
 /// order and, in a composing form, composed into it. Canonical ordering never moves a mark past a
 /// starter, and composition joins a starter only to the marks after it or, where nothing is between

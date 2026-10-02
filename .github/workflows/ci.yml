@@ -89,6 +89,12 @@ jobs:
       - name: Build without the standard library
         working-directory: rust
         run: cargo build --target wasm32-unknown-unknown
+      # The oldest Rust the crate says it builds with builds it.
+      - name: Build with the declared rust-version
+        working-directory: rust
+        run: |
+          rustup toolchain install "$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" --profile minimal
+          cargo +"$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" build
       # A checkout holds ucd/, suite/ and image/, and a test that does not find them fails rather than
       # skips.
       - name: Test

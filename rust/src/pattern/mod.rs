@@ -63,6 +63,12 @@ impl Pattern {
     /// states it may be in, so each scalar value of the subject may cost as many steps as the image
     /// has.
     ///
+    /// Reading is not bounded by the image's length where the image says its machine is
+    /// deterministic. That no two steps out of one state are over sets with a scalar value in common
+    /// is asked once for each different group of sets a state steps over, and a set is written once
+    /// however many groups hold it, so in the worst case the work grows with the square of the
+    /// image's length. Java holds an image to the same rule the same way.
+    ///
     /// The crate writes no image.
     pub fn from_image(image: &str) -> Result<Pattern, NotAnImage> {
         image::read(image).map(|machine| Pattern { machine })
