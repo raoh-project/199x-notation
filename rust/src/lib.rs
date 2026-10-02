@@ -22,10 +22,8 @@ extern crate alloc;
 
 // The tables gen/Generate.java writes, which rustfmt leaves as they are written.
 #[rustfmt::skip]
-#[allow(dead_code)]
 mod case_tables;
 #[rustfmt::skip]
-#[allow(dead_code)]
 mod normalization_tables;
 #[rustfmt::skip]
 #[allow(dead_code)]
@@ -33,9 +31,13 @@ mod pattern_alphabet_tables;
 #[rustfmt::skip]
 mod white_space_tables;
 
+mod case;
+mod normalization;
 mod tables;
 mod text;
 mod white_space;
 
+pub use case::{lowercase, lowercase_within, uppercase, uppercase_within};
+pub use normalization::{Form, normalize, normalize_within};
 pub use text::{compare, scalar_count};
 pub use white_space::is_white_space;

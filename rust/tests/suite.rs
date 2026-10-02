@@ -68,3 +68,65 @@ fn scalar_order_answers_every_line_of_the_suite() {
         })
     });
 }
+
+#[test]
+fn case_conversion_answers_every_line_of_the_suite() {
+    each_line("suite/case.txt", 5, |line| {
+        let text = line.text(0);
+        let lower = line.one_of(1, &["LOWER", "UPPER"]) == "LOWER";
+        let bound = line.number_or_nothing(2);
+        let past = line.one_of(3, &["MAPPED", "PAST"]) == "PAST";
+        let mapped = if past {
+            line.empty(4);
+            None
+        } else {
+            Some(line.text(4))
+        };
+        let answer = match (bound, lower) {
+            (None, true) => Some(lowercase(&text)),
+            (None, false) => Some(uppercase(&text)),
+            (Some(bound), true) => lowercase_within(&text, bound),
+            (Some(bound), false) => uppercase_within(&text, bound),
+        };
+        if bound.is_none() && past {
+            return Some("a conversion without a bound is never past one".into());
+        }
+        (answer != mapped).then(|| {
+            format!(
+                "{} is {:?}, not {:?}",
+                shown(&text),
+                answer.as_deref().map(shown),
+                mapped.as_deref().map(shown)
+            )
+        })
+    });
+}
+
+#[test]
+fn normalization_within_a_bound_answers_every_line_of_the_suite() {
+    each_line("suite/normalization-bound.txt", 5, |line| {
+        let text = line.text(0);
+        let form = match line.one_of(1, &["NFC", "NFD", "NFKC", "NFKD"]) {
+            "NFC" => Form::Nfc,
+            "NFD" => Form::Nfd,
+            "NFKC" => Form::Nfkc,
+            _ => Form::Nfkd,
+        };
+        let bound = line.number(2);
+        let past = line.one_of(3, &["NORMALIZED", "PAST"]) == "PAST";
+        let normalized = if past {
+            line.empty(4);
+            None
+        } else {
+            Some(line.text(4))
+        };
+        let answer = normalize_within(form, &text, bound);
+        (answer != normalized).then(|| {
+            format!(
+                "{} in {form:?} within {bound} is {:?}",
+                shown(&text),
+                answer.as_deref().map(shown)
+            )
+        })
+    });
+}
