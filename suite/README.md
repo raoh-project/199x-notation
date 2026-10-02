@@ -1,8 +1,8 @@
 # suite
 
 The vectors every implementation runs. An implementation agrees with another because both answer
-every line here, and not because their code happens to. Each language has a test that reads these
-files with its standard library and holds the implementation to every line.
+every line here, and not because their code happens to. A test in each language reads these files
+with its standard library and holds the implementation to every line; Java's is the first.
 
 Normalization without a bound is not here: it is held to `ucd/18.0.0/NormalizationTest.txt`, which
 Unicode publishes for that and which is read the same way. Normalization in a bound is here, and the
@@ -25,11 +25,13 @@ what it quotes, is tested in that implementation's own language.
 A field is added to a file once a source decides it, and not before.
 
 The lines of a file are chosen from what its sources state, rule by rule, and not from the cases an
-implementation happens to test. Where a rule draws a line, a bound, a range or the ends of a set, a
-file holds it on every side: an answer is held one below a bound, at it and one above it, and a range
-at each end and one past each end. So an implementation that draws the line one place over, at `<`
-where the rule says `<=`, does not answer every line. And each kind a source names, every form,
-direction and kind of temporal text, has lines of its own.
+implementation happens to test. They are enough when no implementation that reads a rule otherwise
+answers every line: where a rule draws a line, at a bound, a range or the ends of a set, the lines
+tell it from the readings next to it, such as `<` or `==` where it says `<=`, or no bound at all.
+How many lines that takes is the rule's to say. A bounded normalization takes three, one below the
+answer's length, at it and one above, since `==` passes the first two; a limit of 250000 states
+takes two, at it and one past it. And each kind a source names, every form, direction and kind of
+temporal text, has lines of its own.
 
 ## Files
 
