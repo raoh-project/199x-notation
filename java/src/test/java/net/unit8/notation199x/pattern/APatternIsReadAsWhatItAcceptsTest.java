@@ -194,6 +194,39 @@ class APatternIsReadAsWhatItAcceptsTest {
                 assertInstanceOf(PatternMeaning.Symbols.class, read("\\.")).held());
     }
 
+    /**
+     * A refusal quotes what stopped it, from where that construct begins.
+     *
+     * <p>What an author is shown is the construct and not the pattern: a lookahead in the middle of
+     * a long format is found by what it is, and a pattern that ended before it was closed has no
+     * construct to show. The specification does not state where a refusal points, so this is Java's
+     * answer and not a vector in {@code suite/}.
+     */
+    @Test
+    void aRefusalQuotesTheConstructThatStoppedIt() {
+        String gothic = new String(Character.toChars(0x10330));
+        assertEquals("(?=", refusal("[0-9]{3}(?=a)").construct());
+        assertEquals("\\p", refusal("a\\p{Alpha}").construct());
+        assertEquals("\\1", refusal("(a)\\1").construct());
+        assertEquals("++", refusal("a++").construct());
+        assertEquals("&&", refusal("[a-z&&b]").construct());
+        assertEquals("\\uD800", refusal("x\\uD800").construct());
+        assertEquals(1, refusal("x\\uD800").from());
+        assertEquals("", refusal("(ab").construct(), "the text ended where a `)` was wanted");
+        assertEquals("\\" + gothic, refusal("a\\" + gothic).construct(),
+                "the refusal quotes the whole character and not half of it");
+    }
+
+    /** Written more deeply than every implementation reads is past a limit, and what is quoted is
+     *  the group that went past it. */
+    @Test
+    void aPatternNestedPastTheLimitQuotesTheGroupPastIt() {
+        int deepest = PatternRead.Limit.NESTING_DEPTH.most();
+        String past = "(?:".repeat(deepest) + "(a)" + ")".repeat(deepest);
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.NESTING_DEPTH, 3 * deepest, "("),
+                PatternParser.read(past));
+    }
+
     /** The shorthands hold the sets the specification states, ASCII all of them. */
     @Test
     void theShorthandsAreTheSetsTheLanguageStates() {

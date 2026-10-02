@@ -20,9 +20,32 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Where each limit falls, and what is answered on either side of it, is in
  * {@code suite/pattern-read.txt} and {@code suite/pattern-states.txt}. What is here is what a line of
  * vectors does not hold: text too deep to write out, a machine as large as a pattern within the
- * limits builds, and the count against the machine that is built.
+ * limits builds, the count against the machine that is built, and where what is past a limit
+ * is quoted from, which the specification does not state.
  */
 class APatternIsHeldToTheLimitsEveryImplementationHoldsToTest {
+
+    /**
+     * What is past a limit is quoted from where it begins: a count as written, every digit of it,
+     * and the whole pattern for the states, which are a fact about all of it. The specification
+     * does not state where a pattern past a limit points, so this is Java's answer and not a vector
+     * in {@code suite/}.
+     */
+    @Test
+    void whatIsPastALimitIsQuotedFromWhereItBegins() {
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.MACHINE_STATES, 0, "a{249999}"),
+                PatternParser.read("a{249999}"));
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.MACHINE_STATES, 0, "(a{500}){500}"),
+                PatternParser.read("(a{500}){500}"));
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.MACHINE_STATES, 0, "a{134217727}"),
+                PatternParser.read("a{134217727}"));
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.REPETITION_COUNT, 2, "134217728"),
+                PatternParser.read("a{134217728}"));
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.REPETITION_COUNT, 4, "99999999999"),
+                PatternParser.read("a{0,99999999999}"));
+        assertEquals(new PatternRead.Beyond(PatternRead.Limit.REPETITION_COUNT, 2, "000134217728"),
+                PatternParser.read("a{000134217728}"));
+    }
 
     /**
      * Text nested as deeply as it is long is read to its end, and never runs the stack out: the

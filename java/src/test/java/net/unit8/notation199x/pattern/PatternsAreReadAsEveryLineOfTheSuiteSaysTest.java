@@ -9,30 +9,25 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * {@link PatternParser} answers every line of {@code suite/pattern-read.txt}.
- *
- * <p>The suite counts where a construct begins in scalar values and {@link PatternRead} in the
- * chars of a Java string, so the place is turned into chars here.
+ * {@link PatternParser} answers every line of {@code suite/pattern-read.txt}: whether a pattern is
+ * read, refused, or past a limit, and which refusal or which limit.
  */
 class PatternsAreReadAsEveryLineOfTheSuiteSaysTest {
 
     @Test
     void everyPatternIsReadRefusedOrPastALimitAsTheLineSays() {
         List<String> wrong = new ArrayList<>();
-        for (Suite.Line line : Suite.read("pattern-read.txt", 5)) {
+        for (Suite.Line line : Suite.read("pattern-read.txt", 3)) {
             String pattern = line.text(0);
-            PatternRead expected = switch (line.field(1)) {
-                case "READ" -> null;
-                case "REFUSED" -> new PatternRead.Refused(PatternRead.Refusal.valueOf(line.field(2)),
-                        pattern.offsetByCodePoints(0, Integer.parseInt(line.field(3))), line.text(4));
-                case "BEYOND" -> new PatternRead.Beyond(PatternRead.Limit.valueOf(line.field(2)),
-                        pattern.offsetByCodePoints(0, Integer.parseInt(line.field(3))), line.text(4));
-                default -> throw new IllegalStateException(line.where() + ": no outcome " + line.field(1));
-            };
             PatternRead answered = PatternParser.read(pattern);
-            if (expected == null ? !(answered instanceof PatternRead.Read) : !expected.equals(answered)) {
-                wrong.add(line.where() + ": " + Suite.shown(pattern) + " is " + answered + ", not "
-                        + (expected == null ? "read" : expected));
+            String outcome = switch (answered) {
+                case PatternRead.Read _ -> "READ ; ";
+                case PatternRead.Refused refused -> "REFUSED ; " + refused.why();
+                case PatternRead.Beyond beyond -> "BEYOND ; " + beyond.limit();
+            };
+            String expected = line.field(1) + " ; " + line.field(2);
+            if (!outcome.equals(expected)) {
+                wrong.add(line.where() + ": " + Suite.shown(pattern) + " is " + outcome + ", not " + expected);
             }
         }
         assertEquals(List.of(), wrong);

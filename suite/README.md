@@ -16,7 +16,7 @@ for that and which is read the same way.
 | `scalar-length.txt` | text ; length | Length in scalar values |
 | `scalar-order.txt` | a ; b ; order | Order by scalar values |
 | `temporal.txt` | kind ; text ; outcome | Dates, times, date-times, date-times with an offset, and instants, and their refusals |
-| `pattern-read.txt` | pattern ; outcome ; why ; from ; construct | What is read as a pattern, what is refused and why, and what is past a limit |
+| `pattern-read.txt` | pattern ; outcome ; why | What is read as a pattern, what is refused and why, and what is past a limit |
 | `pattern-match.txt` | pattern ; subject ; accepted | What a pattern accepts |
 | `pattern-states.txt` | pattern ; states | The states a pattern is counted as, against the limit |
 
@@ -24,6 +24,10 @@ The comment at the top of each file says what its fields hold. `white-space.txt`
 set, so a runner asks every scalar value and holds the ones no line names to not being white space.
 `pattern-states.txt` holds a count where it decides something, and its comment gives the rule a
 runner builds the patterns at and one past the limit by.
+
+Only what the specifications state is here. They do not state where in a pattern a refusal points
+or what it quotes, so `pattern-read.txt` holds the refusal and not its place; an implementation that
+answers those is tested in its own language.
 
 ## Format
 
@@ -36,8 +40,7 @@ Every file is UTF-8, and a line of vectors is ASCII.
 - A text is its Unicode scalar values, each four to six upper case hex digits, separated by one or
   more spaces. The empty text is an empty field. A surrogate is no scalar value, so no text here holds
   one.
-- A position in a text is counted in scalar values from nought, and a length or a count is in
-  scalar values too. Both are unsigned decimal.
+- A length or a count is in scalar values, and is unsigned decimal.
 - Anything else, a direction, an outcome or a reason, is an upper case identifier, and a yes or no
   is `true` or `false`.
 
