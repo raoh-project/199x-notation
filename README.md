@@ -192,6 +192,16 @@ it. PHPUnit needs mbstring, so a test holds the sources to asking neither mbstri
 PHP string is bytes, so the question a caller asks before it takes text in is whether the string
 is UTF-8, and a pattern reader refuses one that is not.
 
+The limits on a pattern are not lowered by how PHP holds one. Nothing whose number grows with a
+pattern is a PHP array or object of its own: a pattern's tree, its sets of symbols and its machine
+are flat lists of numbers, and the sets of states a match keeps to go faster are held to a budget
+of their own and forgotten past it. So a pattern at the limit of 250,000
+states is read and matched within PHP's default memory limit of 128 MB, whether it repeats one
+character or writes 250,000 different ones, and the PHP tests hold patterns of both kinds to that in
+a process of their own. What a pattern takes besides its states grows with the ranges its classes
+name, about 32 bytes each, which the limits do not bound: a pattern whose classes name millions of
+ranges needs more room than that.
+
 Rust reads images of P1 and P2 and writes none. Java's tests write the image of each pattern in
 `suite/pattern-match.txt` to `java/target/images/pattern-match.txt`, which is never checked in, and
 the Rust tests read each of those images and hold it to what the suite says the pattern accepts,

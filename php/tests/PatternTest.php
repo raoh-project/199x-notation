@@ -214,6 +214,38 @@ final class PatternTest extends TestCase
     }
 
     /**
+     * The limit of states is reached as well by a pattern that writes as many different sets as it
+     * has states, which is the other way a pattern can be large: no set is held as an array of its
+     * own, the trees and the machine share one copy of the sets, and the table that holds each set
+     * once is let go of when reading ends. Each of these is exactly 250,000 states.
+     */
+    #[RunInSeparateProcess, PreserveGlobalState(false)]
+    public function testAPatternOfAsManyDifferentSetsAsStatesIsReadAndMatchedWithinTheDefaultMemoryLimit(): void
+    {
+        ini_set('memory_limit', '128M');
+        $literals = '';
+        $negated = '';
+        for ($cp = 0x10000; $cp < 0x10000 + 249_999; $cp++) {
+            $character = \Raoh\Notation199x\Internal\Utf8::encode($cp);
+            $literals .= $character;
+            $negated .= '[^' . $character . ']';
+        }
+        $read = self::read($literals);
+        self::assertFalse($read->matches(''));
+        self::assertTrue($read->matches($literals));
+        self::assertFalse($read->matches(substr($literals, 4)));
+        unset($read);
+        $read = self::read($negated);
+        self::assertFalse($read->matches(''));
+        self::assertTrue($read->matches(str_repeat('a', 249_999)));
+        self::assertFalse($read->matches($literals));
+        unset($read);
+        // Anchors at the edges are placed over the whole sequence, which is read and matched the same.
+        $read = self::read('^' . substr($negated, 0, -2 * 7) . '$');
+        self::assertTrue($read->matches(str_repeat('a', 249_997)));
+    }
+
+    /**
      * What a machine keeps of the sets it has worked out stays about the room it is given, however
      * many characters a subject leads from one set by.
      */

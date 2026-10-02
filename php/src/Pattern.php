@@ -28,8 +28,15 @@ final class Pattern
 {
     private ?Machine $machine = null;
 
-    private function __construct(private readonly Meaning $meaning)
+    /**
+     * What the pattern means, until the machine is built from it: the machine is all a match
+     * needs, and holding the trees beside it would hold the pattern twice.
+     */
+    private ?Meaning $meaning;
+
+    private function __construct(Meaning $meaning)
     {
+        $this->meaning = $meaning;
     }
 
     /**
@@ -67,7 +74,10 @@ final class Pattern
      */
     public function matches(string $subject): bool
     {
-        $this->machine ??= Machine::build($this->meaning);
+        if ($this->machine === null) {
+            $this->machine = Machine::build($this->meaning ?? throw new \LogicException('a pattern with neither a meaning nor a machine'));
+            $this->meaning = null;
+        }
         return $this->machine->matches($subject);
     }
 }

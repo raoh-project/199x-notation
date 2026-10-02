@@ -35,7 +35,7 @@ final class Reader
     private function __construct(private readonly string $text)
     {
         $this->length = strlen($text);
-        $this->written = new Tree();
+        $this->written = new Tree(new SymbolSets());
     }
 
     /**
@@ -54,54 +54,66 @@ final class Reader
             $to = min($this->length, max($refused->to, $refused->from));
             return new PatternRefused($refused->why, $refused->from, substr($this->text, $refused->from, $to - $refused->from));
         }
+        // The states are counted on what was written, where an anchor is one state whatever it
+        // comes to, so the count is never below the states of the machine the meaning builds; and
+        // only of a pattern within the nesting depth, since the count recurses.
+        $states = $this->past === null ? States::written($this->written, $w) : 0;
         // Every anchor has to come to something, and what it comes to is settled by where it
         // stands, which is known now that the whole of the pattern is.
-        $m = Anchors::place($this->written, $w);
-        if ($m === null) {
+        if ($this->written->anchors > 0 && !Anchors::place($this->written, $w)) {
             return new PatternRefused(PatternRefusal::AnAnchorThisCannotPlace, 0, $this->text);
         }
         // The text is a pattern. Whether it is one every implementation takes is asked now.
         if ($this->past !== null) {
             return $this->past;
         }
-        // Counted on what was written, where an anchor is one state whatever it came to, so the
-        // count is never below the states of the machine the meaning builds.
-        if (States::written($this->written, $w) > PatternLimit::MachineStates->most()) {
+        if ($states > PatternLimit::MachineStates->most()) {
             return new PatternBeyond(PatternLimit::MachineStates, 0, $this->text);
         }
-        return $m;
+        $this->written->sets->seal();
+        return new Meaning($this->written, $w);
     }
 
     /**
      * The whole text, as what it is written as. A choice is read with a stack of the choices open
      * around it, so a group is a push and its closing bracket a pop, and nothing here recurses.
+     *
+     * The stack is two flat lists and not an object a group: text may open as many groups as it
+     * has characters before it is past the nesting depth, and is read to its end all the same.
+     * $items holds, for each choice open, the arms read so far and then the parts of the arm being
+     * read; $opened holds, for each, where its items begin and how many of them are arms.
      */
     private function pattern(): int
     {
-        /** @var list<OpenChoice> $around */
-        $around = [];
-        $reading = new OpenChoice($this->written);
+        /** @var list<int> $items */
+        $items = [];
+        /** @var list<int> $opened */
+        $opened = [0, 0];
         while (true) {
             $next = $this->peek();
             if ($next !== self::END_OF_TEXT && $next !== 0x7C && $next !== 0x29) {
                 $this->construct = $this->at;
                 if ($next === 0x28) {
                     $this->opened();
-                    $around[] = $reading;
-                    $reading = new OpenChoice($this->written);
+                    array_push($opened, count($items), 0);
                 } else {
-                    $reading->part($this->quantified($this->atom()));
+                    $this->part($items, $this->quantified($this->atom()));
                 }
                 continue;
             }
+            $top = count($opened) - 2;
+            $partsFrom = $opened[$top] + $opened[$top + 1];
             if ($next === 0x7C) {
                 $this->take();
-                $reading->arms[] = $reading->arm();
-                $reading->parts = [];
+                $arm = $this->arm(self::takeFrom($items, $partsFrom));
+                $items[] = $arm;
+                $opened[$top + 1]++;
                 continue;
             }
-            $choice = $reading->choice();
-            if ($around === []) {
+            $arms = self::takeFrom($items, $opened[$top]);
+            $arms = [...array_slice($arms, 0, $opened[$top + 1]), $this->arm(array_slice($arms, $opened[$top + 1]))];
+            $choice = count($arms) === 1 ? $arms[0] : $this->written->of(Tree::EITHER_OF, $arms);
+            if ($top === 0) {
                 if (!$this->done()) {
                     // A bracket closing nothing, which is what is left when the reading of a
                     // choice stops before the end.
@@ -113,9 +125,55 @@ final class Reader
             }
             $this->expect(0x29);
             $this->depth--;
-            $reading = array_pop($around);
+            array_pop($opened);
+            array_pop($opened);
             $this->construct = $this->at;
-            $reading->part($this->quantified($choice));
+            $this->part($items, $this->quantified($choice));
+        }
+    }
+
+    /**
+     * The items of $list from $from on, taken off it. Taken from the end, so that it costs what is
+     * taken and not the list: array_splice would write the whole list out again, and the list is as
+     * long as the groups open around the one being closed.
+     *
+     * @param list<int> $list
+     * @return list<int>
+     */
+    private static function takeFrom(array &$list, int $from): array
+    {
+        $taken = [];
+        for ($i = count($list); $i > $from; $i--) {
+            $taken[] = array_pop($list) ?? throw new \LogicException('a list shorter than it was counted');
+        }
+        return array_reverse($taken);
+    }
+
+    /**
+     * An arm of $parts: an arm of one part is that part, and an arm of none is nothing.
+     *
+     * @param list<int> $parts
+     */
+    private function arm(array $parts): int
+    {
+        return match (count($parts)) {
+            0 => $this->written->leaf(Tree::NOTHING),
+            1 => $parts[0],
+            default => $this->written->of(Tree::IN_TURN, $parts),
+        };
+    }
+
+    /**
+     * Puts $part at the end of the arm being read. A group of nothing is nothing, and is left out
+     * so that one written pattern has one tree. An anchor is not one of those: where it stands
+     * decides what it comes to.
+     *
+     * @param list<int> $items
+     */
+    private function part(array &$items, int $part): void
+    {
+        if ($this->written->kind[$part] !== Tree::NOTHING) {
+            $items[] = $part;
         }
     }
 

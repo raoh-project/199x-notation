@@ -63,16 +63,16 @@ final class MachineBuilder
                 return $to;
             case Tree::IN_TURN:
                 $at = $from;
-                foreach ($tree->partsOf($part) as $each) {
-                    $at = $this->part($each, $at);
+                for ($i = 0, $n = $tree->partCount($part); $i < $n; $i++) {
+                    $at = $this->part($tree->partAt($part, $i), $at);
                 }
                 return $at;
             case Tree::EITHER_OF:
                 $out = $this->state();
-                foreach ($tree->partsOf($part) as $arm) {
+                for ($i = 0, $n = $tree->partCount($part); $i < $n; $i++) {
                     $in = $this->state();
                     $this->freely($from, $in);
-                    $this->freely($this->part($arm, $in), $out);
+                    $this->freely($this->part($tree->partAt($part, $i), $in), $out);
                 }
                 return $out;
             default:
@@ -130,8 +130,8 @@ final class MachineBuilder
         if ($kind !== Tree::IN_TURN) {
             return false;
         }
-        foreach ($this->tree->partsOf($part) as $each) {
-            if (!$this->buildsNoState($each)) {
+        for ($i = 0, $n = $this->tree->partCount($part); $i < $n; $i++) {
+            if (!$this->buildsNoState($this->tree->partAt($part, $i))) {
                 return false;
             }
         }

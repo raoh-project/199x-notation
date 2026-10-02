@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Raoh\Notation199x\Internal\Pattern;
 
-use Raoh\Notation199x\Internal\Ranges;
 use Raoh\Notation199x\Internal\Utf8;
 use Raoh\Notation199x\ScalarValues;
 
@@ -50,8 +49,12 @@ final class Machine
     private array $freeStart = [];
     /** @var array<int, int> */
     private array $freeTo = [];
-    /** @var list<list<int>> the sets of symbols steps are over, each once */
-    private array $sets = [];
+    /** The sets of symbols steps are over, the same numbers the pattern's trees name them by. */
+    private SymbolSets $sets;
+    /** @var list<int> the sets' offsets, as $sets holds them, held here for the walk to read directly */
+    private array $setStart = [];
+    /** @var list<int> the sets' ranges, as $sets holds them */
+    private array $setRanges = [];
 
     // The sets of states a walk has been in, by number: the sets a deterministic machine would
     // have, made only as a walk comes to them, and where the characters read from each lead.
@@ -94,6 +97,8 @@ final class Machine
         [$machine->stepStart, $machine->stepTo, $machine->stepOver] = self::rows($b->states, $b->stepFrom, $b->stepTo, $b->stepOver);
         [$machine->freeStart, $machine->freeTo] = self::rows($b->states, $b->freeFrom, $b->freeTo, null);
         $machine->sets = $m->tree->sets;
+        $machine->setStart = $m->tree->sets->start;
+        $machine->setRanges = $m->tree->sets->ranges;
         return $machine;
     }
 
@@ -256,9 +261,12 @@ final class Machine
                 if (isset($next[$to])) {
                     continue;
                 }
-                $over = $this->sets[$this->stepOver[$i]];
                 // Most sets are one range, asked here without a search.
-                $holds = count($over) === 2 ? $over[0] <= $symbol && $symbol <= $over[1] : Ranges::has($over, $symbol);
+                $set = $this->stepOver[$i];
+                $from = $this->setStart[$set];
+                $holds = $this->setStart[$set + 1] - $from === 2
+                    ? $this->setRanges[$from] <= $symbol && $symbol <= $this->setRanges[$from + 1]
+                    : $this->sets->holds($set, $symbol);
                 if ($holds) {
                     $this->enter($next, $to);
                 }

@@ -42,27 +42,27 @@ final class States
 
     private static function in(Tree $written, int $part): int
     {
-        $parts = $written->partsOf($part);
+        $count = $written->partCount($part);
         switch ($written->kind[$part]) {
             case Tree::NOTHING:
                 return 0;
             case Tree::IN_TURN:
                 $sum = 0;
-                foreach ($parts as $each) {
-                    $sum = self::plus($sum, self::in($written, $each));
+                for ($i = 0; $i < $count; $i++) {
+                    $sum = self::plus($sum, self::in($written, $written->partAt($part, $i)));
                 }
                 return $sum;
             case Tree::EITHER_OF:
                 $sum = 1;
-                foreach ($parts as $arm) {
-                    $sum = self::plus($sum, self::plus(1, self::in($written, $arm)));
+                for ($i = 0; $i < $count; $i++) {
+                    $sum = self::plus($sum, self::plus(1, self::in($written, $written->partAt($part, $i))));
                 }
                 return $sum;
             case Tree::REPEATED:
                 // Its copies, and the state it ends in.
                 $most = $written->most($part);
                 $copies = $most === Tree::NO_CEILING ? $written->least($part) + 1 : $most;
-                return self::plus(self::times($copies, self::in($written, $parts[0])), 1);
+                return self::plus(self::times($copies, self::in($written, $written->repeats($part))), 1);
             default:
                 // A set of symbols, or an anchor.
                 return 1;

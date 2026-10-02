@@ -6,16 +6,17 @@ namespace Raoh\Notation199x\Internal\Pattern;
 
 /**
  * The parts of a pattern as a tree, each part a number and what it is held in lists by that
- * number: the shape a pattern is written in, before its anchors are placed, and the meaning it
- * comes to, which is the strings it accepts.
+ * number: the shape a pattern is written in, and once its anchors are placed (see Anchors), the
+ * meaning it comes to, which is the strings it accepts. Placing the anchors changes each anchor
+ * into what it comes to and nothing else, so the one tree is both.
  *
  * No part holds another as a PHP value, and no part has an array of its own. A tree is as deep as
  * the text it was read from is nested, which is as deep as the text is long. PHP frees a value
  * that holds another by recursion in C, which no limit of PHP's own guards, so a tree of objects
  * tens of thousands of levels deep stops the process when it is let go of; and an array per part
  * takes several times the room of the numbers in it. Here a part is three numbers in lists that
- * grow together, the parts of every part are one flat list, and a set of symbols is held once
- * however many parts are over it.
+ * grow together, the parts of every part are one flat list, and a set of symbols is a number in
+ * the SymbolSets the tree shares with the machine built from it.
  *
  * What a part is, by its kind:
  *
@@ -57,20 +58,25 @@ final class Tree
     private array $first = [];
     /** @var list<int> how many parts a part has; for REPEATED, its most instead, its one part at $first */
     private array $count = [];
+    /** How many START and END parts the tree was written with, so that one with none is not walked for them. */
+    public int $anchors = 0;
     /** @var array<int, int> each REPEATED part's least */
     private array $least = [];
     /** @var list<int> the parts of every part, one part's after another's */
     private array $list = [];
-    /** @var list<list<int>> each set of symbols a part is over, once, as Symbols holds a set */
-    public array $sets = [];
-    /** @var array<string, int> each set's number, by its ranges written out */
-    private array $setNumbers = [];
+
+    public function __construct(public readonly SymbolSets $sets)
+    {
+    }
 
     /**
      * A part of $kind that holds nothing.
      */
     public function leaf(int $kind): int
     {
+        if ($kind === self::START || $kind === self::END) {
+            $this->anchors++;
+        }
         return $this->add($kind, 0, 0);
     }
 
@@ -81,14 +87,7 @@ final class Tree
      */
     public function symbols(array $held): int
     {
-        $key = implode(',', $held);
-        $set = $this->setNumbers[$key] ?? null;
-        if ($set === null) {
-            $set = count($this->sets);
-            $this->sets[] = $held;
-            $this->setNumbers[$key] = $set;
-        }
-        return $this->add(self::SYMBOLS, $set, 0);
+        return $this->add(self::SYMBOLS, $this->sets->add($held), 0);
     }
 
     /**
@@ -98,8 +97,12 @@ final class Tree
      */
     public function of(int $kind, array $parts): int
     {
+        // Appended one at a time: a sequence may be as long as the text, and spread into a call its
+        // parts would be copied onto the stack.
         $first = count($this->list);
-        array_push($this->list, ...$parts);
+        foreach ($parts as $part) {
+            $this->list[] = $part;
+        }
         return $this->add($kind, $first, count($parts));
     }
 
@@ -124,26 +127,38 @@ final class Tree
     }
 
     /**
-     * A copy into this tree of the leaf $part of $from.
+     * Makes the anchor $part the NOTHING or the NEVER it comes to, which is all placing the anchors
+     * changes in a tree.
      */
-    public function copyLeaf(self $from, int $part): int
+    public function settle(int $part, int $kind): void
     {
-        $kind = $from->kind[$part];
-        return $kind === self::SYMBOLS ? $this->symbols($from->held($part)) : $this->leaf($kind);
+        if (($this->kind[$part] !== self::START && $this->kind[$part] !== self::END)
+            || ($kind !== self::NOTHING && $kind !== self::NEVER)) {
+            throw new \LogicException('only an anchor is settled, and as nothing or never');
+        }
+        $this->kind[$part] = $kind;
     }
 
     /**
-     * The parts of $part, none for a leaf.
-     *
-     * @return list<int>
+     * How many parts $part has, none for a leaf. Its parts are read one at a time by partAt and
+     * never as a list of their own: a sequence may be as long as the text, and a copy of its parts
+     * for each reading of them would take as much room as the tree.
      */
-    public function partsOf(int $part): array
+    public function partCount(int $part): int
     {
         return match ($this->kind[$part]) {
-            self::IN_TURN, self::EITHER_OF => array_slice($this->list, $this->first[$part], $this->count[$part]),
-            self::REPEATED => [$this->list[$this->first[$part]]],
-            default => [],
+            self::IN_TURN, self::EITHER_OF => $this->count[$part],
+            self::REPEATED => 1,
+            default => 0,
         };
+    }
+
+    /**
+     * The part at $i of the parts of $part.
+     */
+    public function partAt(int $part, int $i): int
+    {
+        return $this->list[$this->first[$part] + $i];
     }
 
     /**
@@ -176,15 +191,5 @@ final class Tree
     public function setOf(int $part): int
     {
         return $this->first[$part];
-    }
-
-    /**
-     * The set a SYMBOLS part is over.
-     *
-     * @return list<int>
-     */
-    public function held(int $part): array
-    {
-        return $this->sets[$this->first[$part]];
     }
 }

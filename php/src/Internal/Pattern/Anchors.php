@@ -38,82 +38,77 @@ final class Anchors
     private const HOLDS = 4;
 
     /**
-     * The meaning of the part $root of $written with every anchor read as what it comes to, or
-     * null where one cannot be settled.
+     * Reads every anchor under the part $root of $written as what it comes to, in the tree, and is
+     * false, the tree left as it was read, where one cannot be settled.
+     *
+     * The tree is the meaning once this is done, and no other tree is made: an anchor becomes the
+     * nothing or the never it comes to, and every other part already is its meaning. What that
+     * leaves in place that a tree made afresh would not hold, a nothing in a sequence and a
+     * repetition of exactly one, accepts the strings it would.
      */
-    public static function place(Tree $written, int $root): ?Meaning
+    public static function place(Tree $written, int $root): bool
     {
         $known = self::factsOf($written, $root);
-        $meaning = new Tree();
-        // A part to place, standing where its two sides say, or, where together, one whose parts
-        // are placed and whose meaning is to be put together from them; each a number (see task),
-        // since there are as many as the tree has parts.
-        $tasks = [self::task($root, self::YES, self::YES, false)];
-        /** @var list<int> $results */
-        $results = [];
+        // A part to place, standing where its two sides say, each a number (see task), since there
+        // are as many as the tree has parts. Only a part that holds an anchor is gone into.
+        $tasks = [self::task($root, self::YES, self::YES)];
+        /** @var list<array{int, int}> $settled */
+        $settled = [];
         while ($tasks !== []) {
             $task = array_pop($tasks);
-            $part = $task >> 5;
-            $together = ($task & 16) !== 0;
-            $atStart = ($task >> 2) & 3;
-            $atEnd = $task & 3;
-            if ($together) {
-                self::putTogether($written, $part, $meaning, $results);
+            $part = $task >> 4;
+            if (($known[$part] & self::HOLDS) === 0) {
                 continue;
             }
-            $parts = $written->partsOf($part);
+            $atStart = ($task >> 2) & 3;
+            $atEnd = $task & 3;
+            $count = $written->partCount($part);
             switch ($written->kind[$part]) {
                 case Tree::START:
                 case Tree::END:
                     $end = $written->kind[$part] === Tree::END;
-                    $made = self::anchor($meaning, $end, $end ? $atEnd : $atStart);
-                    if ($made === null) {
-                        return null;
+                    $kind = self::anchor($end, $end ? $atEnd : $atStart);
+                    if ($kind === null) {
+                        return false;
                     }
-                    $results[] = $made;
+                    $settled[] = [$part, $kind];
                     break;
                 case Tree::EITHER_OF:
                     // Every arm of a choice begins where the choice begins and ends where it ends.
-                    $tasks[] = self::task($part, $atStart, $atEnd, true);
-                    for ($at = count($parts) - 1; $at >= 0; $at--) {
-                        $tasks[] = self::task($parts[$at], $atStart, $atEnd, false);
+                    for ($at = $count - 1; $at >= 0; $at--) {
+                        $tasks[] = self::task($written->partAt($part, $at), $atStart, $atEnd);
                     }
                     break;
                 case Tree::IN_TURN:
-                    $tasks[] = self::task($part, $atStart, $atEnd, true);
-                    $sides = self::sidesOf($parts, $known, $atStart, $atEnd);
-                    for ($at = count($parts) - 1; $at >= 0; $at--) {
-                        $tasks[] = self::task($parts[$at], $sides[$at][0], $sides[$at][1], false);
+                    $sides = self::sidesOf($written, $part, $known, $atStart, $atEnd);
+                    for ($at = $count - 1; $at >= 0; $at--) {
+                        $tasks[] = self::task($written->partAt($part, $at), $sides[$at] >> 2, $sides[$at] & 3);
                     }
                     break;
                 case Tree::REPEATED:
-                    if (($known[$parts[0]] & self::HOLDS) === 0) {
-                        $tasks[] = self::task($part, $atStart, $atEnd, true);
-                        $tasks[] = self::task($parts[0], $atStart, $atEnd, false);
-                    } elseif ($written->least($part) === 1 && $written->most($part) === 1) {
-                        // One copy is the thing itself and stands where the repetition stands.
-                        $tasks[] = self::task($parts[0], $atStart, $atEnd, false);
-                    } else {
-                        // Any other count leaves how many copies come before the anchor to the
-                        // string.
-                        return null;
+                    // One copy is the thing itself and stands where the repetition stands. Any other
+                    // count leaves how many copies come before the anchor to the string.
+                    if ($written->least($part) !== 1 || $written->most($part) !== 1) {
+                        return false;
                     }
+                    $tasks[] = self::task($written->repeats($part), $atStart, $atEnd);
                     break;
-                default:
-                    // A set of symbols, or nothing, which means what it is written as.
-                    $results[] = $meaning->copyLeaf($written, $part);
             }
         }
-        return new Meaning($meaning, $results[0]);
+        // Written only once every anchor is known to be settled, so that a refused pattern's tree
+        // is the one that was read.
+        foreach ($settled as [$part, $kind]) {
+            $written->settle($part, $kind);
+        }
+        return true;
     }
 
     /**
-     * A part to place as one number: the part, whether it is to be put together, and where it
-     * stands at either end, two bits each.
+     * A part to place as one number: the part, and where it stands at either end, two bits each.
      */
-    private static function task(int $part, int $atStart, int $atEnd, bool $together): int
+    private static function task(int $part, int $atStart, int $atEnd): int
     {
-        return ($part << 5) | ($together ? 16 : 0) | ($atStart << 2) | $atEnd;
+        return ($part << 4) | ($atStart << 2) | $atEnd;
     }
 
     /**
@@ -123,51 +118,12 @@ final class Anchors
      * refused rather than read the same way: the language keeps the set of patterns it reads, and
      * that set has no pattern of this shape.
      */
-    private static function anchor(Tree $meaning, bool $end, int $at): ?int
+    private static function anchor(bool $end, int $at): ?int
     {
         return match ($at) {
-            self::YES => $meaning->leaf(Tree::NOTHING),
-            self::NO => $end ? null : $meaning->leaf(Tree::NEVER),
+            self::YES => Tree::NOTHING,
+            self::NO => $end ? null : Tree::NEVER,
             default => null,
-        };
-    }
-
-    /**
-     * Takes the meanings of the parts of $part off the end of $results, and puts its meaning
-     * there. The list is changed where it is, so that putting a part together costs its own parts
-     * and not the meanings waiting before them.
-     *
-     * @param list<int> $results
-     */
-    private static function putTogether(Tree $written, int $part, Tree $meaning, array &$results): void
-    {
-        $kind = $written->kind[$part];
-        if ($kind === Tree::REPEATED) {
-            $repeated = array_pop($results) ?? throw new \LogicException('a repetition with nothing placed to repeat');
-            $results[] = $meaning->repeated($repeated, $written->least($part), $written->most($part));
-            return;
-        }
-        $taken = [];
-        for ($i = count($written->partsOf($part)); $i > 0; $i--) {
-            $taken[] = array_pop($results) ?? throw new \LogicException('a part with fewer meanings placed than it has parts');
-        }
-        $taken = array_reverse($taken);
-        if ($kind === Tree::EITHER_OF) {
-            $results[] = $meaning->of(Tree::EITHER_OF, $taken);
-            return;
-        }
-        // A sequence. An anchor that asks for nothing leaves nothing in it, so ^abc$ means what abc
-        // means and is the same tree.
-        $parts = [];
-        foreach ($taken as $made) {
-            if ($meaning->kind[$made] !== Tree::NOTHING) {
-                $parts[] = $made;
-            }
-        }
-        $results[] = match (count($parts)) {
-            0 => $meaning->leaf(Tree::NOTHING),
-            1 => $parts[0],
-            default => $meaning->of(Tree::IN_TURN, $parts),
         };
     }
 
@@ -177,33 +133,35 @@ final class Anchors
      * the same for the end. What stands before each part and after it is gathered once from each
      * end, so that a literal written out a symbol at a time does not cost its length squared.
      *
-     * @param list<int>       $parts
+     * Each part's two sides are one number, the start above the end, two bits each: a sequence is
+     * as long as the text, and an array a part would take several times the room of its numbers.
+     *
      * @param array<int, int> $known
-     * @return list<array{int, int}>
+     * @return list<int>
      */
-    private static function sidesOf(array $parts, array $known, int $atStart, int $atEnd): array
+    private static function sidesOf(Tree $written, int $sequence, array $known, int $atStart, int $atEnd): array
     {
-        $count = count($parts);
-        $mayBefore = [false];
-        $mustBefore = [true];
-        foreach ($parts as $at => $part) {
-            $mayBefore[$at + 1] = $mayBefore[$at] || ($known[$part] & self::MAY) !== 0;
-            $mustBefore[$at + 1] = $mustBefore[$at] && ($known[$part] & self::MUST) !== 0;
-        }
-        $mayAfter = [$count => false];
-        $mustAfter = [$count => true];
+        $count = $written->partCount($sequence);
+        // Where each part stands at the end, from the last part back.
+        $ends = [];
+        $mayAfter = false;
+        $mustAfter = true;
         for ($at = $count - 1; $at >= 0; $at--) {
-            $mayAfter[$at] = $mayAfter[$at + 1] || ($known[$parts[$at]] & self::MAY) !== 0;
-            $mustAfter[$at] = $mustAfter[$at + 1] && ($known[$parts[$at]] & self::MUST) !== 0;
+            $ends[] = self::beyond($mayAfter, $mustAfter, $atEnd);
+            $facts = $known[$written->partAt($sequence, $at)];
+            $mayAfter = $mayAfter || ($facts & self::MAY) !== 0;
+            $mustAfter = $mustAfter && ($facts & self::MUST) !== 0;
         }
-        $out = [];
+        $sides = [];
+        $mayBefore = false;
+        $mustBefore = true;
         for ($at = 0; $at < $count; $at++) {
-            $out[] = [
-                self::beyond($mayBefore[$at], $mustBefore[$at], $atStart),
-                self::beyond($mayAfter[$at + 1], $mustAfter[$at + 1], $atEnd),
-            ];
+            $sides[] = (self::beyond($mayBefore, $mustBefore, $atStart) << 2) | $ends[$count - 1 - $at];
+            $facts = $known[$written->partAt($sequence, $at)];
+            $mayBefore = $mayBefore || ($facts & self::MAY) !== 0;
+            $mustBefore = $mustBefore && ($facts & self::MUST) !== 0;
         }
-        return $out;
+        return $sides;
     }
 
     /**
@@ -236,15 +194,15 @@ final class Anchors
         while ($stack !== []) {
             $entry = array_pop($stack);
             $top = $entry >> 1;
-            $parts = $written->partsOf($top);
-            if (($entry & 1) === 0 && $parts !== []) {
+            $count = $written->partCount($top);
+            if (($entry & 1) === 0 && $count > 0) {
                 $stack[] = ($top << 1) | 1;
-                foreach ($parts as $part) {
-                    $stack[] = $part << 1;
+                for ($i = 0; $i < $count; $i++) {
+                    $stack[] = $written->partAt($top, $i) << 1;
                 }
                 continue;
             }
-            $known[$top] = self::partFacts($written, $top, $parts, $known);
+            $known[$top] = self::partFacts($written, $top, $count, $known);
         }
         return $known;
     }
@@ -252,10 +210,9 @@ final class Anchors
     /**
      * The facts of $part, whose parts' facts are known.
      *
-     * @param list<int>       $parts
      * @param array<int, int> $known
      */
-    private static function partFacts(Tree $written, int $part, array $parts, array $known): int
+    private static function partFacts(Tree $written, int $part, int $count, array $known): int
     {
         switch ($written->kind[$part]) {
             case Tree::SYMBOLS:
@@ -266,21 +223,22 @@ final class Anchors
             case Tree::IN_TURN:
                 // A sequence may, must and holds where any part does.
                 $f = 0;
-                foreach ($parts as $each) {
-                    $f |= $known[$each];
+                for ($i = 0; $i < $count; $i++) {
+                    $f |= $known[$written->partAt($part, $i)];
                 }
                 return $f;
             case Tree::EITHER_OF:
                 // A choice may and holds where any arm does, and must where every arm does.
                 $any = 0;
                 $every = self::MUST;
-                foreach ($parts as $arm) {
-                    $any |= $known[$arm];
-                    $every &= $known[$arm];
+                for ($i = 0; $i < $count; $i++) {
+                    $arm = $known[$written->partAt($part, $i)];
+                    $any |= $arm;
+                    $every &= $arm;
                 }
                 return ($any & (self::MAY | self::HOLDS)) | $every;
             case Tree::REPEATED:
-                $what = $known[$parts[0]];
+                $what = $known[$written->repeats($part)];
                 $most = $written->most($part);
                 return (($most === Tree::NO_CEILING || $most > 0) ? $what & self::MAY : 0)
                     | ($written->least($part) > 0 ? $what & self::MUST : 0)
