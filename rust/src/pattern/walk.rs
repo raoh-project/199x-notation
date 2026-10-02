@@ -42,9 +42,11 @@ const EMPTY: u32 = u32::MAX;
 /// state at a time as without them, but for the tries.
 ///
 /// A set is the same set in whatever order its states were come to, so it is found by a hash that
-/// does not turn on the order, summed as its states are entered ([`Walk::enter`]), and told apart
-/// from another of the same hash by asking each of its states whether the walk has just entered it
-/// ([`Cache::same`]). Nothing here puts a set in order, and nothing goes over a set but those loops.
+/// does not turn on the order, summed over its states where it is looked up ([`hash_of`]), and told
+/// apart from another of the same hash by asking each of its states whether the walk has just
+/// entered it ([`Cache::same`]). Whether a walk that ends in it accepts is asked of its states only
+/// where it is kept ([`accepts`]). Nothing here puts a set in order, and nothing goes over a set but
+/// those loops.
 pub(crate) struct Cache {
     /// Each kept set's states, in the order the walk came to them, every free step already taken.
     sets: Vec<Vec<u32>>,
@@ -99,8 +101,6 @@ impl Cache {
                 pending: Vec::new(),
                 now: Vec::new(),
                 next: Vec::new(),
-                hash: 0,
-                accepting: false,
             },
         }
     }
@@ -151,7 +151,7 @@ impl Cache {
         }
         let walked = stopped.unwrap_or(rest.len());
         self.off_work = self.off_work.saturating_add(walked).saturating_add(1);
-        stopped.is_none() && walk.accepting
+        stopped.is_none() && accepts(machine, &walk.next)
     }
 
     /// Forgets every kept set. What is dropped is at most what [`KNOWN_BYTES`] holds.
@@ -168,14 +168,19 @@ impl Cache {
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins: found
-    /// where it is kept, and otherwise kept now, the set moved out of the walk. `None` where keeping
-    /// sets is given up on, and the set is still in `walk.next`. The second answer is whether the sets
-    /// kept before were forgotten to make room for it.
-    fn keep(&mut self, classes: usize) -> Option<(u32, bool)> {
+    /// where it is kept, and otherwise kept now, as a copy of the set's states in a list of its own.
+    /// `None` where keeping sets is given up on. The set is still in `walk.next` either way. The
+    /// second answer is whether the sets kept before were forgotten to make room for it.
+    ///
+    /// The set is copied and not moved out of the walk: moved, it would leave `walk.next` with no
+    /// room, to be grown again for each set after it, and it would keep the room `walk.next` had
+    /// grown to, up to twice its states. The copy asks for room for its states, the four bytes a
+    /// state that [`KNOWN_BYTES`] counts.
+    fn keep(&mut self, machine: &Machine, classes: usize) -> Option<(u32, bool)> {
         if self.walk.next.is_empty() {
             return Some((NONE, false));
         }
-        let hash = self.walk.hash;
+        let hash = hash_of(&self.walk.next);
         if !self.slots.is_empty() {
             let mask = self.slots.len() - 1;
             let mut at = hash as usize & mask;
@@ -212,15 +217,20 @@ impl Cache {
             at = (at + 1) & mask;
         }
         self.slots[at] = kept as u32;
+        let accepting = accepts(machine, &self.walk.next);
         // A kept set is named by where its row of `next` begins, so a step is one lookup and no
         // product.
         let row = self.next.len() as u32;
         for _ in 0..classes {
             self.next.push(UNKNOWN);
         }
-        self.sets.push(core::mem::take(&mut self.walk.next));
+        let mut states = Vec::with_capacity(self.walk.next.len());
+        for &q in &self.walk.next {
+            states.push(q);
+        }
+        self.sets.push(states);
         self.hashes.push(hash);
-        self.accepting.push(self.walk.accepting);
+        self.accepting.push(accepting);
         self.bytes += cost;
         self.made += 1;
         Some((row, forgot))
@@ -259,6 +269,29 @@ impl Cache {
     }
 }
 
+/// The sum of [`scatter`] over `states`, the same in whatever order they are in. It is summed where
+/// a set is looked up and not as each state is entered, so a walk that keeps no sets does not sum
+/// it.
+fn hash_of(states: &[u32]) -> u32 {
+    let mut hash = 0u32;
+    for &q in states {
+        hash = hash.wrapping_add(scatter(q));
+    }
+    hash
+}
+
+/// Whether a walk that ends in `states` accepts: whether any of them is one the machine may stop at.
+/// It is asked where the answer is needed, where a set is kept and where a walk without kept sets
+/// ends, and not as each state is entered.
+fn accepts(machine: &Machine, states: &[u32]) -> bool {
+    for &q in states {
+        if machine.accepting[q as usize] {
+            return true;
+        }
+    }
+    false
+}
+
 /// A state's part of the hash of a set it is in, which is the same in whatever order the set's
 /// states are put in.
 fn scatter(q: u32) -> u32 {
@@ -267,16 +300,23 @@ fn scatter(q: u32) -> u32 {
 }
 
 /// The room a walk a state at a time works in: the generation each state was last entered in, the
-/// states the free steps are still to be followed from, the set the walk is in and the one it is
-/// coming to, and of that one, the hash and whether it accepts, summed as it is entered.
+/// states the free steps are still to be followed from, and the set the walk is in and the one it is
+/// coming to.
+///
+/// Every walk enters states through [`Walk::enter`], with kept sets or without, so it does only what
+/// both need. What only keeping a set needs, its hash and whether it accepts, is worked out of the
+/// set where it is kept ([`hash_of`], [`accepts`]), and nothing of it is held here.
+///
+/// `pending`, `now` and `next` start with no room and grow as a walk holds more states in them, as
+/// many as it has held at once and never more than the machine's states. Nothing takes that room away
+/// from the walk: a kept set is a copy of the states in `next` ([`Cache::keep`]), so the next
+/// set is put in the room the last one had, and a walk pays for room only as its sets need it.
 struct Walk {
     entered: Vec<u32>,
     generation: u32,
     pending: Vec<u32>,
     now: Vec<u32>,
     next: Vec<u32>,
-    hash: u32,
-    accepting: bool,
 }
 
 impl Walk {
@@ -296,8 +336,6 @@ impl Walk {
         }
         self.generation += 1;
         self.next.clear();
-        self.hash = 0;
-        self.accepting = false;
     }
 
     /// Puts `q` in `next`, with every state the free steps reach from it, each once.
@@ -308,8 +346,6 @@ impl Walk {
             }
             walk.entered[q as usize] = walk.generation;
             walk.next.push(q);
-            walk.hash = walk.hash.wrapping_add(scatter(q));
-            walk.accepting |= machine.accepting[q as usize];
             true
         };
         if !add(self, q) {
@@ -357,10 +393,15 @@ impl Walk {
 /// ([`Cache::keep`]). Where sets are not kept, every character is worked out so ([`Cache::walk_alone`]).
 ///
 /// The loops whose count turns on the subject, the machine or the kept sets are these, and no other:
-/// [`run_known`] and [`Cache::walk_alone`] over the subject; [`Walk::advance`] and [`Walk::enter`] over the
-/// steps and free steps of the states they move; [`Cache::keep`] over the slots it looks in and the
-/// row it makes, [`Cache::same`] over a kept set, and [`Cache::grow`] over the kept sets; and
-/// [`Walk::next_set`], over every state, once in four billion sets.
+/// [`matches`] over the places the subject leads out of the kept steps, [`read_classes`], which
+/// `run_known` reads through, and [`Cache::walk_alone`] over the subject; [`Walk::advance`] and [`Walk::enter`]
+/// over the steps and free steps of the states they move; [`hash_of`] and [`accepts`] over a set;
+/// [`Cache::keep`] over the slots it looks in, the set it copies and the row it makes,
+/// [`Cache::same`] over a kept set, and [`Cache::grow`] over the kept sets; and
+/// [`Walk::next_set`], over every state, once in four billion sets. Making room is not a loop here:
+/// `vec!` makes `entered` once, and a list grows in `push` by doubling, as far as the most states
+/// the walk has held in it at once, as `Walk` says. The test `the_walk_names_every_loop_it_has` holds this list to
+/// the functions with a loop in them.
 pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bool {
     let classes = machine.classes.count();
     if cache.walks_alone() {
@@ -371,7 +412,7 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
         Some(start) => start,
         None => {
             cache.walk.begin(machine);
-            match cache.keep(classes) {
+            match cache.keep(machine, classes) {
                 Some((start, _)) => {
                     cache.start = Some(start);
                     start
@@ -396,7 +437,7 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
             .walk
             .advance(machine, &cache.sets[at as usize / classes], c);
         i += c.len_utf8();
-        match cache.keep(classes) {
+        match cache.keep(machine, classes) {
             Some((next, forgot)) => {
                 if !forgot {
                     cache.next[slot] = next;
@@ -529,6 +570,328 @@ mod tests {
                     "{text} against {subject:?}"
                 );
             }
+        }
+    }
+
+    /// The paths a match goes by, each timed apart by [`walk_paths`] and held here to the way it is
+    /// named, so that what a time says is of that way. Work put in a step every path takes for the
+    /// sake of one is paid by the others, so a change is compared on each: one time over all would
+    /// let what one loses be hidden by what another gains.
+    mod paths {
+        use super::*;
+
+        /// The sets of `(?:a?){49998}` are as large as the machine, so the first match gives keeping
+        /// them up, and the matcher walks every match after it a state at a time.
+        pub(super) fn large() -> (crate::Pattern, String) {
+            (pattern("(?:a?){49998}"), "a".repeat(100))
+        }
+
+        /// The tenth character from the end is an a, and the subject is at random: a match that has
+        /// kept nothing comes to a new set at most characters.
+        pub(super) fn tenth() -> (crate::Pattern, String) {
+            let mut seed = 9u32;
+            let subject = (0..400)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    if seed >> 31 == 0 { 'a' } else { 'b' }
+                })
+                .collect();
+            (pattern("(?:a|b)*a(?:a|b){8}"), subject)
+        }
+
+        /// Forgets where each class leads from each kept set, and keeps the sets: the next match
+        /// works out each step again, and finds the set it comes to among those kept by its hash.
+        pub(super) fn forget_steps(cache: &mut Cache) {
+            cache.next.fill(UNKNOWN);
+        }
+    }
+
+    /// Each path [`walk_paths`] times goes the way it is named: a match with no kept sets keeps
+    /// none; one with nothing kept keeps a new set at most characters; one over steps already worked
+    /// out reads the whole subject by them; and one whose steps are forgotten finds the set at most
+    /// characters lead to among those kept, keeping no new one.
+    #[test]
+    fn each_timed_path_goes_the_way_it_is_named() {
+        let (large, a) = paths::large();
+        let mut alone = large.matcher();
+        alone.matches(&a);
+        assert!(alone.cache.off, "the first match gave keeping sets up");
+        assert!(
+            alone.cache.sets.is_empty() && alone.cache.off_work < alone.cache.off_for,
+            "kept none, and walks the next match a state at a time"
+        );
+
+        let (tenth, subject) = paths::tenth();
+        let mut fresh = tenth.matcher();
+        fresh.matches(&subject);
+        assert!(
+            fresh.cache.made * 2 > subject.len() && !fresh.cache.off,
+            "a new set at {} of {} characters",
+            fresh.cache.made,
+            subject.len()
+        );
+
+        let made = fresh.cache.made;
+        let read = fresh.cache.read;
+        fresh.matches(&subject);
+        assert_eq!(fresh.cache.made, made, "no set made over steps worked out");
+        assert_eq!(
+            fresh.cache.read - read,
+            subject.len(),
+            "every character read by them"
+        );
+
+        paths::forget_steps(&mut fresh.cache);
+        let read = fresh.cache.read;
+        fresh.matches(&subject);
+        let found = subject.len() - (fresh.cache.read - read);
+        assert_eq!(fresh.cache.made, made, "no set made where each is kept");
+        assert!(
+            found * 2 > subject.len() && !fresh.cache.off,
+            "a kept set found at {found} of {} characters",
+            subject.len()
+        );
+    }
+
+    /// How long a match takes on each path, which [`each_timed_path_goes_the_way_it_is_named`]
+    /// holds to its name. Not run with the others:
+    ///
+    /// ```sh
+    /// cargo test --release --lib walk_paths -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "a timing, run by hand"]
+    fn walk_paths() {
+        extern crate std;
+        use std::time::{Duration, Instant};
+        /// The mean time of `f` over about a second of calls, each after `before`, which is out of
+        /// the time.
+        fn time(mut before: impl FnMut(), mut f: impl FnMut()) -> Duration {
+            let (start, mut times, mut timed) = (Instant::now(), 0u32, Duration::ZERO);
+            while start.elapsed() < Duration::from_secs(1) || times < 3 {
+                before();
+                let each = Instant::now();
+                f();
+                timed += each.elapsed();
+                times += 1;
+            }
+            timed / times
+        }
+
+        let (large, a) = paths::large();
+        let mut alone = large.matcher();
+        alone.matches(&a);
+        let without = time(
+            || {},
+            || {
+                core::hint::black_box(alone.matches(&a));
+            },
+        );
+
+        let (tenth, subject) = paths::tenth();
+        let new = time(
+            || {},
+            || {
+                core::hint::black_box(tenth.matches(&subject));
+            },
+        );
+
+        let mut kept = tenth.matcher();
+        kept.matches(&subject);
+        let steps = time(
+            || {},
+            || {
+                core::hint::black_box(kept.matches(&subject));
+            },
+        );
+        // The steps are forgotten before each match, out of its time; the cache is moved between
+        // the two by a cell, since both hold it.
+        let kept = core::cell::RefCell::new(kept);
+        let found = time(
+            || paths::forget_steps(&mut kept.borrow_mut().cache),
+            || {
+                core::hint::black_box(kept.borrow_mut().matches(&subject));
+            },
+        );
+
+        std::println!(
+            "{:<56} {without:>10.2?}",
+            "without kept sets, (?:a?){49998} against 100 a"
+        );
+        std::println!(
+            "{:<56} {new:>10.2?}",
+            "a new set kept at most characters, 400 bytes"
+        );
+        std::println!(
+            "{:<56} {steps:>10.2?}",
+            "steps already worked out, 400 bytes"
+        );
+        std::println!(
+            "{:<56} {found:>10.2?}",
+            "kept sets found by their hash, 400 bytes"
+        );
+    }
+
+    /// The list of loops in [`matches`]'s doc is held to the code: each function of this file with a
+    /// loop in it is named, each name is a function with a loop, here or in `subject.rs`, and the
+    /// code calls nothing that goes over a list out of sight. The list was written by hand and once
+    /// named a function with no loop and left out one with a loop, as Go's did before its test.
+    #[test]
+    fn the_walk_names_every_loop_it_has() {
+        use alloc::collections::BTreeSet;
+        use alloc::string::ToString;
+        use alloc::vec::Vec;
+
+        /// The code of `source` before its tests, each line without what follows `//`.
+        fn code(source: &str) -> Vec<&str> {
+            let before = source.find("#[cfg(test)]").unwrap_or(source.len());
+            source[..before]
+                .lines()
+                .map(|line| line.find("//").map_or(line, |at| &line[..at]))
+                .collect()
+        }
+
+        /// Each function of `lines` with a loop in it, named as the doc names it.
+        fn looping(lines: &[&str]) -> BTreeSet<String> {
+            let mut out = BTreeSet::new();
+            let mut within = None;
+            let mut function: Option<String> = None;
+            for line in lines {
+                if let Some(rest) = line.strip_prefix("impl ") {
+                    within = rest.split_whitespace().next().map(|name| name.to_string());
+                } else if line.starts_with('}') {
+                    within = None;
+                }
+                let trimmed = line.trim_start();
+                let named = trimmed
+                    .strip_prefix("pub(crate) fn ")
+                    .or_else(|| trimmed.strip_prefix("fn "));
+                if let Some(rest) = named {
+                    let name = &rest[..rest.find(['(', '<']).expect("a function's name ends")];
+                    let top = !line.starts_with(' ');
+                    function = Some(match (&within, top) {
+                        (Some(owner), false) => format!("{owner}::{name}"),
+                        _ => name.to_string(),
+                    });
+                    if top {
+                        within = None;
+                    }
+                }
+                let loops = trimmed.starts_with("for ")
+                    || trimmed.starts_with("while ")
+                    || trimmed.contains("loop {");
+                if loops && let Some(name) = &function {
+                    out.insert(name.clone());
+                }
+            }
+            out
+        }
+
+        let walk = code(include_str!("walk.rs"));
+        let subject = code(include_str!("subject.rs"));
+        let doc: String = include_str!("walk.rs")
+            .lines()
+            .skip_while(|line| !line.starts_with("/// The loops whose count"))
+            .take_while(|line| line.starts_with("///"))
+            .collect();
+        let named: BTreeSet<String> = doc
+            .split("[`")
+            .skip(1)
+            .map(|link| link[..link.find("`]").expect("a link ends")].to_string())
+            .collect();
+        let here = looping(&walk);
+        let elsewhere = looping(&subject);
+        for name in &here {
+            assert!(
+                named.contains(name),
+                "{name} has a loop the doc does not name"
+            );
+        }
+        for name in &named {
+            assert!(
+                here.contains(name) || elsewhere.contains(name),
+                "{name} is named and has no loop"
+            );
+        }
+        // What goes over a list in one call, out of sight of the loops above.
+        let hidden = [
+            ".extend(",
+            ".clone()",
+            ".to_vec()",
+            ".collect",
+            ".sort",
+            ".fill(",
+            ".resize(",
+            ".contains(",
+            ".retain(",
+            ".drain(",
+            "copy_from_slice(",
+            ".iter()",
+            ".into_iter()",
+            ".concat(",
+            ".join(",
+            ".repeat(",
+            ".position(",
+            ".any(",
+            ".all(",
+            ".sum(",
+        ];
+        for (at, line) in walk.iter().enumerate() {
+            for call in hidden {
+                assert!(!line.contains(call), "line {}: {call}", at + 1);
+            }
+            if line.starts_with("use ") {
+                assert!(
+                    [
+                        "use alloc::vec;",
+                        "use alloc::vec::Vec;",
+                        "use super::machine::{Classes, Machine};",
+                        "use super::subject::read_classes;",
+                    ]
+                    .contains(line),
+                    "line {}: {line}",
+                    at + 1
+                );
+            }
+        }
+    }
+
+    /// Keeping a set takes no room from the walk: `next` has the room it had before, and still holds
+    /// the set. Moving `next` out of the walk instead would leave it no room, to be grown again for
+    /// every set after. How much room the kept copy has is the allocator's to say, at least its
+    /// states, and is not held here.
+    #[test]
+    fn keeping_a_set_takes_no_room_from_the_walk() {
+        let pattern = pattern("(?:a|b)*a(?:a|b){8}");
+        let super::super::Run::Steps(machine) = &pattern.run else {
+            unreachable!("a pattern read from text is walked by its steps")
+        };
+        let classes = machine.classes.count();
+        let mut matcher = pattern.matcher();
+        let mut numbers = Numbers(7);
+        let subject: String = (0..400)
+            .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
+            .collect();
+        matcher.matches(&subject);
+        let cache = &mut matcher.cache;
+        let sets = cache.sets.clone();
+        assert!(sets.len() > 10, "{} sets kept", sets.len());
+        for (at, set) in sets.into_iter().enumerate() {
+            cache.forget();
+            cache.walk.next_set(machine);
+            for &q in &set {
+                cache.walk.enter(machine, q);
+            }
+            let room = cache.walk.next.capacity();
+            let row = cache.keep(machine, classes);
+            assert_eq!(row, Some((0, false)), "set {at} is kept anew");
+            assert_eq!(
+                cache.walk.next.capacity(),
+                room,
+                "set {at} took the walk's room"
+            );
+            assert_eq!(cache.walk.next, set, "set {at} is still the walk's");
+            assert_eq!(cache.sets[0], set, "set {at} is kept as it is");
         }
     }
 

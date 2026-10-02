@@ -203,20 +203,134 @@ func BenchmarkAMatchOfAFewStates(b *testing.B) {
 	}
 }
 
-// A walk that has kept no sets comes to a new one at most characters, and keeps each: what a
-// character costs where its set is not kept yet, besides moving the states.
-func BenchmarkAMatchThatKeepsANewSetAtMostCharacters(b *testing.B) {
-	read := ReadPattern("(?:a|b)*a(?:a|b){8}").(*Pattern)
+// The paths a walk goes by, each timed apart by a benchmark below and held to the way it is named
+// by TestEachTimedWalkGoesTheWayItIsNamed, so that what a time says is of that way. Work put in a
+// step every path takes for the sake of one is paid by the others, so a change is compared on
+// each: one time over all would let what one loses be hidden by what another gains.
+
+// pathMachine is the machine of pattern, built.
+func pathMachine(pattern string) *machine {
+	read := ReadPattern(pattern).(*Pattern)
 	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
-	m := read.compiled.machine
+	return read.compiled.machine
+}
+
+// largePath is a machine whose sets are as large as it, so a walk's first match gives keeping
+// them up and walks every match after it a state at a time, and what it is matched against.
+func largePath() (*machine, string) {
+	return pathMachine("(?:a?){49998}"), strings.Repeat("a", 100)
+}
+
+// tenthPath is a machine whose tenth character from the end is an a, and 400 characters at random,
+// the same on every run: a walk that has kept nothing comes to a new set at most of them.
+func tenthPath() (*machine, string) {
 	var subject strings.Builder
 	rng := uint32(9)
 	for range 400 {
 		rng = rng*1664525 + 1013904223
 		subject.WriteByte("ab"[rng>>31])
 	}
+	return pathMachine("(?:a|b)*a(?:a|b){8}"), subject.String()
+}
+
+// forgetSteps forgets where each character leads from each set w keeps, and keeps the sets: the
+// next match works each step out again, and finds the set it leads to among those kept by its hash.
+func forgetSteps(w *walk) {
+	for _, set := range w.known.slots {
+		if set != nil {
+			set.ascii = [utf8RuneSelf]*knownSet{}
+			set.other = nil
+		}
+	}
+}
+
+// stepsKnown is how many steps from the sets w keeps are worked out.
+func stepsKnown(w *walk) int {
+	known := 0
+	for _, set := range w.known.slots {
+		if set == nil {
+			continue
+		}
+		for _, next := range set.ascii {
+			if next != nil {
+				known++
+			}
+		}
+		known += len(set.other)
+	}
+	return known
+}
+
+func TestEachTimedWalkGoesTheWayItIsNamed(t *testing.T) {
+	m, as := largePath()
+	alone := m.newWalk()
+	m.matchesIn(alone, as)
+	if !alone.known.off || alone.known.slots != nil || alone.known.offWork >= alone.known.wait() {
+		t.Fatal("a walk of the large machine keeps sets, or keeps them again at its next match")
+	}
+
+	m, subject := tenthPath()
+	w := m.newWalk()
+	m.matchesIn(w, subject)
+	made := w.known.made
+	if made*2 <= len(subject) || w.known.off {
+		t.Fatalf("a new set at %d of %d characters", made, len(subject))
+	}
+
+	steps := stepsKnown(w)
+	m.matchesIn(w, subject)
+	if w.known.made != made || stepsKnown(w) != steps {
+		t.Fatal("a match over steps worked out made a set or worked a step out")
+	}
+
+	forgetSteps(w)
+	m.matchesIn(w, subject)
+	if found := stepsKnown(w); w.known.made != made || found*2 <= len(subject) || w.known.off {
+		t.Fatalf("%d sets made, and a kept set found at %d of %d characters",
+			w.known.made-made, found, len(subject))
+	}
+}
+
+// A walk without kept sets: every character moves each state.
+func BenchmarkAWalkWithoutKeptSets(b *testing.B) {
+	m, as := largePath()
+	w := m.newWalk()
+	m.matchesIn(w, as)
 	for range b.N {
-		m.matchesIn(m.newWalk(), subject.String())
+		m.matchesIn(w, as)
+	}
+}
+
+// A walk that has kept no sets comes to a new one at most characters, and keeps each: what a
+// character costs where its set is not kept yet, besides moving the states.
+func BenchmarkAMatchThatKeepsANewSetAtMostCharacters(b *testing.B) {
+	m, subject := tenthPath()
+	for range b.N {
+		m.matchesIn(m.newWalk(), subject)
+	}
+}
+
+// A walk over steps from kept sets it has worked out: each character is a lookup.
+func BenchmarkAWalkOverStepsWorkedOut(b *testing.B) {
+	m, subject := tenthPath()
+	w := m.newWalk()
+	m.matchesIn(w, subject)
+	for range b.N {
+		m.matchesIn(w, subject)
+	}
+}
+
+// A walk that works each step out again and finds the set it leads to among those kept by its
+// hash. The steps are forgotten before each match and out of its time.
+func BenchmarkAWalkThatFindsKeptSetsByTheirHash(b *testing.B) {
+	m, subject := tenthPath()
+	w := m.newWalk()
+	m.matchesIn(w, subject)
+	for range b.N {
+		b.StopTimer()
+		forgetSteps(w)
+		b.StartTimer()
+		m.matchesIn(w, subject)
 	}
 }
 

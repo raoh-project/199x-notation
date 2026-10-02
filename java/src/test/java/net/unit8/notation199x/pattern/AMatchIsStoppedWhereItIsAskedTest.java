@@ -27,9 +27,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * not been in and where it moves each state for every character, and after the subject is read.
  *
  * <p>How often it asks is what {@link StringPattern} says, worked out here over sets of states of
- * the machine apart from the walk ({@link #asksOf}, {@link #asksRemembering}), and each walk asks at
- * least that often. Every place the walk asks is counted in them, so a walk that stopped asking at
- * any one of them would ask fewer times than it says.
+ * the machine apart from the walk ({@link #asksOf}, {@link #asksRemembering}), and each walk asks
+ * that often, neither less nor more. Every place the walk asks is counted in them, so a walk that
+ * stopped asking at any one of them would ask fewer times than it says, and a place it asks that
+ * they leave out, and so nothing holds it to, would ask more. A walk that keeps its sets asks a
+ * number in a span and not one number, since how many slots it looks in to find a set turns on
+ * where the sets' hashes fall, which is not worked out here; the span is no wider than that.
  */
 class AMatchIsStoppedWhereItIsAskedTest {
 
@@ -59,8 +62,11 @@ class AMatchIsStoppedWhereItIsAskedTest {
         for (boolean remembering : new boolean[] {true, false}) {
             Counting all = Counting.never();
             assertEquals(new Outcome.Answered<>(false), wide(machine, remembering).matches("a", all));
-            long says = remembering ? asksRemembering(machine, "a") : asksOf(machine, "a");
-            assertTrue(all.asked >= says, "asked " + all.asked + " times, and says " + says);
+            if (remembering) {
+                asksRemembering(machine, "a").hold(all.asked, "a");
+            } else {
+                assertEquals(asksOf(machine, "a"), all.asked);
+            }
             for (long at : new long[] {2, all.asked / 2, all.asked}) {
                 assertInstanceOf(Outcome.Stopped.class,
                         wide(machine, remembering).matches("a", new Counting(at)),
@@ -113,16 +119,17 @@ class AMatchIsStoppedWhereItIsAskedTest {
         for (String subject : List.of("", "a", "aaa", "ba")) {
             Counting all = Counting.never();
             assertEquals(new Outcome.Answered<>(false), wide.matches(subject, all), subject);
-            long says = asksOf(machine, subject);
-            assertTrue(all.asked >= says, "\"" + subject + "\" asked " + all.asked + " times, and says " + says);
+            assertEquals(asksOf(machine, subject), all.asked, subject);
         }
     }
 
     /**
      * A walk that keeps the sets of states it is in asks for each character, and where the set the
      * character leads to is not yet known, before it makes its room, for each state moved, step
-     * looked at, and state and step for no character it takes in, and for each place it looks for the
-     * set among those kept and each state of a kept one it holds against it.
+     * looked at, and state and step for no character it takes in, for each state of the set as it
+     * sums its hash, for each place it looks for the set among those kept and each state of a kept
+     * one it holds against it, and, where it keeps the set, for each state it looks at for one it
+     * may stop at.
      */
     @Test
     void aWalkKeepingItsSetsAsksAtEveryPlaceItSaysItDoes() {
@@ -140,8 +147,7 @@ class AMatchIsStoppedWhereItIsAskedTest {
             boolean accepted = machine.accepts(subject, Held.roomy());
             assertEquals(new Outcome.Answered<>(accepted),
                     StringPattern.of(machine).matches(subject, all), subject);
-            long says = asksRemembering(machine, subject);
-            assertTrue(all.asked >= says, "\"" + subject + "\" asked " + all.asked + " times, and says " + says);
+            asksRemembering(machine, subject).hold(all.asked, subject);
         }
     }
 
@@ -258,56 +264,97 @@ class AMatchIsStoppedWhereItIsAskedTest {
         return asks + here.size();
     }
 
+    /** The fewest and the most times a walk says it asks. */
+    record Asks(long fewest, long most) {
+
+        Asks plus(long fewer, long more) {
+            return new Asks(fewest + fewer, most + more);
+        }
+
+        void hold(long asked, String subject) {
+            assertTrue(fewest <= asked && asked <= most,
+                    "\"" + subject + "\" asked " + asked + " times, and says " + fewest + " to " + most);
+        }
+    }
+
     /**
      * How many times a walk that keeps the sets of states it is in says it asks over {@code subject},
      * on a pattern no walk has been run on yet, worked out over sets of states and apart from the
      * walk: once for each character; and where the set that character's class leads to from the one
-     * the walk is in is not yet known, once before the first such room is made, once for each state moved and
-     * each step looked at from one, as {@link #close} counts for each state taken in, and at least
-     * once as the set is looked for among those kept, and once more for each of its states where it
-     * is one of them. The walk starts in the set its first state is in, made with the pattern, and
-     * where that is empty it asks nothing.
+     * the walk is in is not yet known, once before the first such room is made, once for each state
+     * moved and each step looked at from one, as {@link #close} counts for each state taken in. Where
+     * that set has states, once for each as its hash is summed, and once for each slot looked in for
+     * it among those kept. Where it is one of them, once more for each of its states as it is held
+     * against them. Where it is not, it is kept, and its states are looked through for one the walk
+     * may stop at, once for each until one is found.
+     *
+     * <p>The slots looked in are the first, and past it one for each kept set in the way, which turns
+     * on where the hashes fall: at most every set kept but the one looked for. A kept set in the way
+     * with as many states may have the same hash, and is then held against the set too, once for each
+     * of its states at most. Where in the set the state it may stop at is turns on the order the walk
+     * put the states in, so finding it is once at fewest and once for each state at most. The walk
+     * starts in the set its first state is in, made with the pattern, and where that is empty it asks
+     * nothing.
      *
      * <p>A class is worked out here apart from the walk's: two symbols are in one where every set a
      * step of the machine is over holds both or neither ({@link #classOf}).
      */
-    static long asksRemembering(Automaton machine, String subject) {
+    static Asks asksRemembering(Automaton machine, String subject) {
         boolean[] live = live(machine);
-        long asks = 0;
+        Asks asks = new Asks(0, 0);
         boolean room = false;
         Set<Set<Integer>> kept = new java.util.HashSet<>();
         java.util.Map<List<Object>, Set<Integer>> known = new java.util.HashMap<>();
         Set<Integer> here = new LinkedHashSet<>();
         close(machine, live, Automaton.START, here);
         if (here.isEmpty()) {
-            return 0;
+            return asks;
         }
         kept.add(here);
         for (int at = 0; at < subject.length(); ) {
             int symbol = subject.codePointAt(at);
             at += Character.charCount(symbol);
-            asks++;
+            asks = asks.plus(1, 1);
             List<Object> key = List.of(here, classOf(machine, symbol));
             Set<Integer> there = known.get(key);
             if (there == null) {
                 if (!room) {
-                    asks++;
+                    asks = asks.plus(1, 1);
                     room = true;
                 }
                 there = new LinkedHashSet<>();
+                long moved = 0;
                 for (int state : here) {
-                    asks++;
+                    moved++;
                     for (Automaton.Step step : machine.stepsFrom(state)) {
-                        asks++;
+                        moved++;
                         if (step.over().has(symbol)) {
-                            asks += close(machine, live, step.to(), there);
+                            moved += close(machine, live, step.to(), there);
                         }
                     }
                 }
+                asks = asks.plus(moved, moved);
                 if (!there.isEmpty()) {
-                    asks++;
-                    if (!kept.add(there)) {
-                        asks += there.size();
+                    int size = there.size();
+                    boolean held = kept.contains(there);
+                    // Its hash, and the first slot looked in.
+                    asks = asks.plus(size + 1, size + 1);
+                    long inTheWay = 0;
+                    for (Set<Integer> other : kept) {
+                        if (!other.equals(there)) {
+                            inTheWay += 1 + (other.size() == size ? size : 0);
+                        }
+                    }
+                    asks = asks.plus(0, inTheWay);
+                    if (held) {
+                        asks = asks.plus(size, size);
+                    } else {
+                        kept.add(there);
+                        boolean stops = false;
+                        for (int state : there) {
+                            stops |= machine.stopsAt(state);
+                        }
+                        asks = asks.plus(stops ? 1 : size, size);
                     }
                 }
                 known.put(key, there);
