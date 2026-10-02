@@ -67,11 +67,18 @@ pub fn check_temporal(kind: TemporalKind, text: &str) -> Result<(), TemporalRefu
 /// A date, as [`read_date`] reads it.
 ///
 /// The readers are this crate's own, and not a rule the implementations share: the suite holds
-/// which text is admitted and not what it names, and an implementation in a language with date
-/// types builds its value from admitted text with them. Rust has none, so the readers give what
-/// [`check_temporal`] read, for a caller to build its own value from rather than read the text
-/// again. Each type is the fields that value needs and no more.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// which text is admitted and not what it names, and an implementation in a language whose
+/// standard library has date and time types builds its value from admitted text with them. Rust's
+/// standard library has none, and this crate depends on no date and time crate, so the readers
+/// give what [`check_temporal`] read, for a caller to build its own value from rather than read
+/// the text again.
+///
+/// Each type holds the fields a value is built from, and a fact of the text where both texts are
+/// admitted and a caller's own rule tells them apart: whether a time writes a fraction of a second
+/// ([`TemporalTime::nanosecond`]), which Souther refuses where Raoh reads it. A difference that no
+/// caller's rule tells apart is not kept: `Z`, `+00:00` and `-00:00` are the offset 0, a second
+/// left out is second 0, and a fraction's trailing zeros are not counted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct TemporalDate {
     /// The year, from [`YEAR_MIN`] to [`YEAR_MAX`].
@@ -83,7 +90,7 @@ pub struct TemporalDate {
 }
 
 /// A time of day, as [`read_time`] reads it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct TemporalTime {
     /// The hour, from 0 to 23.
@@ -92,12 +99,13 @@ pub struct TemporalTime {
     pub minute: u8,
     /// The second, from 0 to 59, and 0 where it is left out.
     pub second: u8,
-    /// The fraction of the second, in nanoseconds: its digits followed by zeros to nine.
-    pub nanosecond: u32,
+    /// The fraction of the second, in nanoseconds, where one is written: its digits followed by
+    /// zeros to nine, so `.000` is `Some(0)`. `None` where no fraction is written.
+    pub nanosecond: Option<u32>,
 }
 
 /// A date and a time of day, as [`read_date_time`] reads them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct TemporalDateTime {
     /// The date.
@@ -117,7 +125,7 @@ pub struct TemporalOffsetDateTime {
 }
 
 /// A moment, as [`read_instant`] reads it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct TemporalInstant {
     /// The seconds from 1970-01-01T00:00:00Z to the second at or before the moment, from
@@ -159,7 +167,7 @@ pub fn read_offset_date_time(text: &str) -> Result<TemporalOffsetDateTime, Tempo
 pub fn read_instant(text: &str) -> Result<TemporalInstant, TemporalRefusal> {
     admit(TemporalKind::Instant, text).map(|fields| TemporalInstant {
         epoch_second: fields.epoch_second,
-        nanosecond: fields.nanosecond,
+        nanosecond: fields.nanosecond.unwrap_or(0),
     })
 }
 
@@ -217,9 +225,8 @@ struct Fields {
     hour: i64,
     minute: i64,
     second: Option<i64>,
-    fraction: bool,
-    /// The fraction of the second, in nanoseconds.
-    nanosecond: u32,
+    /// The fraction of the second, in nanoseconds, where one is written.
+    nanosecond: Option<u32>,
     /// The moment an instant names, in seconds from the epoch, once it has been admitted.
     epoch_second: i64,
     /// Seconds from UTC, as written, and whether its minutes and seconds are those of a clock.
@@ -255,7 +262,7 @@ impl Fields {
     /// when nothing follows it.
     fn epoch_second(&self, second: i64) -> Option<i64> {
         let time_exists = if self.hour == 24 {
-            self.minute == 0 && second == 0 && !self.fraction
+            self.minute == 0 && second == 0 && self.nanosecond.is_none()
         } else {
             self.hour <= 23 && self.minute <= 59 && second <= 59
         };
@@ -360,9 +367,9 @@ impl Cursor<'_> {
                 if !(1..=9).contains(&digits.len()) {
                     return None;
                 }
-                fields.fraction = true;
                 // Nine digits are below 2^32; fewer are scaled up to nine.
-                fields.nanosecond = (number(digits) * 10_i64.pow(9 - digits.len() as u32)) as u32;
+                fields.nanosecond =
+                    Some((number(digits) * 10_i64.pow(9 - digits.len() as u32)) as u32);
             }
         }
         if matches!(kind, TemporalKind::OffsetDateTime | TemporalKind::Instant) {
@@ -476,13 +483,13 @@ mod tests {
         (d.year, d.month, d.day)
     }
 
-    fn time(text: &str) -> (u8, u8, u8, u32) {
+    fn time(text: &str) -> (u8, u8, u8, Option<u32>) {
         let t = read_time(text).unwrap();
         (t.hour, t.minute, t.second, t.nanosecond)
     }
 
     /// The date, the time and the offset read, as tuples.
-    type OffsetRead = ((i32, u8, u8), (u8, u8, u8, u32), i32);
+    type OffsetRead = ((i32, u8, u8), (u8, u8, u8, Option<u32>), i32);
 
     fn offset(text: &str) -> OffsetRead {
         let o = read_offset_date_time(text).unwrap();
@@ -513,11 +520,11 @@ mod tests {
 
     #[test]
     fn a_time_reads_a_second_left_out_as_0_and_a_fraction_as_nanoseconds() {
-        assert_eq!(time("00:00"), (0, 0, 0, 0));
-        assert_eq!(time("23:59:59"), (23, 59, 59, 0));
-        assert_eq!(time("12:34:56.5"), (12, 34, 56, 500_000_000));
-        assert_eq!(time("12:34:56.000000001"), (12, 34, 56, 1));
-        assert_eq!(time("12:34:56.123456789"), (12, 34, 56, 123_456_789));
+        assert_eq!(time("00:00"), (0, 0, 0, None));
+        assert_eq!(time("23:59:59"), (23, 59, 59, None));
+        assert_eq!(time("12:34:56.5"), (12, 34, 56, Some(500_000_000)));
+        assert_eq!(time("12:34:56.000000001"), (12, 34, 56, Some(1)));
+        assert_eq!(time("12:34:56.123456789"), (12, 34, 56, Some(123_456_789)));
         let dt = read_date_time("2026-09-30T23:59:59.999999999").unwrap();
         assert_eq!(
             (
@@ -526,7 +533,36 @@ mod tests {
                 dt.time.second,
                 dt.time.nanosecond
             ),
-            (2026, 30, 59, 999_999_999)
+            (2026, 30, 59, Some(999_999_999))
+        );
+    }
+
+    /// Souther refuses a time that writes a fraction, of nought too, where Raoh reads one; the
+    /// value alone cannot tell `.000` from no fraction, so the reader keeps which was written.
+    #[test]
+    fn a_fraction_of_nought_is_told_from_no_fraction() {
+        assert_eq!(read_time("09:30:00").unwrap().nanosecond, None);
+        assert_eq!(read_time("09:30:00.000").unwrap().nanosecond, Some(0));
+        assert_eq!(
+            read_time("09:30:00.5").unwrap().nanosecond,
+            Some(500_000_000)
+        );
+        let fraction = |text| read_date_time(text).unwrap().time.nanosecond;
+        assert_eq!(fraction("2026-09-30T09:30:00"), None);
+        assert_eq!(fraction("2026-09-30T09:30:00.000"), Some(0));
+        let fraction = |text| {
+            read_offset_date_time(text)
+                .unwrap()
+                .date_time
+                .time
+                .nanosecond
+        };
+        assert_eq!(fraction("2026-09-30T09:30:00Z"), None);
+        assert_eq!(fraction("2026-09-30T09:30:00.000Z"), Some(0));
+        // An instant is a moment: the fraction is its nanoseconds, written or not.
+        assert_eq!(
+            read_instant("2026-09-30T09:30:00.000Z").unwrap().nanosecond,
+            0
         );
     }
 
@@ -534,7 +570,7 @@ mod tests {
     fn a_date_time_with_an_offset_keeps_the_fields_written_and_the_offset_in_seconds() {
         assert_eq!(
             offset("+999999999-12-31T23:59:59-18:00"),
-            ((999_999_999, 12, 31), (23, 59, 59, 0), -64_800)
+            ((999_999_999, 12, 31), (23, 59, 59, None), -64_800)
         );
         assert_eq!(offset("2026-09-30T12:34:56+18:00").2, 64_800);
         assert_eq!(offset("2026-09-30T12:34:56+17:59:59").2, 64_799);
@@ -542,11 +578,11 @@ mod tests {
         assert_eq!(offset("2026-09-30T12:34:56Z").2, 0);
         assert_eq!(
             offset("2026-09-30T12:34:56.5-00:00"),
-            ((2026, 9, 30), (12, 34, 56, 500_000_000), 0)
+            ((2026, 9, 30), (12, 34, 56, Some(500_000_000)), 0)
         );
         assert_eq!(
             offset("2026-09-30T12:34+09:00"),
-            ((2026, 9, 30), (12, 34, 0, 0), 32_400)
+            ((2026, 9, 30), (12, 34, 0, None), 32_400)
         );
     }
 
