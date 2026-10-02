@@ -41,7 +41,8 @@ mod white_space;
 pub use case::{lowercase, lowercase_within, uppercase, uppercase_within};
 pub use normalization::{Form, normalize, normalize_within};
 pub use pattern::{
-    Pattern, PatternBeyond, PatternLimit, PatternRead, PatternRefusal, PatternRefused, read_pattern,
+    NotAnImage, Pattern, PatternBeyond, PatternLimit, PatternRead, PatternRefusal, PatternRefused,
+    read_pattern,
 };
 pub use temporal::{
     INSTANT_MAX, INSTANT_MIN, TemporalKind, TemporalRefusal, YEAR_MAX, YEAR_MIN, check_temporal,

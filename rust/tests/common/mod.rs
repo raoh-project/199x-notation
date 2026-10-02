@@ -50,6 +50,11 @@ impl Line {
         self.fields[i].clone()
     }
 
+    /// Whether field `i` is written as `value`, without reading it.
+    pub fn fields_equal(&self, i: usize, value: &str) -> bool {
+        self.fields[i] == value
+    }
+
     /// Whether field `i` is empty, without reading it.
     pub fn is_empty(&self, i: usize) -> bool {
         self.fields[i].is_empty()
@@ -92,6 +97,43 @@ impl Line {
                     self.wrong(i, "a text of scalar values in hex");
                     return String::new();
                 }
+            }
+        }
+        text
+    }
+
+    /// Reads a field as the text it shows: printable ASCII other than a space as itself, and any
+    /// other scalar value as `<U+XXXX>`, as `image/p1.txt` writes an image.
+    pub fn text_as_shown(&mut self, i: usize) -> String {
+        let field = self.take(i);
+        let mut text = String::new();
+        let mut rest = field.as_str();
+        while let Some(c) = rest.chars().next() {
+            if c == '<' {
+                let named = rest.find('>').map(|end| (&rest[1..end], end));
+                let scalar = named.and_then(|(named, _)| {
+                    let hex = named.strip_prefix("U+")?;
+                    let well_written = (4..=6).contains(&hex.len())
+                        && hex
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b));
+                    well_written
+                        .then(|| u32::from_str_radix(hex, 16).ok())
+                        .flatten()
+                        .and_then(char::from_u32)
+                });
+                let (Some(scalar), Some((_, end))) = (scalar, named) else {
+                    self.wrong(i, "printable ASCII and <U+XXXX> of a scalar value");
+                    return String::new();
+                };
+                text.push(scalar);
+                rest = &rest[end + 1..];
+            } else if ('\u{21}'..'\u{7F}').contains(&c) {
+                text.push(c);
+                rest = &rest[1..];
+            } else {
+                self.wrong(i, "printable ASCII other than a space, and <U+XXXX>");
+                return String::new();
             }
         }
         text

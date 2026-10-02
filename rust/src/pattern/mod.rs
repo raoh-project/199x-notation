@@ -2,6 +2,7 @@
 //! the strings a pattern accepts.
 
 mod anchors;
+mod image;
 mod machine;
 mod read;
 mod states;
@@ -10,6 +11,7 @@ mod tree;
 
 use alloc::string::{String, ToString};
 
+pub use image::NotAnImage;
 use machine::Machine;
 use read::Reader;
 
@@ -48,6 +50,22 @@ impl Pattern {
     /// steps as the machine has states, which for a pattern read from text is at most 250,000.
     pub fn matches(&self, subject: &str) -> bool {
         self.machine.matches(subject)
+    }
+
+    /// The pattern `image` is an image of, in the format P1 that `image/P1.md` in the repository
+    /// defines, or [`NotAnImage`] where it is not one: every rule of the format is asked before
+    /// anything is matched.
+    ///
+    /// The image is the machine another implementation built, written out so that it runs here, and
+    /// it accepts what the pattern it was written from accepts. It is held to the rules of the format
+    /// and not to the limits a pattern read from text is held to: a reader reads every image a writer
+    /// writes, and may read a longer one. A match walks the machine as it is written, as the set of
+    /// states it may be in, so each scalar value of the subject may cost as many steps as the image
+    /// has.
+    ///
+    /// The crate writes no image.
+    pub fn from_image(image: &str) -> Result<Pattern, NotAnImage> {
+        image::read(image).map(|machine| Pattern { machine })
     }
 }
 

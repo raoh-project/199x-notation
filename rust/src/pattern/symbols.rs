@@ -74,6 +74,18 @@ impl Symbols {
         Symbols::union_of(&[self.not(), those.clone()]).not()
     }
 
+    /// The set of `runs`, which are in order and apart, as an image writes them: two may be next to
+    /// each other, and are kept as two.
+    pub(crate) fn in_order(runs: Vec<(char, char)>) -> Symbols {
+        Symbols(runs)
+    }
+
+    /// Whether any scalar value from `first` to `last` is one of these.
+    pub(crate) fn meets(&self, first: char, last: char) -> bool {
+        let at = self.0.partition_point(|&(_, end)| end < first);
+        at < self.0.len() && self.0[at].0 <= last
+    }
+
     /// Whether `c` is one of these.
     pub(crate) fn has(&self, c: char) -> bool {
         crate::tables::within(&self.0, c)
