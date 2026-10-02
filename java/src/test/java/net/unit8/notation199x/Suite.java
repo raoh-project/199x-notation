@@ -12,7 +12,8 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * The vectors in {@code suite/} every implementation runs, read as {@code suite/README.md} states
+ * The vectors in {@code suite/} every implementation runs, and the fixtures of an image format in
+ * {@code image/} every implementation that reads it runs, read as {@code suite/README.md} states
  * them: a line of fields separated by {@code ;}, a text as its scalar values in hex, and before the
  * first line of vectors the sources every field is held to.
  *
@@ -63,6 +64,12 @@ public final class Suite {
         /** The field at {@code index} as the text it writes. */
         public String text(int index) {
             return Suite.text(take(index), where);
+        }
+
+        /** The field at {@code index} as it is written, for a file that says a field is written so,
+         *  as {@code image/p1.txt} writes an image. */
+        public String asWritten(int index) {
+            return take(index);
         }
 
         /** The field at {@code index} as the one scalar value it writes. */
@@ -140,8 +147,21 @@ public final class Suite {
      * @return the file and line of each wrong answer, with what was wrong
      */
     public static List<String> wrong(String name, int fields, Function<Line, @Nullable String> check) {
+        return wrong(Path.of("..", "suite", name), fields, check);
+    }
+
+    /**
+     * {@link #wrong(String, int, Function)} over {@code file}, a path from {@code java/}, for the
+     * fixtures of an image format, which are read as the suite is and are not in it.
+     *
+     * @param file   the file, {@code ../image/p1.txt}
+     * @param fields how many fields a line of it has
+     * @param check  what is wrong with the implementation on a line, or null where nothing is
+     * @return the file and line of each wrong answer, with what was wrong
+     */
+    public static List<String> wrong(Path file, int fields, Function<Line, @Nullable String> check) {
         List<String> wrong = new ArrayList<>();
-        for (Line line : read(name, fields)) {
+        for (Line line : read(file, fields)) {
             String said = check.apply(line);
             line.readWhole();
             if (said != null) {
@@ -151,8 +171,8 @@ public final class Suite {
         return wrong;
     }
 
-    private static List<Line> read(String name, int fields) {
-        Path file = Path.of("..", "suite", name);
+    private static List<Line> read(Path file, int fields) {
+        String name = file.getFileName().toString();
         if (!Files.exists(file)) {
             throw new IllegalStateException(file.toAbsolutePath() + " is missing: the tests run in java/");
         }
