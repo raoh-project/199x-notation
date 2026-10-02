@@ -35,12 +35,15 @@ import java.util.TreeSet;
  * @param sha256    the SHA-256 of each input, by its path under the UCD directory, in the order read
  * @param casing    what the default case conversion reads
  * @param decomposition what normalization reads
+ * @param normalizationDerived what normalization works out from {@code decomposition}, worked out
+ *                  here once so that an implementation whose run time would pay for working it
+ *                  out again can hold it instead
  * @param whiteSpace {@code White_Space}
  * @param patternEscapeAlphabet the characters a pattern keeps a backslash before for an escape: the
  *                  letters and the decimal digits, General_Category {@code L} and {@code Nd}
  */
 record UcdModel(String version, Map<String, String> sha256, Casing casing, Decomposition decomposition,
-                RangeSet whiteSpace, RangeSet patternEscapeAlphabet) {
+                NormalizationDerived normalizationDerived, RangeSet whiteSpace, RangeSet patternEscapeAlphabet) {
 
     /** The version every input is checked to be. */
     static final String VERSION = "18.0.0";
@@ -73,6 +76,18 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
     record Decomposition(CodePointMapping canonical, CodePointMapping compatibility,
                          CodePointIntMapping combiningClass, CodePoints scriptSpecificExclusions,
                          SortedMap<String, Integer> trivialLimits) {}
+
+    /**
+     * What normalization works out from the decompositions and the combining classes, rather than
+     * reads from the database: facts of the four forms an implementation may work out as it runs,
+     * or hold as generated.
+     *
+     * @param compositions the primary composites, each by the two code points it is canonically
+     *                     composed from: every two-member canonical decomposition whose first member
+     *                     is a starter and that is not a script-specific exclusion. Hangul's, which
+     *                     are arithmetic, are not here.
+     */
+    record NormalizationDerived(CodePointMapping compositions) {}
 
     /** A code point and the code points it maps to, by code point. */
     record CodePointMapping(SortedMap<Integer, int[]> entries) {}
@@ -118,9 +133,10 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
         List<String> propList = in.lines("PropList.txt", "PropList");
         List<String> derivedGeneralCategory =
                 in.lines("extracted/DerivedGeneralCategory.txt", "DerivedGeneralCategory");
+        Decomposition decomposition = decomposition(unicodeData, compositionExclusions, derivedNormalizationProps);
         return new UcdModel(VERSION, Collections.unmodifiableMap(in.sha256),
                 casing(unicodeData, specialCasing, derivedCoreProperties),
-                decomposition(unicodeData, compositionExclusions, derivedNormalizationProps),
+                decomposition, normalizationDerived(decomposition),
                 ranges(propList, Set.of("White_Space")),
                 ranges(derivedGeneralCategory, Set.of("Lu", "Ll", "Lt", "Lm", "Lo", "Nd")));
     }
@@ -341,6 +357,27 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
 
         return new Decomposition(new CodePointMapping(canonical), new CodePointMapping(compatibility),
                 new CodePointIntMapping(ccc), new CodePoints(scriptSpecific), trivialLimits);
+    }
+
+    /** What normalization works out from {@code decomposition}. The composition rule is the one
+     *  Full_Composition_Exclusion was checked against above: a singleton, a decomposition whose
+     *  first member is not a starter and a script-specific exclusion are no composite. */
+    private static NormalizationDerived normalizationDerived(Decomposition decomposition) {
+        SortedMap<Integer, Integer> ccc = decomposition.combiningClass().entries();
+        SortedSet<Integer> excluded = decomposition.scriptSpecificExclusions().members();
+        SortedMap<Integer, int[]> compositions = new TreeMap<>();
+        Map<List<Integer>, Integer> byPair = new LinkedHashMap<>();
+        decomposition.canonical().entries().forEach((cp, mapped) -> {
+            if (mapped.length == 2 && ccc.getOrDefault(mapped[0], 0) == 0 && !excluded.contains(cp)) {
+                Integer other = byPair.put(List.of(mapped[0], mapped[1]), cp);
+                if (other != null) {
+                    throw new IllegalStateException(hex(other) + " and " + hex(cp) + " are both composed from "
+                            + hex(mapped[0]) + " " + hex(mapped[1]));
+                }
+                compositions.put(cp, mapped);
+            }
+        });
+        return new NormalizationDerived(new CodePointMapping(compositions));
     }
 
     /** A quick check's values, by their short and long names in {@code PropertyValueAliases.txt}. */

@@ -61,8 +61,8 @@ final class PhpEmitter {
     private static String normalizationTables(UcdModel model) {
         UcdModel.Decomposition decomposition = model.decomposition();
         StringBuilder out = header(model, "NormalizationTables",
-                "Normalization's tables: the decompositions, the combining classes and the script-specific"
-                        + " composition exclusions, checked against DerivedNormalizationProps.txt's"
+                "Normalization's tables: the decompositions, the combining classes and the primary"
+                        + " composites, whose exclusions were checked against DerivedNormalizationProps.txt's"
                         + " Full_Composition_Exclusion when they were generated",
                 List.of("UnicodeData.txt", "CompositionExclusions.txt", "DerivedNormalizationProps.txt"));
         mapping(out, "CANONICAL", "The one-step canonical decomposition; a character not here has none",
@@ -82,16 +82,19 @@ final class PhpEmitter {
                 out.append("        ").append(character(cp)).append(" => ").append(value).append(",\n"));
         out.append("    ];\n\n");
 
+        // Held as generated rather than worked out as text is normalized: PHP keeps nothing it works
+        // out from one request to the next, and opcache keeps a constant.
+        UcdModel.CodePointMapping compositions = model.normalizationDerived().compositions();
         out.append("    /**\n");
-        out.append("     * CompositionExclusions.txt's script-specific exclusions, the composition eligibility\n");
-        out.append("     * UnicodeData.txt alone does not decide.\n");
+        out.append("     * The primary composites, by the two characters each is canonically composed from, written\n");
+        out.append("     * one after the other; Hangul's, which are arithmetic, are not here (")
+                .append(compositions.entries().size()).append(" composites).\n");
         out.append("     *\n");
-        out.append("     * @var list<string>\n");
+        out.append("     * @var array<string, string>\n");
         out.append("     */\n");
-        out.append("    public const SCRIPT_SPECIFIC_EXCLUSIONS = [\n");
-        for (int cp : decomposition.scriptSpecificExclusions().members()) {
-            out.append("        ").append(character(cp)).append(",\n");
-        }
+        out.append("    public const COMPOSITIONS = [\n");
+        compositions.entries().forEach((cp, pair) -> out.append("        \"").append(escape(pair[0]))
+                .append(escape(pair[1])).append("\" => ").append(character(cp)).append(",\n"));
         out.append("    ];\n\n");
 
         decomposition.trivialLimits().forEach((form, limit) -> {

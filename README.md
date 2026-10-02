@@ -130,11 +130,14 @@ build: taking a later Unicode version is a change to the specifications, not a d
 java gen/Generate.java ucd/18.0.0
 ```
 
-The generator reads the database once into one model, where every table is derived and checked
-against the properties Unicode publishes, and writes each language's tables from that model with an
-emitter of its own. An emitter decides how its language holds the data and nothing about Unicode, so
-every language's tables are the same data. No table is written by hand or read from a resource at
-run time.
+The generator reads the database once into one model, where every fact about Unicode is derived
+and checked against the properties Unicode publishes, and writes each language's tables from that
+model with an emitter of its own. An emitter decides which of the model's facts its implementation
+holds as generated and how its language holds them, and derives no fact about Unicode of its own, so
+every implementation answers from the same facts. Which facts are generated follows how long an
+implementation keeps what it works out: Go works out normalization's compositions from the
+decompositions once in a process, and PHP, which keeps nothing from one request to the next, holds
+them as generated. No table is written by hand or read from a resource at run time.
 
 The vectors in `suite/` are what every implementation is held to, in a format each language reads
 with its standard library; `suite/README.md` states it. The fixtures of a format in `image/` are

@@ -29,14 +29,6 @@ final class Composing
     private const FEW_MARKS = 32;
 
     /**
-     * The pair-composition table, by the two characters it composes written one after the other,
-     * worked out the first time it is asked for.
-     *
-     * @var array<string, string>|null
-     */
-    private static ?array $compositions = null;
-
-    /**
      * Each character's full decomposition, canonical and compatibility, as it is worked out.
      * Bounded by the characters the tables name.
      *
@@ -248,32 +240,6 @@ final class Composing
                 return Utf8::encode($s + ($c - self::T_BASE));
             }
         }
-        self::$compositions ??= self::compositions();
-        return self::$compositions[$starter . $character] ?? null;
-    }
-
-    /**
-     * The pair-composition table, inverted from the canonical decomposition rather than kept as a
-     * generated table of its own: every two-member canonical decomposition whose first member is a
-     * starter and whose result is not a script-specific exclusion. The other two
-     * Full_Composition_Exclusion categories, singleton and non-starter decompositions, are read off
-     * the decomposition and the combining classes themselves, so decomposition and composition
-     * cannot disagree. A pair is keyed by its two characters written one after the other, which is
-     * the decomposition as the table writes it.
-     *
-     * @return array<string, string>
-     */
-    private static function compositions(): array
-    {
-        $excluded = array_flip(NormalizationTables::SCRIPT_SPECIFIC_EXCLUSIONS);
-        $pairs = [];
-        foreach (NormalizationTables::CANONICAL as $from => $to) {
-            $parts = Utf8::split($to);
-            if (count($parts) === 2 && !isset(NormalizationTables::COMBINING_CLASSES[$parts[0]])
-                && !isset($excluded[$from])) {
-                $pairs[$to] = (string) $from;
-            }
-        }
-        return $pairs;
+        return NormalizationTables::COMPOSITIONS[$starter . $character] ?? null;
     }
 }
