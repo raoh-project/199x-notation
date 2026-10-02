@@ -1,6 +1,9 @@
 package notation199x
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
 func TestInvalidUTF8AtIsWhereTheFirstByteThatIsNoCharacterIs(t *testing.T) {
 	for text, at := range map[string]int{
@@ -67,4 +70,29 @@ func TestALeapSecondIsRefusedForWhatItIs(t *testing.T) {
 	if got := CheckTemporal(DateTime, "2016-12-31T23:59:60"); got != Malformed {
 		t.Errorf("a date-time with second 60 is %d", got)
 	}
+}
+
+// InvalidUTF8At answers as utf8.ValidString does, on every byte string of up to three bytes from
+// a set that holds every kind of byte a UTF-8 sequence has.
+func TestInvalidUTF8AtAgreesWithUTF8(t *testing.T) {
+	bytes := []byte{0x00, 'a', 0x7F, 0x80, 0xBF, 0xC0, 0xC2, 0xDF, 0xE0, 0xED, 0xEF, 0xF0, 0xF4, 0xF5, 0xFF, 0xA0, 0x9F}
+	var check func(prefix []byte)
+	check = func(prefix []byte) {
+		s := string(prefix)
+		at := InvalidUTF8At(s)
+		if (at < 0) != utf8.ValidString(s) || at >= 0 && utf8.ValidString(s[:at]) == false {
+			t.Fatalf("% x: %d", prefix, at)
+		}
+		if at >= 0 {
+			if r, size := utf8.DecodeRuneInString(s[at:]); r != utf8.RuneError || size != 1 {
+				t.Fatalf("% x: %d is not where it stops being UTF-8", prefix, at)
+			}
+		}
+		if len(prefix) < 3 {
+			for _, b := range bytes {
+				check(append(prefix, b))
+			}
+		}
+	}
+	check(nil)
 }
