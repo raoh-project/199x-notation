@@ -26,8 +26,9 @@ import net.unit8.notation199x.Normalization.Form;
  * long as the text without asking, so these hold that the rule asks while it looks, too.
  *
  * <p>How often each asks is what its class says, worked out here from the shape of the text, and each
- * asks at least that often. Every place a rule asks is counted in it and is a large part of it, so
- * a rule that stopped asking at any one of them would ask fewer times than it says.
+ * asks that often, neither less nor more. Every place a rule asks is counted in it and is a large
+ * part of it, so a rule that stopped asking at any one of them would ask fewer times than it says,
+ * and a place it asks that the count leaves out, and so nothing holds it to, would ask more.
  */
 class ARuleIsStoppedWhereItIsAskedTest {
 
@@ -76,7 +77,7 @@ class ARuleIsStoppedWhereItIsAskedTest {
             // without its two starters, written. Then the answer is made a string.
             long says = 2 + read + 2L * MANY + (composes ? MANY : 0)
                     + (answer.codePointCount(0, answer.length()) - 2) + 1;
-            assertTrue(all.asked >= says, form + " asked " + all.asked + " times, and says " + says);
+            assertEquals(says, all.asked, form + " asked " + all.asked + " times, and says " + says);
             // The last code point is asked about before it is read, and the run is settled after.
             for (long at : new long[] {1, read / 2, read, read + 1, all.asked}) {
                 assertInstanceOf(Outcome.Stopped.class,
@@ -95,7 +96,7 @@ class ARuleIsStoppedWhereItIsAskedTest {
         // Each code point mapped; for the sigma, the marks before it and the letter past them, and
         // the marks after it and the letter past those; then the answer made a string.
         long says = read + (MANY + 1) + (MANY + 1) + 1;
-        assertTrue(all.asked >= says, "asked " + all.asked + " times, and says " + says);
+        assertEquals(says, all.asked, "asked " + all.asked + " times, and says " + says);
         for (long at : new long[] {1, 3, MANY / 2, all.asked}) {
             assertInstanceOf(Outcome.Stopped.class,
                     CaseConversion.lowercaseWithin(LONG_LOOK, Long.MAX_VALUE, new Counting(at)),
