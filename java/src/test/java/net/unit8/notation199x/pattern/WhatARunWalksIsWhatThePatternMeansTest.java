@@ -192,7 +192,8 @@ class WhatARunWalksIsWhatThePatternMeansTest {
 
     /**
      * A deterministic machine whose classes are many, and whose ASCII characters are of few kinds,
-     * is past the table of its classes and still looks its ASCII characters up in one.
+     * is past the table of its classes and walks its rows' spans, and still looks its ASCII
+     * characters up in a table of their own.
      *
      * <p>Each place takes a letter or a character of its own past ASCII, so every place is a class of
      * its own, and ASCII is the letters and the rest.
@@ -205,7 +206,7 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         }
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
         StringPattern run = PatternMachine.of(meaning).pattern();
-        assertEquals(StringPattern.Way.ASCII_AND_RUNS, run.way());
+        assertEquals(StringPattern.Way.ASCII_AND_SPANS, run.way());
 
         assertTrue(run.matches("a".repeat(600)));
         assertTrue(run.matches("a".repeat(300) + "\u022C" + "a".repeat(299)));

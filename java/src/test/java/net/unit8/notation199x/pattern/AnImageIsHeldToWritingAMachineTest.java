@@ -15,8 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * pattern that was read answers every text it is asked about, and what a writer writes is an image
  * that is read.
  *
- * <p>An image is: the format's marker, the kind, the sets (each a count of runs and the runs), the states, and for each
- * state whether a walk stops there, its steps as a set and a state, and its free steps.
+ * <p>Each image is held to the rules of the format its marker names before anything is matched;
+ * what those are is {@code image/P1.md}'s and {@code image/P2.md}'s, and not this.
  */
 class AnImageIsHeldToWritingAMachineTest {
 
@@ -84,28 +84,33 @@ class AnImageIsHeldToWritingAMachineTest {
         assertEquals(true, StringPattern.of(ahead.image()).matches("a"));
     }
 
+    /**
+     * A machine made deterministic is written as P2 from its rows as they are, and read back as the
+     * same rows; and an image past its limit is not written.
+     */
     @Test
-    void aP2WriterWritesOnlyWhatIsRead() {
-        SymbolPartition classes = SymbolPartition.ofPieces(new int[] {96, 97, 0x10FFFF}, new int[] {0, 1, 0}, 2);
+    void aMachineMadeDeterministicIsWrittenAsItsRows() {
+        Automaton machine = java.util.Objects.requireNonNull(java.util.Objects.requireNonNull(Automaton.of(
+                ((PatternRead.Read) PatternParser.read("a+")).meaning(), Held.roomy())).canonical(Held.roomy()));
+        ClassRows rows = ClassRows.of(machine);
+        List<String> image = java.util.Objects.requireNonNull(StringPattern.imageOfP2(rows, 1_000));
+        // a+: class 0 is every scalar value but a and class 1 is a; state 1 is where a walk that
+        // read anything but a is, and leads to itself.
+        assertEquals(List.of("P2,96,0,97,1,1114111,0,3,0,0,1,1,2,0,1,1,1,0,1,1,2"), image);
+        StringPattern read = StringPattern.of(image);
+        assertTrue(read.matches("aa"));
+        assertFalse(read.matches("ab"));
+        assertEquals(StringPattern.Way.TABLE, read.way());
+        assertEquals(null, StringPattern.imageOfP2(rows, image.get(0).length() - 1));
+        assertEquals(image, StringPattern.imageOfP2(rows, image.get(0).length()));
+    }
 
-        StringPattern.P2Writer none = new StringPattern.P2Writer(classes, 2, 1_000);
-        none.state(false, each -> each == 1 ? 1 : 0);
-        assertThrows(IllegalStateException.class, none::image);
-
-        StringPattern.P2Writer noSuchState = new StringPattern.P2Writer(classes, 1, 1_000);
-        assertThrows(IllegalStateException.class, () -> noSuchState.state(true, each -> 1));
-
-        StringPattern.P2Writer more = new StringPattern.P2Writer(classes, 1, 1_000);
-        more.state(true, each -> 0);
-        assertThrows(IllegalStateException.class, () -> more.state(true, each -> 0));
-
-        // a+, with the state no walk is accepted from written last.
-        StringPattern.P2Writer sound = new StringPattern.P2Writer(classes, 3, 1_000);
-        sound.state(false, each -> each == 1 ? 1 : 2);
-        sound.state(true, each -> each == 1 ? 1 : 2);
-        sound.state(false, each -> 2);
-        assertEquals(List.of("P2,96,0,97,1,1114111,0,3,0,0,2,1,1,1,0,2,1,1,0,1,2"), sound.image());
-        assertTrue(StringPattern.of(sound.image()).matches("aa"));
+    /** A machine that is not made deterministic has no rows to be written from. */
+    @Test
+    void aMachineNotMadeDeterministicHasNoRows() {
+        Automaton shaped = java.util.Objects.requireNonNull(Automaton.of(
+                ((PatternRead.Read) PatternParser.read("a+")).meaning(), Held.roomy()));
+        assertThrows(IllegalArgumentException.class, () -> ClassRows.of(shaped));
     }
 
     /** A class on both sides of the surrogates, or in pieces nothing comes between, is one piece of

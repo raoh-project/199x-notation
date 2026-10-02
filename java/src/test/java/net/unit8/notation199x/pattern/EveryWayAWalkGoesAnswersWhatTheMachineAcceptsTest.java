@@ -176,17 +176,21 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
     }
 
     /** {@code machine} written as an image of P2 and read back, walked over a table and, where
-     *  the budget gives it none, over the spans the image writes. */
+     *  the budget gives it none, over the spans the image writes, with and without ASCII looked up
+     *  in a table of its own and with and without the classes' tables. */
     private static List<StringPattern> everyWayOfP2(Automaton machine) {
         List<String> image = ((PatternImage.Written) PatternImages.p2(machine)).strings();
         StringPattern.Budget given = StringPattern.Budget.DEFAULT;
         StringPattern.Budget noTable = new StringPattern.Budget(given.classWork(), 0,
                 given.asciiEntries(), given.runs(), given.subsets(), given.remembered());
-        StringPattern.Budget noClasses = new StringPattern.Budget(0, given.tableEntries(),
-                given.asciiEntries(), given.runs(), given.subsets(), given.remembered());
+        StringPattern.Budget noAscii = new StringPattern.Budget(given.classWork(), 0, 0,
+                given.runs(), given.subsets(), given.remembered());
+        StringPattern.Budget noClasses = new StringPattern.Budget(0, given.tableEntries(), 0,
+                given.runs(), given.subsets(), given.remembered());
         return List.of(
                 wayOfP2(StringPattern.Way.TABLE, image, given),
-                wayOfP2(StringPattern.Way.SPANS, image, noTable),
+                wayOfP2(StringPattern.Way.ASCII_AND_SPANS, image, noTable),
+                wayOfP2(StringPattern.Way.SPANS, image, noAscii),
                 wayOfP2(StringPattern.Way.SPANS, image, noClasses));
     }
 

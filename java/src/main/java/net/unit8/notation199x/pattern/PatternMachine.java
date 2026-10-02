@@ -18,16 +18,20 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>The deterministic machine where making it stays within {@link #deterministicRun}; otherwise
  * the machine the pattern's shape builds, steps for nothing and all. Both accept the same strings,
- * so which one is held decides how fast a run is and nothing about its answer.
+ * so which one is held decides how fast a run is and nothing about its answer. The deterministic
+ * machine is run and written as its classes and rows ({@link ClassRows}), which are what making it
+ * proved: they are taken from it once, and neither a run nor an image works them out again.
  */
 public final class PatternMachine {
 
     private final Automaton shaped;
     private final @Nullable Automaton deterministic;
+    private final @Nullable ClassRows rows;
 
     private PatternMachine(Automaton shaped, @Nullable Automaton deterministic) {
         this.shaped = shaped;
         this.deterministic = deterministic;
+        this.rows = deterministic == null ? null : ClassRows.of(deterministic);
     }
 
     /**
@@ -89,9 +93,7 @@ public final class PatternMachine {
      * @return the matcher
      */
     public StringPattern pattern() {
-        return deterministic != null
-                ? StringPattern.of(deterministic, true)
-                : StringPattern.of(shaped, false);
+        return rows != null ? StringPattern.of(rows) : StringPattern.of(shaped, false);
     }
 
     /**
@@ -112,8 +114,8 @@ public final class PatternMachine {
      * @return the image, or {@link PatternImage.MoreCharacters} where it is too large
      */
     public PatternImage image() {
-        if (deterministic != null) {
-            PatternImage one = PatternImages.p2(deterministic);
+        if (rows != null) {
+            PatternImage one = PatternImages.p2(rows);
             if (one instanceof PatternImage.Written) {
                 return one;
             }

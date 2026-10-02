@@ -22,7 +22,13 @@ final class PatternImages {
      *  {@link PatternImage.MoreCharacters} where it would take more than
      *  {@link PatternImage#MOST_CHARACTERS}. */
     static PatternImage p2(Automaton machine) {
-        return image(writtenAsP2(machine));
+        return p2(ClassRows.of(machine));
+    }
+
+    /** {@code rows} written out as P2; or {@link PatternImage.MoreCharacters} where it would take
+     *  more than {@link PatternImage#MOST_CHARACTERS}. */
+    static PatternImage p2(ClassRows rows) {
+        return image(StringPattern.imageOfP2(rows, PatternImage.MOST_CHARACTERS));
     }
 
     /** {@code machine} written out as P1, as one that is not deterministic whatever it is; or
@@ -62,24 +68,11 @@ final class PatternImages {
      * {@code machine}'s image of P2, or null where it would take more than
      * {@link PatternImage#MOST_CHARACTERS}.
      *
-     * <p>Asked of a machine made deterministic, which holds where each of its classes leads from
-     * each state ({@link Automaton#classesOfWalk}); those are written as they are, and nothing is
-     * worked out again from its steps. Stopped where the writer says it is past its limit, which is
-     * before the next state is written.
+     * <p>Asked of a machine made deterministic, whose classes and rows are written as they are
+     * ({@link ClassRows#of(Automaton)}): nothing is worked out again from its steps.
      */
     private static @Nullable List<String> writtenAsP2(Automaton machine) {
-        SymbolPartition classes = machine.classesOfWalk();
-        if (classes == null) {
-            throw new IllegalArgumentException("an image of P2 is written of a machine made"
-                    + " deterministic");
-        }
-        StringPattern.P2Writer out = new StringPattern.P2Writer(classes, machine.size(),
-                PatternImage.MOST_CHARACTERS);
-        for (int state = 0; state < machine.size() && out.holds(); state++) {
-            int from = state;
-            out.state(machine.stopsAt(state), each -> machine.leadsTo(from, each));
-        }
-        return out.holds() ? out.image() : null;
+        return StringPattern.imageOfP2(ClassRows.of(machine), PatternImage.MOST_CHARACTERS);
     }
 
     /**

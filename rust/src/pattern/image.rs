@@ -4,8 +4,8 @@ use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use super::class_rows::ClassRows;
 use super::machine::Machine;
-use super::spans::Spans;
 use super::symbols::Symbols;
 
 /// Text that is not an image of a format this reads.
@@ -20,11 +20,11 @@ impl core::fmt::Display for NotAnImage {
 
 impl core::error::Error for NotAnImage {}
 
-/// What an image was read as: a machine of sets and steps from an image of P1, or the pieces and
-/// spans of an image of P2, each walked its own way.
+/// What an image was read as: a machine held as its steps from an image of P1, or as its classes
+/// and rows from an image of P2, each walked its own way.
 pub(crate) enum Read {
     Steps(Machine),
-    Spans(Spans),
+    Rows(ClassRows),
 }
 
 /// The machine `image` is an image of, in the format its marker names, or [`NotAnImage`] where it is
@@ -40,7 +40,7 @@ pub(crate) fn read(image: &str) -> Result<Read, NotAnImage> {
     if image.starts_with("P1") {
         read_p1(&mut numbers).map(Read::Steps)
     } else if image.starts_with("P2") {
-        read_p2(&mut numbers).map(Read::Spans)
+        read_p2(&mut numbers).map(Read::Rows)
     } else {
         Err(NotAnImage)
     }
@@ -91,7 +91,7 @@ fn read_p1(numbers: &mut Numbers<'_>) -> Result<Machine, NotAnImage> {
 /// so what this does is as long as the image. The pieces end at U+10FFFF and a state's spans at the
 /// greatest class, and neither is counted; the states are, and nothing is made ready for them
 /// before they are read.
-fn read_p2(numbers: &mut Numbers<'_>) -> Result<Spans, NotAnImage> {
+fn read_p2(numbers: &mut Numbers<'_>) -> Result<ClassRows, NotAnImage> {
     let mut lasts: Vec<u32> = Vec::new();
     let mut classes: Vec<u32> = Vec::new();
     let mut greatest = 0;
@@ -144,7 +144,7 @@ fn read_p2(numbers: &mut Numbers<'_>) -> Result<Spans, NotAnImage> {
     if !numbers.done() {
         return Err(NotAnImage);
     }
-    Ok(Spans::new(
+    Ok(ClassRows::new(
         lasts,
         classes,
         accepting,

@@ -28,24 +28,33 @@ import java.lang.invoke.VarHandle;
  * ({@link #of}). So nothing in a match decides what a pattern means, and no engine's way of finding
  * a match is involved in the answer.
  *
- * <p>A walk reads each character of the subject once, holds no stack and never goes back. The
- * symbols are put into the classes the machine's steps tell apart ({@link SymbolClasses}), and a
- * character is looked up as its class. Where the machine is deterministic and its table is within
- * what a pattern may spend ({@link Budget}), a character is then one more lookup, of where its
- * class leads; without the table, a search of the state's runs. Otherwise the walk is in a set of
- * states, and where a class leads from a set is worked out the first time a walk needs it, by moving
- * each state of the set, a state being put in the set at most once; it is kept with the set, so a
- * walk that comes to it again looks it up as over a table. The sets kept are bounded, and a walk
- * that would need one more goes on moving each state it is in for every character. Whether a
- * machine is deterministic is the machine's, and is held to it whatever the budget; how it is
- * walked is the budget's, and a deterministic machine past both its table and its runs is walked as
- * sets of states as any other is. Which machine is
- * run is {@link PatternMachine}'s choice and changes no answer: a pattern whose deterministic machine
- * is too costly to make is run as the machine its shape builds, which has the states
- * {@link PatternStates} counts and no more.
+ * <p>A walk reads each character of the subject once, holds no stack and never goes back. A
+ * machine is held one of two ways, and each is walked its own way ({@link Way}); none of them
+ * decides an answer.
  *
- * <p>A symbol is a scalar value. Text holding half a surrogate pair is no text, and no set
- * in an image holds a surrogate, so such text is accepted by nothing.
+ * <p>A deterministic machine made here or read from an image of P2 is held as its classes and rows
+ * ({@link ClassRows}): every character is in one class, and every class leads one way from every
+ * state. A character is looked up as its class, and where that leads is one more lookup where the
+ * machine's table is within what a pattern may spend ({@link Budget}), and otherwise a search of the
+ * state's spans, ASCII being looked up in a table of its own where that is within the budget. Such
+ * a machine is never walked as sets of states.
+ *
+ * <p>Any other machine, the one a pattern's shape builds or one read from an image of P1, is held as
+ * its steps: sets of symbols each leading to a state, and steps for no character. The symbols are
+ * put into the classes the steps tell apart ({@link SymbolClasses}). Where an image of P1 said the
+ * machine is deterministic, which is held to it whatever the budget, it is walked one state at a
+ * time over a table or its runs while those are within the budget. Otherwise the walk is in a set
+ * of states, and where a class leads from a set is worked out the first time a walk needs it, by
+ * moving each state of the set, a state being put in the set at most once; it is kept with the set,
+ * so a walk that comes to it again looks it up as over a table. The sets kept are bounded, and a
+ * walk that would need one more goes on moving each state it is in for every character.
+ *
+ * <p>Which machine is run is {@link PatternMachine}'s choice and changes no answer: a pattern whose
+ * deterministic machine is too costly to make is run as the machine its shape builds, which has the
+ * states {@link PatternStates} counts and no more.
+ *
+ * <p>A symbol is a scalar value. Text holding half a surrogate pair is no text, and no set or
+ * class holds a surrogate, so such text is accepted by nothing.
  *
  * <p>A match can also be run with a {@link Checkpoint}, for a caller that may have to stop it part
  * of the way through ({@link #matches(String, Checkpoint)}). It asks before each character of the
@@ -60,7 +69,8 @@ import java.lang.invoke.VarHandle;
  * looks through for one it may stop at.
  *
  * <p>That is the whole of what a match does that grows with the subject or the machine. Between two
- * asks the work is a search of a state's steps or of the classes past the Basic Multilingual Plane.
+ * asks the work is a search of a state's steps or spans, or of the classes past the Basic
+ * Multilingual Plane.
  */
 public final class StringPattern implements Predicate<String> {
 
@@ -74,8 +84,9 @@ public final class StringPattern implements Predicate<String> {
      */
     public static final int CHUNK = 65_535;
 
-    /** Whether a walk is only ever in one state: the machine was said to be, and was held to it
-     *  ({@link #oneWay}). How it is walked is the {@link Budget}'s, and this is not. */
+    /** Whether a walk is only ever in one state: the machine is one by its {@link #rows}, or was
+     *  said to be one by its steps and held to it ({@link #oneWay}). How it is walked is the
+     *  {@link Budget}'s, and this is not. */
     private final boolean deterministic;
 
     /** For each state, whether the walk may stop there. */
@@ -91,20 +102,27 @@ public final class StringPattern implements Predicate<String> {
      * be more than the {@link Budget} allows.
      *
      * <p>As many as the runs of the sets each state steps over, every state over again: a set many
-     * states step over is held once in {@link #over} and once a state here. So they are made only
-     * where a walk goes this way, and counted before they are.
+     * states step over is held once in {@link Steps#over} and once a state here. So they are made
+     * only where a walk goes this way, and counted before they are.
      */
     private final int @Nullable [][] runs;
 
-    /** For each state, the sets its steps are over, as {@code from, to} pairs: what a walk as sets
-     *  of states searches, and what every other way of walking is made from. */
-    private final int[][][] over;
+    /**
+     * A machine as its steps: for each state, the sets its steps are over, as {@code from, to}
+     * pairs, where each leads, and the states a walk is also in for no character. What a walk as
+     * sets of states searches, and what the other ways of walking such a machine are made from.
+     *
+     * <p>A machine read from an image of P1 or built from a pattern's shape is held so. A
+     * deterministic machine that has its {@link ClassRows} is held as those instead and has no
+     * steps: nothing about it is worked out from sets, and it is never walked as sets of states.
+     */
+    private record Steps(int[][][] over, int[][] target, int[][] free) {}
 
-    /** Where each of those steps leads. */
-    private final int[][] target;
+    /** The machine as its steps, or null where it is held as its {@link #rows}. */
+    private final @Nullable Steps steps;
 
-    /** For each state, the states a walk is also in for no character. */
-    private final int[][] free;
+    /** The machine as its classes and rows, or null where it is held as its {@link #steps}. */
+    private final @Nullable ClassRows rows;
 
     /**
      * What a pattern may spend on walking faster than one state, or one set of states, a character
@@ -166,8 +184,11 @@ public final class StringPattern implements Predicate<String> {
         ASCII_AND_RUNS,
         /** One state at a time, each character a search of the steps. */
         RUNS,
-        /** One state at a time, each character a search of the pieces for its class and of the
-         *  state's spans for where that leads: a machine read from an image of P2 with no table. */
+        /** One state at a time, an ASCII character a lookup and any other a lookup of its class and
+         *  a search of the state's spans: a machine held as its {@link ClassRows} with no table. */
+        ASCII_AND_SPANS,
+        /** One state at a time, each character a lookup of its class and a search of the state's
+         *  spans for where that leads: a machine held as its {@link ClassRows} with no table. */
         SPANS,
         /** One set of states at a time, kept with where each class leads from it. */
         SETS_KEPT,
@@ -234,50 +255,6 @@ public final class StringPattern implements Predicate<String> {
      */
     private record Ascii(byte[] kind, int kinds, int[] steps) {}
 
-    /** A machine read from an image of P2 as the image writes it, or null for any other. */
-    private final @Nullable Spans spans;
-
-    /**
-     * A deterministic machine as an image of P2 writes it: the classes as the pieces they are in,
-     * and each state's row as spans of classes. As large as the image and no larger, whatever the
-     * states times the classes come to, so a machine whose {@link Table} is past the {@link Budget}
-     * is walked over these.
-     *
-     * @param lasts   where each piece ends, ascending, the last at U+10FFFF
-     * @param classOf the class of each piece
-     * @param ends    for each state, the last class of each of its spans, ascending, the last the
-     *                greatest class
-     * @param to      for each state, where each of its spans leads
-     */
-    private record Spans(int[] lasts, int[] classOf, int[][] ends, int[][] to) {
-
-        /** The class {@code symbol} is in: that of the first piece that ends at it or after. */
-        int classAt(int symbol) {
-            return classOf[firstFrom(lasts, symbol)];
-        }
-
-        /** Where class {@code each} leads from {@code state}: the first span that ends at it or
-         *  after. */
-        int next(int state, int each) {
-            return to[state][firstFrom(ends[state], each)];
-        }
-
-        /** The first of {@code ascending} at {@code value} or past it, which there is. */
-        private static int firstFrom(int[] ascending, int value) {
-            int low = 0;
-            int high = ascending.length - 1;
-            while (low < high) {
-                int mid = (low + high) >>> 1;
-                if (ascending[mid] < value) {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
-            }
-            return low;
-        }
-    }
-
     /** The sets of states a walk has been found to be in, for a machine walked as sets of states:
      *  one that is not deterministic, or one that is and has neither a {@link #table} nor
      *  {@link #runs}. Null for any other, where there are no {@link #classes}, or where the first set
@@ -287,9 +264,9 @@ public final class StringPattern implements Predicate<String> {
     private StringPattern(boolean deterministic, boolean[] accepting, int[][][] over, int[][] target,
                           int[][] free, Budget budget) {
         this.accepting = accepting;
-        this.over = over;
-        this.target = target;
-        this.free = free;
+        Steps steps = new Steps(over, target, free);
+        this.steps = steps;
+        this.rows = null;
         this.live = live(accepting, target, free);
         // Worked out from this machine's own sets, so a machine has the same classes however it was
         // come to.
@@ -315,53 +292,83 @@ public final class StringPattern implements Predicate<String> {
                 ? runs(over, target) : null;
         this.ascii = runs != null ? ascii(runs, live, budget) : null;
         this.subsets = table == null && runs == null && classes != null && budget.subsets() > 0
-                ? subsets(classes, budget) : null;
-        this.spans = null;
+                ? subsets(steps, classes, budget) : null;
     }
 
     /**
-     * A machine read from an image of P2, walked over its {@link #table} where that is within
-     * {@code budget} and otherwise over its {@link #spans}.
+     * A deterministic machine held as its {@link ClassRows}, walked over its {@link #table} where
+     * that is within {@code budget} and otherwise over its rows' spans.
      *
-     * <p>Nothing is asked of it: the image cannot write a machine that leads a symbol two ways or
-     * none, so there is no {@link #oneWay} to hold it to. It has no sets, steps or free steps, which
-     * are what a walk as sets of states goes over, and it is never walked that way.
+     * <p>Nothing is asked of it: rows lead each class one way from each state by what they are, so
+     * there is no {@link #oneWay} to hold them to, and no class is worked out again from sets. It
+     * has no {@link #steps}, and is never walked as sets of states.
      */
-    private StringPattern(boolean[] accepting, Spans spans, int classCount, Budget budget) {
-        int states = accepting.length;
+    private StringPattern(ClassRows rows, Budget budget) {
+        int states = rows.states();
         this.deterministic = true;
-        this.accepting = accepting;
-        this.over = new int[states][0][];
-        this.target = new int[states][0];
-        this.free = new int[states][0];
-        this.live = live(accepting, spans.to(), this.free);
-        this.spans = spans;
+        this.accepting = new boolean[states];
+        for (int state = 0; state < states; state++) {
+            accepting[state] = rows.stopsAt(state);
+        }
+        this.live = rows.live();
+        this.steps = null;
+        this.rows = rows;
         SymbolClasses classes = null;
         if (budget.classWork() > 0) {
-            Meter.Making making = new Meter(1, 1, budget.classWork()).making();
-            classes = SymbolClasses.of(
-                    SymbolPartition.ofPieces(spans.lasts(), spans.classOf(), classCount), making);
+            classes = SymbolClasses.of(rows.partition(),
+                    new Meter(1, 1, budget.classWork()).making());
         }
         this.classes = classes;
-        this.table = classes != null && (long) states * classCount <= budget.tableEntries()
-                ? table(spans, live, classes) : null;
+        this.table = classes != null && (long) states * rows.classes() <= budget.tableEntries()
+                ? table(rows, live, classes) : null;
         this.runs = null;
-        this.ascii = null;
+        this.ascii = table == null ? ascii(rows, live, budget) : null;
         this.subsets = null;
     }
 
-    /** The {@link #table} of a machine read from an image of P2: each span fills the classes it
-     *  covers in its state's row. */
-    private static Table table(Spans spans, boolean[] live, SymbolClasses classes) {
+    /** The {@link Ascii} table of a machine held as its rows, or null where it would hold more than
+     *  the {@link Budget} allows. The kinds are the classes ASCII characters are in, each asked of
+     *  each state's spans once. */
+    private static @Nullable Ascii ascii(ClassRows rows, boolean[] live, Budget budget) {
+        byte[] kind = new byte[ASCII];
+        int[] classOfKind = new int[ASCII];
+        int kinds = 0;
+        for (int c = 0; c < ASCII; c++) {
+            int of = rows.classAt(c);
+            int found = 0;
+            while (found < kinds && classOfKind[found] != of) {
+                found++;
+            }
+            if (found == kinds) {
+                classOfKind[kinds++] = of;
+            }
+            kind[c] = (byte) found;
+        }
+        if ((long) rows.states() * kinds > budget.asciiEntries()) {
+            return null;
+        }
+        int[] steps = new int[rows.states() * kinds];
+        for (int state = 0; state < rows.states(); state++) {
+            for (int each = 0; each < kinds; each++) {
+                int to = rows.next(state, classOfKind[each]);
+                steps[state * kinds + each] = live[to] ? to : -1;
+            }
+        }
+        return new Ascii(kind, kinds, steps);
+    }
+
+    /** The {@link #table} of a machine held as its rows: each span fills the classes it covers in
+     *  its state's row. */
+    private static Table table(ClassRows rows, boolean[] live, SymbolClasses classes) {
         int width = classes.count();
-        int states = spans.ends().length;
+        int states = rows.states();
         int[] steps = new int[states * width];
         for (int state = 0; state < states; state++) {
             int each = 0;
-            for (int span = 0; span < spans.ends()[state].length; span++) {
-                int to = spans.to()[state][span];
+            for (int span = 0; span < rows.spans(state); span++) {
+                int to = rows.to(state, span);
                 int written = live[to] ? to * width : -1;
-                for (; each <= spans.ends()[state][span]; each++) {
+                for (; each <= rows.end(state, span); each++) {
                     steps[state * width + each] = written;
                 }
             }
@@ -377,8 +384,8 @@ public final class StringPattern implements Predicate<String> {
         if (runs != null) {
             return ascii != null ? Way.ASCII_AND_RUNS : Way.RUNS;
         }
-        if (spans != null) {
-            return Way.SPANS;
+        if (rows != null) {
+            return ascii != null ? Way.ASCII_AND_SPANS : Way.SPANS;
         }
         return subsets != null ? Way.SETS_KEPT : Way.EVERY_STATE;
     }
@@ -597,10 +604,10 @@ public final class StringPattern implements Predicate<String> {
     /** The {@link #subsets} of a machine walked as sets of states, holding the one a walk starts
      *  in: the first state and every live one it reaches for no character. Null where that set is
      *  past what the sets kept may hold, and every walk moves each state for every character. */
-    private @Nullable Subsets subsets(SymbolClasses classes, Budget budget) {
+    private @Nullable Subsets subsets(Steps steps, SymbolClasses classes, Budget budget) {
         Room room = new Room(accepting.length);
         room.round = 1;
-        int count = close(0, room.there, 0, room, null);
+        int count = close(steps, 0, room.there, 0, room, null);
         return Subsets.of(classes, budget, room, count);
     }
 
@@ -671,7 +678,7 @@ public final class StringPattern implements Predicate<String> {
      * <p>An image is written by one copy of this library and read by another: a compiler writes it
      * into a class, and the class runs against whichever release the program resolves. So a format
      * that a release has written is read by every release after it, and one is added here and none
-     * is taken away. Which format is written is the writers' ({@link P1Writer}, {@link P2Writer}),
+     * is taken away. Which format is written is the writers' ({@link P1Writer}, {@link #imageOfP2}),
      * apart from this, so that writing a new format does not stop the old ones being read.
      *
      * <p>A marker is written into images and outlives every name in this code, so it is a value of
@@ -854,8 +861,25 @@ public final class StringPattern implements Predicate<String> {
         if (!in.done()) {
             throw new IllegalArgumentException("an image holds one machine and nothing after it");
         }
-        return new StringPattern(accepting, new Spans(lasts.toArray(), classOf.toArray(), ends, to),
-                greatest + 1, budget);
+        return new StringPattern(new ClassRows(lasts.toArray(), classOf.toArray(), greatest + 1,
+                accepting, ends, to), budget);
+    }
+
+    /**
+     * What {@code rows} accepts, run as they are: a deterministic machine held as its classes and
+     * rows, whether it was read from an image of P2 or made here ({@link ClassRows#of(Automaton)}).
+     *
+     * @param rows the machine's rows
+     * @return the pattern
+     */
+    static StringPattern of(ClassRows rows) {
+        return of(rows, Budget.DEFAULT);
+    }
+
+    /** {@link #of(ClassRows)}, given {@code budget} to walk faster on, so that each {@link Way} a
+     *  walk over rows goes can be run. */
+    static StringPattern of(ClassRows rows, Budget budget) {
+        return new StringPattern(rows, budget);
     }
 
     /** Numbers read one at a time, as many as an image writes: a growing array, so that nothing is
@@ -933,12 +957,15 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * What {@code machine} accepts, run as it is: the machine a pattern is run as, held here without
-     * being written into an image and read back.
+     * What {@code machine} accepts, held as its steps and run as it is, without being written into
+     * an image and read back.
      *
-     * <p>For a caller that runs a pattern where it reads it, which has nowhere to carry an image to.
-     * The machine is one this package built, so what an image is checked for on the way in holds
-     * of it already, and a set a machine steps over twice is held once.
+     * <p>For the machine a pattern's shape builds, which a caller that runs a pattern where it reads
+     * it has nowhere to carry an image for. The machine is one this package built, so what an image
+     * is checked for on the way in holds of it already, and a set a machine steps over twice is held
+     * once. A machine made deterministic is run as its rows ({@link #of(ClassRows)}); said to be
+     * deterministic here, it is held as its steps as an image of P1 that says so is, and walked the
+     * ways such an image is.
      *
      * @param machine       the machine
      * @param deterministic whether it is one where a walk is only ever in one state, which has no
@@ -1080,16 +1107,21 @@ public final class StringPattern implements Predicate<String> {
         if (table != null) {
             return look(value, table, checkpoint);
         }
+        ClassRows byRows = rows;
+        if (byRows != null) {
+            return trace(value, byRows, checkpoint);
+        }
+        Steps bySteps = steps;
+        if (bySteps == null) {
+            throw new IllegalStateException("a machine is held as its rows or as its steps");
+        }
         if (runs != null) {
             return walk(value, runs, checkpoint);
         }
-        if (spans != null) {
-            return trace(value, spans, checkpoint);
-        }
         if (subsets != null) {
-            return remember(value, subsets, checkpoint);
+            return remember(bySteps, value, subsets, checkpoint);
         }
-        return spread(value, checkpoint);
+        return spread(bySteps, value, checkpoint);
     }
 
     /**
@@ -1163,22 +1195,30 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * One state at a time, over a machine read from an image of P2 with no {@link #table}: a
-     * character is a lookup of its class where there are {@link #classes} and otherwise a search of
-     * the pieces, and then a search of the state's spans for where that leads. Half a surrogate pair
-     * is in no piece and no class, and is accepted by nothing.
+     * One state at a time, over a machine held as its rows with no {@link #table}: an ASCII
+     * character is one lookup in the {@link Ascii} table where the machine has one, and any other a
+     * lookup of its class, in the {@link #classes} where there are some and otherwise in the rows,
+     * and then a search of the state's spans for where that leads. The table leads nowhere rather
+     * than to a state no walk is accepted from, so a walk stops at the same character either way.
+     * Half a surrogate pair is in no class, and is accepted by nothing.
      */
-    private boolean trace(String value, Spans spans, @Nullable Checkpoint checkpoint) {
+    private boolean trace(String value, ClassRows rows, @Nullable Checkpoint checkpoint) {
         @Nullable SymbolClasses known = classes;
+        @Nullable Ascii table = ascii;
         int state = 0;
         int at = 0;
         int length = value.length();
         while (at < length) {
             ask(checkpoint);
-            if (!live[state]) {
+            if (state < 0 || !live[state]) {
                 return false;
             }
             char unit = value.charAt(at);
+            if (table != null && unit < ASCII) {
+                state = table.steps()[state * table.kinds() + table.kind()[unit]];
+                at++;
+                continue;
+            }
             int each;
             if (known != null) {
                 each = unit < ASCII ? known.ascii(unit) : known.at(value, at);
@@ -1192,11 +1232,11 @@ public final class StringPattern implements Predicate<String> {
                     return false;
                 }
                 at += Character.charCount(symbol);
-                each = spans.classAt(symbol);
+                each = rows.classAt(symbol);
             }
-            state = spans.next(state, each);
+            state = rows.next(state, each);
         }
-        return accepting[state];
+        return state >= 0 && accepting[state];
     }
 
     /** Where {@code symbol} leads from a state whose runs are {@code runs}, or -1 where it leads
@@ -1233,7 +1273,7 @@ public final class StringPattern implements Predicate<String> {
      * ({@link Subset#stay}). The set with no state in it ({@link Subsets#nothing}) is where a walk's answer
      * is known to be no, and no walk goes on from it.
      */
-    private boolean remember(String value, Subsets known, @Nullable Checkpoint checkpoint) {
+    private boolean remember(Steps steps, String value, Subsets known, @Nullable Checkpoint checkpoint) {
         SymbolClasses classes = known.classes;
         Subset nothing = known.nothing;
         Subset in = known.start;
@@ -1259,10 +1299,10 @@ public final class StringPattern implements Predicate<String> {
                     ask(checkpoint);
                     room = new Room(accepting.length);
                 }
-                next = step(known, in, each, room, checkpoint);
+                next = step(steps, known, in, each, room, checkpoint);
                 if (next == null) {
                     System.arraycopy(in.states, 0, room.here, 0, in.states.length);
-                    return spread(value, at, room, in.states.length, checkpoint);
+                    return spread(steps, value, at, room, in.states.length, checkpoint);
                 }
             }
             at += Character.isHighSurrogate(unit) ? 2 : 1;
@@ -1281,7 +1321,7 @@ public final class StringPattern implements Predicate<String> {
 
     /** Where class {@code each} leads from {@code from}, worked out, kept and answered; or null where
      *  the set it leads to is one more than {@code known} keeps. */
-    private @Nullable Subset step(Subsets known, Subset from, int each, Room room,
+    private @Nullable Subset step(Steps steps, Subsets known, Subset from, int each, Room room,
                                   @Nullable Checkpoint checkpoint) {
         int symbol = known.classes.some(each);
         room.round++;
@@ -1290,11 +1330,12 @@ public final class StringPattern implements Predicate<String> {
         int count = 0;
         for (int state : from.states) {
             ask(checkpoint);
-            int[][] sets = over[state];
+            int[][] sets = steps.over()[state];
             for (int step = 0; step < sets.length; step++) {
                 ask(checkpoint);
                 if (holds(sets[step], symbol)) {
-                    count = close(target[state][step], room.there, count, room, checkpoint);
+                    count = close(steps, steps.target()[state][step], room.there, count, room,
+                            checkpoint);
                 }
             }
         }
@@ -1525,17 +1566,19 @@ public final class StringPattern implements Predicate<String> {
      * was last put in for. Once the subject is read, the states the walk ended in are looked through
      * for one it may stop at, and that is asked about as the rest of the walk is.
      */
-    private boolean spread(String value, @Nullable Checkpoint checkpoint) {
+    private boolean spread(Steps steps, String value, @Nullable Checkpoint checkpoint) {
         // The room a walk is held in is as large as the machine, and is made only once asked.
         ask(checkpoint);
         Room room = new Room(accepting.length);
         room.round = 1;
-        return spread(value, 0, room, close(0, room.here, 0, room, checkpoint), checkpoint);
+        return spread(steps, value, 0, room, close(steps, 0, room.here, 0, room, checkpoint),
+                checkpoint);
     }
 
     /** {@link #spread} from the {@code count} states first in {@code room.here}, with the subject
      *  read up to {@code from}. */
-    private boolean spread(String value, int from, Room room, int count, @Nullable Checkpoint checkpoint) {
+    private boolean spread(Steps steps, String value, int from, Room room, int count,
+                           @Nullable Checkpoint checkpoint) {
         int[] here = room.here;
         int[] there = room.there;
         int at = from;
@@ -1551,11 +1594,11 @@ public final class StringPattern implements Predicate<String> {
             for (int i = 0; i < count; i++) {
                 ask(checkpoint);
                 int state = here[i];
-                int[][] sets = over[state];
+                int[][] sets = steps.over()[state];
                 for (int step = 0; step < sets.length; step++) {
                     ask(checkpoint);
                     if (holds(sets[step], symbol)) {
-                        next = close(target[state][step], there, next, room, checkpoint);
+                        next = close(steps, steps.target()[state][step], there, next, room, checkpoint);
                     }
                 }
             }
@@ -1576,7 +1619,8 @@ public final class StringPattern implements Predicate<String> {
     /** {@code from} and every state it reaches for no character, put into {@code into} after its
      *  first {@code count}, where {@code room} has not put them in this round; answers how many it
      *  holds now. */
-    private int close(int from, int[] into, int count, Room room, @Nullable Checkpoint checkpoint) {
+    private int close(Steps steps, int from, int[] into, int count, Room room,
+                      @Nullable Checkpoint checkpoint) {
         int[] seen = room.seen;
         int round = room.round;
         if (seen[from] == round || !live[from]) {
@@ -1593,7 +1637,7 @@ public final class StringPattern implements Predicate<String> {
             into[held++] = state;
             room.hash += scatter(state);
             room.accepting |= accepting[state];
-            for (int to : free[state]) {
+            for (int to : steps.free()[state]) {
                 ask(checkpoint);
                 if (seen[to] != round && live[to]) {
                     seen[to] = round;
@@ -1630,7 +1674,7 @@ public final class StringPattern implements Predicate<String> {
      * <p>Private to this package. It writes every machine as one that is not deterministic, whatever
      * the machine is: an image of P1 that says its machine is deterministic is one a reader holds to
      * that at a cost the image's length does not bound, so no release writes one any more, and a
-     * deterministic machine is written as P2 ({@link P2Writer}). Such images an earlier release
+     * deterministic machine is written as P2 ({@link #imageOfP2}). Such images an earlier release
      * wrote are still read.
      *
      * <p>A set is written once however many steps are over it. The machine a pattern's shape builds
@@ -1789,111 +1833,28 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
-     * An image of P2 being written, of a deterministic machine walked one state at a time.
+     * {@code rows} written as an image of P2, cut into strings of at most {@link #CHUNK} characters;
+     * or null where it would take more than {@code mostCharacters}.
      *
-     * <p>The classes are the ones the machine's rows are over ({@link Automaton#classesOfWalk}),
-     * numbered as P2 numbers them, in the order their first piece comes in. Two pieces of one class
-     * that the surrogates or nothing at all come between are written as one, as two spans of a row
-     * that lead to one state are.
-     *
-     * <p>Bounded as it is written and not after, as {@link P1Writer} is: each state is written out
-     * as it is added, and a writer past its limit says so ({@link #holds}) so that whoever is
-     * writing stops there. The count of states is known before the first is written, so the
-     * characters are counted exactly.
+     * <p>Here beside the reader, so the format has one owner. The rows are written as they are: they
+     * are pieces and spans as P2 writes them, each next to one of another class or leading to
+     * another state, so nothing is worked out here and nothing here can write an image that is not
+     * one. Bounded as it is written and not after: writing stops at the first state that takes the
+     * image past its limit.
      */
-    static final class P2Writer {
-
-        private final long mostCharacters;
-        private final int states;
-        private final int width;
-        private final StringBuilder out = new StringBuilder();
-        private int written;
-
-        /**
-         * The pieces and the count of states, written at once.
-         *
-         * @param classes        the classes the machine's rows are over
-         * @param states         how many states the machine has, at least one
-         * @param mostCharacters the most characters the image may take
-         */
-        P2Writer(SymbolPartition classes, int states, long mostCharacters) {
-            if (states <= 0) {
-                throw new IllegalArgumentException("a machine has a state to start in");
-            }
-            this.mostCharacters = mostCharacters;
-            this.states = states;
-            this.width = classes.count();
-            out.append(ImageFormat.P2.marker());
-            int greatest = -1;
-            int lastClass = -1;
-            int lastAt = -1;
-            for (int piece = 0; piece < classes.pieces() && holds(); piece++) {
-                int of = classes.classOf(piece);
-                if (of < 0) {
-                    continue;
-                }
-                if (of > greatest + 1) {
-                    throw new IllegalStateException("the classes are numbered in the order their"
-                            + " first piece comes in, and class " + of + " comes after " + greatest);
-                }
-                greatest = Math.max(greatest, of);
-                int last = classes.from(piece + 1) - 1;
-                if (of == lastClass) {
-                    // One piece with the one before it: written again with where it now ends.
-                    out.setLength(lastAt);
-                } else {
-                    lastClass = of;
-                }
-                lastAt = out.length();
-                out.append(',').append(last).append(',').append(of);
-            }
-            out.append(',').append(states);
+    static @Nullable List<String> imageOfP2(ClassRows rows, long mostCharacters) {
+        StringBuilder out = new StringBuilder(ImageFormat.P2.marker());
+        for (int piece = 0; piece < rows.pieces() && out.length() <= mostCharacters; piece++) {
+            out.append(',').append(rows.last(piece)).append(',').append(rows.classOfPiece(piece));
         }
-
-        /** Whether what has been added so far still fits the image's limit. */
-        boolean holds() {
-            return out.length() <= mostCharacters;
+        out.append(',').append(rows.states());
+        for (int state = 0; state < rows.states() && out.length() <= mostCharacters; state++) {
+            out.append(',').append(rows.stopsAt(state) ? 1 : 0);
+            for (int span = 0; span < rows.spans(state); span++) {
+                out.append(',').append(rows.end(state, span)).append(',').append(rows.to(state, span));
+            }
         }
-
-        /**
-         * The next state, numbered from nought in the order they are added; the first is where a
-         * walk begins.
-         *
-         * @param stops   whether a walk may stop there
-         * @param leadsTo where each class leads from it
-         */
-        void state(boolean stops, java.util.function.IntUnaryOperator leadsTo) {
-            if (written == states) {
-                throw new IllegalStateException("a machine of " + states + " states has no more");
-            }
-            out.append(',').append(stops ? 1 : 0);
-            int to = leadsTo.applyAsInt(0);
-            for (int each = 1; each <= width; each++) {
-                int next = each < width ? leadsTo.applyAsInt(each) : -1;
-                if (next != to) {
-                    leadsToAState(to, states);
-                    if (to < 0) {
-                        throw new IllegalStateException("a step leads to a state");
-                    }
-                    out.append(',').append(each - 1).append(',').append(to);
-                    to = next;
-                }
-            }
-            written++;
-        }
-
-        /** The image, cut into strings of at most {@link #CHUNK} characters. Asked of a writer that
-         *  {@link #holds} and has been given every state. */
-        List<String> image() {
-            if (!holds()) {
-                throw new IllegalStateException("an image past its limit is not written out");
-            }
-            if (written != states) {
-                throw new IllegalStateException("a machine of " + states + " states is written as "
-                        + written);
-            }
-            return chunks(out);
-        }
+        return out.length() <= mostCharacters ? chunks(out) : null;
     }
 
     /** {@code image} cut into strings of at most {@link #CHUNK} characters. */

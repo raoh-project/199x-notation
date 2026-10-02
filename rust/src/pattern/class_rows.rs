@@ -6,20 +6,21 @@ use alloc::vec::Vec;
 /// gives one: a machine past it is walked over its spans.
 const MOST_ENTRIES: usize = 1 << 18;
 
-/// Where a walk goes from a state no walk is accepted from, in [`Spans::table`].
+/// Where a walk goes from a state no walk is accepted from, in [`ClassRows::table`].
 const DEAD: u32 = u32::MAX;
 
-/// A deterministic machine as an image of P2 writes it: the scalar values cut into pieces, each in
-/// a class, and each state's row as spans of classes, each leading to one state. Every scalar value
-/// is in one piece and every class in one span of each state, which the reader held the image to,
-/// so a walk is one state at a time and every character leads somewhere.
+/// A deterministic machine as its classes and rows, as an image of P2 writes it: the scalar values
+/// cut into pieces, each in a class, and each state's row as spans of classes, each leading to one
+/// state. Every scalar value is in one piece and every class in one span of each state, which the
+/// reader held the image to, so a walk is one state at a time and every character leads somewhere.
+/// Java holds a deterministic machine the same way, under the same name.
 ///
 /// What is held is as large as the image, and what is made from it to walk faster is bounded by it
 /// or by [`MOST_ENTRIES`]: the class of each ASCII character, which states a walk can still be
 /// accepted from, and, where the states times the classes are within [`MOST_ENTRIES`], a table of
 /// where each class leads from each state. A machine past that is walked over its spans, a scalar
 /// value two searches.
-pub(crate) struct Spans {
+pub(crate) struct ClassRows {
     /// Where each piece ends, ascending, the last at U+10FFFF, and the class of each.
     lasts: Vec<u32>,
     classes: Vec<u32>,
@@ -40,7 +41,7 @@ pub(crate) struct Spans {
     width: usize,
 }
 
-impl Spans {
+impl ClassRows {
     /// The machine of these pieces and spans, as the reader read them, with `width` classes.
     pub(crate) fn new(
         lasts: Vec<u32>,
@@ -50,7 +51,7 @@ impl Spans {
         ends: Vec<u32>,
         to: Vec<u32>,
         width: usize,
-    ) -> Spans {
+    ) -> ClassRows {
         let mut ascii = Box::new([0; 128]);
         let mut piece = 0;
         for (c, class) in ascii.iter_mut().enumerate() {
@@ -60,7 +61,7 @@ impl Spans {
             *class = classes[piece];
         }
         let live = live(&accepting, &starts, &to);
-        let mut spans = Spans {
+        let mut rows = ClassRows {
             lasts,
             classes,
             accepting,
@@ -72,7 +73,7 @@ impl Spans {
             table: Vec::new(),
             width,
         };
-        let states = spans.accepting.len();
+        let states = rows.accepting.len();
         if states
             .checked_mul(width)
             .is_some_and(|entries| entries <= MOST_ENTRIES)
@@ -80,22 +81,22 @@ impl Spans {
             let mut table = vec![DEAD; states * width];
             for q in 0..states {
                 let mut class = 0;
-                for span in spans.starts[q]..spans.starts[q + 1] {
-                    let leads = spans.to[span] as usize;
-                    let entry = if spans.live[leads] {
+                for span in rows.starts[q]..rows.starts[q + 1] {
+                    let leads = rows.to[span] as usize;
+                    let entry = if rows.live[leads] {
                         (leads * width) as u32
                     } else {
                         DEAD
                     };
-                    while class <= spans.ends[span] as usize {
+                    while class <= rows.ends[span] as usize {
                         table[q * width + class] = entry;
                         class += 1;
                     }
                 }
             }
-            spans.table = table;
+            rows.table = table;
         }
-        spans
+        rows
     }
 
     /// The class of `c`: by its byte where it is ASCII, and otherwise that of the first piece that
@@ -127,7 +128,7 @@ impl Spans {
         self.accepting[q]
     }
 
-    /// [`Spans::matches`] over the [`Spans::table`]: a scalar value is a lookup of its class and of
+    /// [`ClassRows::matches`] over the [`ClassRows::table`]: a scalar value is a lookup of its class and of
     /// where that leads.
     fn look(&self, subject: &str) -> bool {
         if !self.live[0] {
@@ -183,9 +184,8 @@ mod tests {
     use alloc::string::String;
 
     /// The machine `image` writes, read twice: once walked over its table and once over its spans.
-    fn both(image: &str) -> (Spans, Spans) {
-        let (Ok(Read::Spans(table)), Ok(Read::Spans(mut spans))) = (read(image), read(image))
-        else {
+    fn both(image: &str) -> (ClassRows, ClassRows) {
+        let (Ok(Read::Rows(table)), Ok(Read::Rows(mut spans))) = (read(image), read(image)) else {
             panic!("{image} is an image of P2");
         };
         assert!(!table.table.is_empty(), "{image} has a table");
