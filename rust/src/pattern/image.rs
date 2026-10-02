@@ -144,14 +144,15 @@ fn read_p2(numbers: &mut Numbers<'_>) -> Result<Spans, NotAnImage> {
     if !numbers.done() {
         return Err(NotAnImage);
     }
-    Ok(Spans {
+    Ok(Spans::new(
         lasts,
         classes,
         accepting,
         starts,
         ends,
         to,
-    })
+        greatest as usize + 1,
+    ))
 }
 
 /// The numbers of an image after its marker, each read after its comma.

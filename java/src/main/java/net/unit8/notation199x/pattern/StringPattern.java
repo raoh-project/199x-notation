@@ -1164,10 +1164,12 @@ public final class StringPattern implements Predicate<String> {
 
     /**
      * One state at a time, over a machine read from an image of P2 with no {@link #table}: a
-     * character is a search of the pieces for its class and of the state's spans for where that
-     * leads. Half a surrogate pair is in no piece, and is accepted by nothing.
+     * character is a lookup of its class where there are {@link #classes} and otherwise a search of
+     * the pieces, and then a search of the state's spans for where that leads. Half a surrogate pair
+     * is in no piece and no class, and is accepted by nothing.
      */
     private boolean trace(String value, Spans spans, @Nullable Checkpoint checkpoint) {
+        @Nullable SymbolClasses known = classes;
         int state = 0;
         int at = 0;
         int length = value.length();
@@ -1176,12 +1178,23 @@ public final class StringPattern implements Predicate<String> {
             if (!live[state]) {
                 return false;
             }
-            int symbol = value.codePointAt(at);
-            if (symbol >= Character.MIN_SURROGATE && symbol <= Character.MAX_SURROGATE) {
-                return false;
+            char unit = value.charAt(at);
+            int each;
+            if (known != null) {
+                each = unit < ASCII ? known.ascii(unit) : known.at(value, at);
+                if (each < 0) {
+                    return false;
+                }
+                at += Character.isHighSurrogate(unit) ? 2 : 1;
+            } else {
+                int symbol = value.codePointAt(at);
+                if (symbol >= Character.MIN_SURROGATE && symbol <= Character.MAX_SURROGATE) {
+                    return false;
+                }
+                at += Character.charCount(symbol);
+                each = spans.classAt(symbol);
             }
-            at += Character.charCount(symbol);
-            state = spans.next(state, spans.classAt(symbol));
+            state = spans.next(state, each);
         }
         return accepting[state];
     }
