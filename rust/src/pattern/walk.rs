@@ -1,5 +1,3 @@
-use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -13,6 +11,8 @@ const KNOWN_BYTES: usize = 2 << 20;
 const UNKNOWN: u32 = u32::MAX;
 /// The kept set no state is in, from which no string is accepted.
 const NONE: u32 = u32::MAX - 1;
+/// A slot of [`Cache::slots`] no kept set is in.
+const EMPTY: u32 = u32::MAX;
 
 /// What matches against one machine keep between them: the sets of states a walk has been in, and
 /// where each class of characters leads from them. These are the sets a deterministic machine would
@@ -24,11 +24,20 @@ const NONE: u32 = u32::MAX - 1;
 /// them saves nothing: the walk goes on without them, a state at a time, and so does every later
 /// match with this cache. A machine whose sets are large, or subjects that keep coming to new ones,
 /// are walked a state at a time as without them.
+///
+/// A set is the same set in whatever order its states were come to, so it is found by a hash that
+/// does not turn on the order, summed as its states are entered ([`Walk::enter`]), and told apart
+/// from another of the same hash by asking each of its states whether the walk has just entered it
+/// ([`Cache::same`]). Nothing here puts a set in order, and nothing goes over a set but those loops.
 pub(crate) struct Cache {
-    /// Each kept set's states, ascending, every free step already taken, and the set by its states.
-    sets: Vec<Box<[u32]>>,
-    index: BTreeMap<Box<[u32]>, u32>,
+    /// Each kept set's states, in the order the walk came to them, every free step already taken.
+    sets: Vec<Vec<u32>>,
+    /// Each kept set's hash, and whether a walk that ends in it accepts.
+    hashes: Vec<u32>,
     accepting: Vec<bool>,
+    /// The kept sets by their hashes, each slot a set's place in `sets` or [`EMPTY`], looked for
+    /// from the slot the hash names to the first empty one. Never more than half full.
+    slots: Vec<u32>,
     /// Where class `k` leads from the kept set whose row begins at `s` is `next[s + k]`: the place
     /// the row of the set it leads to begins, [`NONE`], or [`UNKNOWN`]. The set whose row begins at
     /// `s` is `sets[s / classes]`.
@@ -36,7 +45,7 @@ pub(crate) struct Cache {
     /// The kept set a walk starts in, where it is kept.
     start: Option<u32>,
     bytes: usize,
-    /// The sets made and the characters read since they were last forgotten.
+    /// The sets made and the bytes read since they were last forgotten.
     made: usize,
     read: usize,
     /// Whether keeping sets was given up on.
@@ -48,8 +57,9 @@ impl Cache {
     pub(crate) fn new() -> Cache {
         Cache {
             sets: Vec::new(),
-            index: BTreeMap::new(),
+            hashes: Vec::new(),
             accepting: Vec::new(),
+            slots: Vec::new(),
             next: Vec::new(),
             start: None,
             bytes: 0,
@@ -62,14 +72,18 @@ impl Cache {
                 pending: Vec::new(),
                 now: Vec::new(),
                 next: Vec::new(),
+                hash: 0,
+                accepting: false,
             },
         }
     }
 
+    /// Forgets every kept set. What is dropped is at most what [`KNOWN_BYTES`] holds.
     fn forget(&mut self) {
         self.sets.clear();
-        self.index.clear();
+        self.hashes.clear();
         self.accepting.clear();
+        self.slots.clear();
         self.next.clear();
         self.start = None;
         self.bytes = 0;
@@ -77,19 +91,27 @@ impl Cache {
         self.read = 0;
     }
 
-    /// Keeps the set `walk.now` holds, or answers `None` where keeping sets is given up on. The
-    /// second answer is whether the sets kept before were forgotten to make room for it.
-    fn keep(&mut self, classes: usize, machine: &Machine) -> Option<(u32, bool)> {
-        let now = &mut self.walk.now;
-        // A set is the same set in any order, and is kept by its states in order.
-        now.sort_unstable();
-        if now.is_empty() {
+    /// The kept set the walk has just come to, in `walk.next`, as the place its row begins: found
+    /// where it is kept, and otherwise kept now, the set moved out of the walk. `None` where keeping
+    /// sets is given up on, and the set is still in `walk.next`. The second answer is whether the sets
+    /// kept before were forgotten to make room for it.
+    fn keep(&mut self, classes: usize) -> Option<(u32, bool)> {
+        if self.walk.next.is_empty() {
             return Some((NONE, false));
         }
-        if let Some(&kept) = self.index.get(now.as_slice()) {
-            return Some((kept, false));
+        let hash = self.walk.hash;
+        if !self.slots.is_empty() {
+            let mask = self.slots.len() - 1;
+            let mut at = hash as usize & mask;
+            while self.slots[at] != EMPTY {
+                let kept = self.slots[at] as usize;
+                if self.hashes[kept] == hash && Cache::same(&self.sets[kept], &self.walk) {
+                    return Some(((kept * classes) as u32, false));
+                }
+                at = (at + 1) & mask;
+            }
         }
-        let cost = classes * 4 + now.len() * 8 + 64;
+        let cost = classes * 4 + self.walk.next.len() * 4 + 64;
         let mut forgot = false;
         if self.bytes + cost > KNOWN_BYTES {
             let gave_up = self.read < 10 * self.made || cost > KNOWN_BYTES;
@@ -100,86 +122,144 @@ impl Cache {
             }
             forgot = true;
         }
-        let states: Box<[u32]> = self.walk.now.as_slice().into();
+        let kept = self.sets.len();
+        if (kept + 1) * 2 > self.slots.len() {
+            self.grow();
+        }
+        let mask = self.slots.len() - 1;
+        let mut at = hash as usize & mask;
+        while self.slots[at] != EMPTY {
+            at = (at + 1) & mask;
+        }
+        self.slots[at] = kept as u32;
         // A kept set is named by where its row of `next` begins, so a step is one lookup and no
         // product.
-        let kept = self.next.len() as u32;
-        self.accepting
-            .push(states.iter().any(|&q| machine.accepting[q as usize]));
-        self.index.insert(states.clone(), kept);
-        self.sets.push(states);
-        self.next.resize(self.next.len() + classes, UNKNOWN);
+        let row = self.next.len() as u32;
+        for _ in 0..classes {
+            self.next.push(UNKNOWN);
+        }
+        self.sets.push(core::mem::take(&mut self.walk.next));
+        self.hashes.push(hash);
+        self.accepting.push(self.walk.accepting);
         self.bytes += cost;
         self.made += 1;
-        Some((kept, forgot))
+        Some((row, forgot))
+    }
+
+    /// Whether `held` is the set the walk has just entered: as many states, each entered in the
+    /// walk's generation, asked one at a time.
+    fn same(held: &[u32], walk: &Walk) -> bool {
+        if held.len() != walk.next.len() {
+            return false;
+        }
+        for &q in held {
+            if walk.entered[q as usize] != walk.generation {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Twice the slots, or sixteen, each kept set put in again by its hash. What is gone over is the
+    /// kept sets, at most what [`KNOWN_BYTES`] holds.
+    fn grow(&mut self) {
+        let size = (self.slots.len() * 2).max(16);
+        self.slots.clear();
+        for _ in 0..size {
+            self.slots.push(EMPTY);
+        }
+        let mask = size - 1;
+        for kept in 0..self.hashes.len() {
+            let mut at = self.hashes[kept] as usize & mask;
+            while self.slots[at] != EMPTY {
+                at = (at + 1) & mask;
+            }
+            self.slots[at] = kept as u32;
+        }
     }
 }
 
+/// A state's part of the hash of a set it is in, which is the same in whatever order the set's
+/// states are put in.
+fn scatter(q: u32) -> u32 {
+    let mixed = q.wrapping_mul(0x9E37_79B9);
+    mixed ^ (mixed >> 15)
+}
+
 /// The room a walk a state at a time works in: the generation each state was last entered in, the
-/// states the free steps are still to be followed from, and the sets of states it moves between.
+/// states the free steps are still to be followed from, the set the walk is in and the one it is
+/// coming to, and of that one, the hash and whether it accepts, summed as it is entered.
 struct Walk {
     entered: Vec<u32>,
     generation: u32,
     pending: Vec<u32>,
     now: Vec<u32>,
     next: Vec<u32>,
+    hash: u32,
+    accepting: bool,
 }
 
 impl Walk {
-    fn next_generation(&mut self, states: usize) {
-        if self.entered.len() != states {
-            self.entered = vec![0; states];
-            self.generation = 0;
+    /// Starts the set the walk comes to next, in a generation of its own.
+    fn next_set(&mut self, machine: &Machine) {
+        if self.entered.is_empty() {
+            self.entered = vec![0; machine.states()];
         }
         if self.generation == u32::MAX {
-            self.entered.fill(0);
+            for each in &mut self.entered {
+                *each = 0;
+            }
             self.generation = 0;
         }
         self.generation += 1;
+        self.next.clear();
+        self.hash = 0;
+        self.accepting = false;
     }
 
     /// Puts `q` in `next`, with every state the free steps reach from it, each once.
     fn enter(&mut self, machine: &Machine, q: u32) {
-        if self.entered[q as usize] == self.generation {
+        let add = |walk: &mut Walk, q: u32| {
+            if walk.entered[q as usize] == walk.generation {
+                return false;
+            }
+            walk.entered[q as usize] = walk.generation;
+            walk.next.push(q);
+            walk.hash = walk.hash.wrapping_add(scatter(q));
+            walk.accepting |= machine.accepting[q as usize];
+            true
+        };
+        if !add(self, q) {
             return;
         }
-        self.entered[q as usize] = self.generation;
-        self.next.push(q);
         self.pending.push(q);
         while let Some(from) = self.pending.pop() {
             for &to in machine.free_from(from as usize) {
-                if self.entered[to as usize] != self.generation {
-                    self.entered[to as usize] = self.generation;
-                    self.next.push(to);
+                if add(self, to) {
                     self.pending.push(to);
                 }
             }
         }
     }
 
-    /// The states the walk starts in, in `now`.
+    /// The states the walk starts in, in `next`.
     fn begin(&mut self, machine: &Machine) {
-        self.next_generation(machine.states());
-        self.next.clear();
+        self.next_set(machine);
         self.enter(machine, 0);
-        core::mem::swap(&mut self.now, &mut self.next);
     }
 
-    /// Moves the set the walk is in, `now`, over `c`: from each state, each step over it, and the
+    /// The states `from` leads to over `c`, in `next`: from each state, each step over it, and the
     /// states the free steps reach from where those lead. It is the one place states are moved, and
     /// its work is the steps out of the set and the states it comes to, at most the machine's.
-    fn advance(&mut self, machine: &Machine, c: char) {
-        self.next_generation(machine.states());
-        self.next.clear();
-        for at in 0..self.now.len() {
-            let q = self.now[at];
+    fn advance(&mut self, machine: &Machine, from: &[u32], c: char) {
+        self.next_set(machine);
+        for &q in from {
             for &(set, to) in machine.steps_from(q as usize) {
                 if machine.sets[set as usize].has(c) {
                     self.enter(machine, to);
                 }
             }
         }
-        core::mem::swap(&mut self.now, &mut self.next);
     }
 }
 
@@ -188,26 +268,32 @@ impl Walk {
 ///
 /// Every state the machine may be in is walked at once, a scalar value at a time, and nothing is gone
 /// back over, so a match takes time linear in the subject. Where the set the walk is in is kept, a
-/// character whose class has been read from it before is one lookup. A class not read from it before
-/// is worked out by moving each state of the set ([`Walk::advance`]), at most the machine's, and the
-/// set it comes to is kept besides, which puts it in order. Where sets are not kept, every character
-/// is worked out so. Every step of a match is taken in this loop or in what it calls.
+/// character whose class has been read from it before is one lookup, in [`run_known`]. A class not
+/// read from it before is worked out by moving each state of the set ([`Walk::advance`]), at most
+/// the machine's, and the set it comes to is looked for among the kept ones, or kept
+/// ([`Cache::keep`]). Where sets are not kept, every character is worked out so ([`walk_on`]).
+///
+/// The loops whose count turns on the subject, the machine or the kept sets are these, and no other:
+/// [`run_known`] and [`walk_on`] over the subject; [`Walk::advance`] and [`Walk::enter`] over the
+/// steps and free steps of the states they move; [`Cache::keep`] over the slots it looks in and the
+/// row it makes, [`Cache::same`] over a kept set, and [`Cache::grow`] over the kept sets; and
+/// [`Walk::next_set`], over every state, once in four billion sets.
 pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bool {
     let classes = machine.classes.count();
     if cache.off {
         cache.walk.begin(machine);
-        return walk_on(machine, cache, subject.chars());
+        return walk_on(machine, &mut cache.walk, subject.chars());
     }
     let mut at = match cache.start {
         Some(start) => start,
         None => {
             cache.walk.begin(machine);
-            match cache.keep(classes, machine) {
+            match cache.keep(classes) {
                 Some((start, _)) => {
                     cache.start = Some(start);
                     start
                 }
-                None => return walk_on(machine, cache, subject.chars()),
+                None => return walk_on(machine, &mut cache.walk, subject.chars()),
             }
         }
     };
@@ -223,14 +309,11 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
         if cache.next[slot] == NONE {
             return false;
         }
-        cache.walk.now.clear();
         cache
             .walk
-            .now
-            .extend_from_slice(&cache.sets[at as usize / classes]);
-        cache.walk.advance(machine, c);
+            .advance(machine, &cache.sets[at as usize / classes], c);
         i += c.len_utf8();
-        match cache.keep(classes, machine) {
+        match cache.keep(classes) {
             Some((next, forgot)) => {
                 if !forgot {
                     cache.next[slot] = next;
@@ -240,8 +323,8 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
                 }
                 at = next;
             }
-            // The walk goes on a state at a time from the set it came to, in `now`.
-            None => return walk_on(machine, cache, subject[i..].chars()),
+            // The walk goes on a state at a time from the set it came to, in `next`.
+            None => return walk_on(machine, &mut cache.walk, subject[i..].chars()),
         }
     }
 }
@@ -328,19 +411,18 @@ fn run_known(
     })
 }
 
-/// The rest of a match a state at a time, from the set `cache.walk.now` holds.
-fn walk_on(machine: &Machine, cache: &mut Cache, chars: core::str::Chars<'_>) -> bool {
+/// The rest of a match a state at a time, from the set the walk has just come to, in `walk.next`.
+fn walk_on(machine: &Machine, walk: &mut Walk, chars: core::str::Chars<'_>) -> bool {
     for c in chars {
-        if cache.walk.now.is_empty() {
+        if walk.next.is_empty() {
             return false;
         }
-        cache.walk.advance(machine, c);
+        core::mem::swap(&mut walk.now, &mut walk.next);
+        let from = core::mem::take(&mut walk.now);
+        walk.advance(machine, &from, c);
+        walk.now = from;
     }
-    cache
-        .walk
-        .now
-        .iter()
-        .any(|&q| machine.accepting[q as usize])
+    walk.accepting
 }
 
 #[cfg(test)]

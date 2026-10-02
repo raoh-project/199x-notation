@@ -11,9 +11,9 @@ the same way everywhere.
 
 ## Status
 
-The Java implementation is here, moved from Souther's runtime and compiler, and the Go
-implementation beside it. Souther, raoh-java and raoh-go do not depend on them yet, and both are held
-to `suite/`. The Rust and PHP implementations are not here yet. See the issues.
+The Java implementation is here, moved from Souther's runtime and compiler, and the Go and Rust
+implementations beside it. Souther, raoh-java, raoh-go and raoh-rust do not depend on them yet, and
+all three are held to `suite/`. The PHP implementation is not here yet. See the issues.
 
 ## What belongs here
 

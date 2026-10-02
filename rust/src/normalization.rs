@@ -80,11 +80,11 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
 /// [`normalize_within`] worked out by the algorithm from byte `from` of `text`, taking the text
 /// before it, `kept` scalar values long, as it is.
 ///
-/// The three steps are taken one combining run at a time, as the text is read, in this loop and the
-/// [`Composing`] it feeds; the scan for the trivial limit in [`normalize_within`] is the one other
-/// place a code point is read, and the putting in order in [`Composing::settle`] the one place the
-/// marks of a run are gone over. Each code point is decomposed as it arrives,
-/// the marks after a starter are held until the next starter, and then they are put in canonical
+/// The three steps are taken one combining run at a time, as the text is read. The text is gone over
+/// in the scan for the trivial limit in [`normalize_within`] and in this loop, a code point at a
+/// time, and the marks of a run, which may be as many as the text has, in [`Composing::order`],
+/// [`Composing::settle`] and [`Composing::write`], a mark at a time; no other loop turns on the text.
+/// Each code point is decomposed as it arrives, the marks after a starter are held until the next starter, and then they are put in canonical
 /// order and, in a composing form, composed into it. Canonical ordering never moves a mark past a
 /// starter, and composition joins a starter only to the marks after it or, where nothing is between
 /// them, to the starter after it, so a run settled when the next starter arrives is settled as the
@@ -107,6 +107,7 @@ fn normalize_from(
         written: kept,
         starter: None,
         marks: Vec::new(),
+        ordered: Vec::new(),
     };
     composing.out.push_str(&text[..from]);
     let mut parts = Vec::new();
@@ -130,6 +131,8 @@ struct Composing {
     written: usize,
     starter: Option<char>,
     marks: Vec<char>,
+    /// Where a long run's marks are put in order, kept between runs.
+    ordered: Vec<char>,
 }
 
 impl Composing {
@@ -160,10 +163,12 @@ impl Composing {
     }
 
     /// Puts the held marks in canonical order and, where the form composes, composes into the
-    /// starter each one nothing blocks; the marks left are those that did not compose.
+    /// starter each one nothing blocks; the marks left are those that did not compose. Each loop
+    /// here goes over the marks of the run one at a time.
     fn settle(&mut self) {
-        // Stable, so marks of one class keep the order they came in.
-        self.marks.sort_by_key(|mark| combining_class(*mark));
+        if self.marks.len() > 1 {
+            self.order();
+        }
         let Some(mut starter) = self.starter.filter(|_| self.composes) else {
             return;
         };
@@ -187,18 +192,69 @@ impl Composing {
         self.starter = Some(starter);
     }
 
-    /// Writes the starter and the marks after it, and empties the run.
+    /// Canonical ordering of the held marks: stable, by combining class. A run may be as long as the
+    /// text, so a long one is put in order by counting its classes, of which there are 256 at most,
+    /// in time linear in the run; a short one by insertion, which costs less there.
+    fn order(&mut self) {
+        let count = self.marks.len();
+        if count <= FEW_MARKS {
+            for i in 1..count {
+                let mark = self.marks[i];
+                let class = combining_class(mark);
+                let mut j = i;
+                while j > 0 && combining_class(self.marks[j - 1]) > class {
+                    self.marks[j] = self.marks[j - 1];
+                    j -= 1;
+                }
+                self.marks[j] = mark;
+            }
+            return;
+        }
+        let mut starts = [0usize; 257];
+        for i in 0..count {
+            starts[usize::from(combining_class(self.marks[i])) + 1] += 1;
+        }
+        for class in 1..starts.len() {
+            starts[class] += starts[class - 1];
+        }
+        self.ordered.clear();
+        for _ in 0..count {
+            self.ordered.push('\0');
+        }
+        for i in 0..count {
+            let mark = self.marks[i];
+            let place = &mut starts[usize::from(combining_class(mark))];
+            self.ordered[*place] = mark;
+            *place += 1;
+        }
+        core::mem::swap(&mut self.marks, &mut self.ordered);
+    }
+
+    /// Writes the starter and the marks after it, one at a time, and empties the run.
     fn write(&mut self) -> Option<()> {
-        let count = usize::from(self.starter.is_some()) + self.marks.len();
-        if count > self.longest - self.written {
+        if let Some(starter) = self.starter.take() {
+            self.write_one(starter)?;
+        }
+        for i in 0..self.marks.len() {
+            self.write_one(self.marks[i])?;
+        }
+        self.marks.clear();
+        Some(())
+    }
+
+    fn write_one(&mut self, c: char) -> Option<()> {
+        if self.written >= self.longest {
             return None;
         }
-        self.written += count;
-        self.out.extend(self.starter.take());
-        self.out.extend(self.marks.drain(..));
+        self.out.push(c);
+        self.written += 1;
         Some(())
     }
 }
+
+/// How many marks a run may hold before they are put in order by counting rather than by
+/// insertion, which is quadratic in the run.
+const FEW_MARKS: usize = 32;
 
 /// Unicode's canonical combining class of `c`: 0 for a starter, and for a mark the class canonical
 /// ordering sorts it by. No Hangul jamo or syllable has one other than 0.
@@ -354,4 +410,46 @@ const fn compositions() -> [(char, char, char); composition_count()] {
         i += 1;
     }
     pairs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs of every length from short to long, of marks of several classes: put in order by
+    /// insertion or by counting, they are in the order a stable sort by class puts them in.
+    #[test]
+    fn a_run_of_any_length_is_put_in_canonical_order() {
+        let marks = [
+            '\u{0301}',
+            '\u{0327}',
+            '\u{0316}',
+            '\u{0345}',
+            '\u{05B0}',
+            '\u{0300}',
+            '\u{1D167}',
+        ];
+        let mut seed = 1u64;
+        for length in 2..200 {
+            let mut composing = Composing {
+                composes: false,
+                longest: usize::MAX,
+                out: String::new(),
+                written: 0,
+                starter: None,
+                marks: Vec::new(),
+                ordered: Vec::new(),
+            };
+            for _ in 0..length {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                composing
+                    .marks
+                    .push(marks[(seed >> 33) as usize % marks.len()]);
+            }
+            let mut expected = composing.marks.clone();
+            expected.sort_by_key(|mark| combining_class(*mark));
+            composing.order();
+            assert_eq!(composing.marks, expected, "{length} marks");
+        }
+    }
 }
