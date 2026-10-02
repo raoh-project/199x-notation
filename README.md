@@ -35,10 +35,11 @@ pattern or white space, and what a conversion answers, is theirs to say.
 
 What it does define is how its implementations are called: the bounded forms, and the machines,
 images and checkpoints below. For those, and only for those, this README is the source. Every
-implementation has the bounded forms. The machines, images and checkpoints are in a language whose callers
-need them, and are called the same way in each language that has them. A bounded case conversion or normalization takes the most scalar values
-its answer may hold, answers what the unbounded one does where that answer is no longer than the
-bound, and answers nothing where it is longer.
+implementation has the bounded forms. The machines, images and checkpoints are in a language whose
+callers need them, and are called the same way in each language that has them. A bounded case
+conversion or normalization takes the most scalar values its answer may hold, answers what the
+unbounded one does where that answer is no longer than the bound, and answers nothing where it is
+longer.
 
 ## What does not belong here
 
