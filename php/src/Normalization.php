@@ -73,8 +73,8 @@ final class Normalization
         $read = 0;
         for ($at = 0; $at < $length;) {
             // A run of ASCII, which is below every form's limit (NormalizationTest holds the
-            // tables to that).
-            $run = strspn($s, self::ASCII, $at);
+            // tables to that). A checkpoint added later bounds the run by strspn's length.
+            $run = strspn($s, self::ASCII, $at, $length - $at);
             if ($run > 0) {
                 $last = $at + $run - 1;
                 $beforeLast = $read + $run - 1;

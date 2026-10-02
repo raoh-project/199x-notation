@@ -25,7 +25,7 @@ final class Composing
     private const N_COUNT = self::V_COUNT * self::T_COUNT;
     private const S_COUNT = self::L_COUNT * self::N_COUNT;
 
-    /** How many marks a run may hold before they are put in order by a sort rather than by insertion, which is quadratic in the run. */
+    /** How many marks a run may hold before they are put in order by class rather than by insertion, which is quadratic in the run. */
     private const FEW_MARKS = 32;
 
     /**
@@ -162,16 +162,26 @@ final class Composing
     }
 
     /**
-     * Puts the held marks in canonical order: stable, by combining class.
+     * Puts the held marks in canonical order: stable, by combining class. A run of more marks than
+     * FEW_MARKS, which may be as long as the text, is put in order in loops of this method's own,
+     * each mark into the marks of its class and the classes one after another, and is not handed
+     * to a sort of PHP's.
      */
     private function order(): void
     {
         $marks = $this->marks;
         if (count($marks) > self::FEW_MARKS) {
-            // PHP's sort is stable.
-            usort($marks, static fn (string $a, string $b): int =>
-                NormalizationTables::COMBINING_CLASSES[$a] <=> NormalizationTables::COMBINING_CLASSES[$b]);
-            $this->marks = $marks;
+            $byClass = [];
+            foreach ($marks as $mark) {
+                $byClass[NormalizationTables::COMBINING_CLASSES[$mark]][] = $mark;
+            }
+            $ordered = [];
+            for ($class = 0; $class < 256; $class++) {
+                foreach ($byClass[$class] ?? [] as $mark) {
+                    $ordered[] = $mark;
+                }
+            }
+            $this->marks = $ordered;
             return;
         }
         // Each mark goes after every mark before it of a class no higher than its own.

@@ -98,8 +98,9 @@ final class CaseConversion
         $kept = 0;
         $written = 0;
         for ($at = 0; $at < $length;) {
-            // A run of ASCII the mapping leaves as it is: one scalar value a byte.
-            $run = strcspn($s, $stops, $at);
+            // A run of ASCII the mapping leaves as it is: one scalar value a byte. A checkpoint
+            // added later bounds the run by strcspn's length.
+            $run = strcspn($s, $stops, $at, $length - $at);
             if ($run > 0) {
                 if ($longest >= 0 && $run > $longest - $written) {
                     return null;
