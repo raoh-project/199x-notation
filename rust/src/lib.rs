@@ -31,5 +31,11 @@ mod normalization_tables;
 #[allow(dead_code)]
 mod pattern_alphabet_tables;
 #[rustfmt::skip]
-#[allow(dead_code)]
 mod white_space_tables;
+
+mod tables;
+mod text;
+mod white_space;
+
+pub use text::{compare, scalar_count};
+pub use white_space::is_white_space;
