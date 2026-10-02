@@ -19,3 +19,17 @@
 #![warn(missing_docs)]
 
 extern crate alloc;
+
+// The tables gen/Generate.java writes, which rustfmt leaves as they are written.
+#[rustfmt::skip]
+#[allow(dead_code)]
+mod case_tables;
+#[rustfmt::skip]
+#[allow(dead_code)]
+mod normalization_tables;
+#[rustfmt::skip]
+#[allow(dead_code)]
+mod pattern_alphabet_tables;
+#[rustfmt::skip]
+#[allow(dead_code)]
+mod white_space_tables;
