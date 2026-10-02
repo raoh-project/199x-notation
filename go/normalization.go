@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -123,14 +124,18 @@ func normalizeFrom(form Form, s string, from, kept, longest int) (string, bool) 
 	if longest >= 0 && kept > longest {
 		return "", false
 	}
-	inert := inertCanonical
-	if form.compatibility() {
-		inert = inertCompatibility
+	derived := derivedTables()
+	compatibility := form.compatibility()
+	inert := derived.inertCanonical
+	if compatibility {
+		inert = derived.inertCompatibility
 	}
-	c := composing{composes: form.composes(), longest: longest, starter: -1}
+	c := composing{composes: form.composes(), compositions: derived.compositions, longest: longest, starter: -1}
 	c.out.Grow(room(len(s), longest))
 	c.out.WriteString(s[:from])
 	c.written = kept
+	// What one code point decomposes into, in room the whole text shares.
+	var parts []rune
 	for at := from; at < len(s); {
 		r, size := utf8.DecodeRuneInString(s[at:])
 		at += size
@@ -140,14 +145,14 @@ func normalizeFrom(form Form, s string, from, kept, longest int) (string, bool) 
 			}
 			continue
 		}
-		decomposed := decompose(r, form.compatibility())
-		if decomposed == nil {
+		var decomposed bool
+		if parts, decomposed = decomposeInto(parts[:0], r, compatibility); !decomposed {
 			if !c.take(r) {
 				return "", false
 			}
 			continue
 		}
-		for _, part := range decomposed {
+		for _, part := range parts {
 			if !c.take(part) {
 				return "", false
 			}
@@ -167,12 +172,13 @@ const fewMarks = 32
 // points already decomposed: the starter of the run it is in, the marks held after it, and what is
 // settled.
 type composing struct {
-	composes bool
-	longest  int
-	out      strings.Builder
-	written  int
-	starter  rune // -1 where the run has none
-	marks    []rune
+	composes     bool
+	compositions map[[2]rune]rune
+	longest      int
+	out          strings.Builder
+	written      int
+	starter      rune // -1 where the run has none
+	marks        []rune
 }
 
 // take takes the next decomposed code point, and is false where what is written has passed
@@ -184,7 +190,7 @@ func (c *composing) take(r rune) bool {
 	}
 	kept := c.settle()
 	if c.composes && c.starter >= 0 && kept == 0 {
-		if composed, ok := compose(c.starter, r); ok {
+		if composed, ok := c.compose(c.starter, r); ok {
 			c.starter = composed
 			return true
 		}
@@ -220,7 +226,7 @@ func (c *composing) settle() int {
 	for _, mark := range c.marks {
 		class := int(combiningClass(mark))
 		if lastClass < class {
-			if composed, ok := compose(c.starter, mark); ok {
+			if composed, ok := c.compose(c.starter, mark); ok {
 				c.starter = composed
 				continue
 			}
@@ -305,57 +311,80 @@ func isHangulSyllable(r rune) bool {
 	return r >= hangulSBase && r < hangulSBase+hangulSCount
 }
 
-// decompose is r's full decomposition, or nil where r is its own: Hangul's arithmetic split, or
-// the tables followed as far as they go, since a decomposition may map to code points that
-// decompose themselves. With compatibility the compatibility mappings are followed as well.
-func decompose(r rune, compatibility bool) []rune {
+// decomposeInto appends r's full decomposition to dst, and is false, dst as it was, where r is its
+// own: Hangul's arithmetic split, or the tables followed as far as they go, since a decomposition
+// may map to code points that decompose themselves. With compatibility the compatibility mappings
+// are followed as well.
+func decomposeInto(dst []rune, r rune, compatibility bool) ([]rune, bool) {
 	if isHangulSyllable(r) {
 		index := r - hangulSBase
-		l := hangulLBase + index/hangulNCount
-		v := hangulVBase + (index%hangulNCount)/hangulTCount
-		t := hangulTBase + index%hangulTCount
-		if t == hangulTBase {
-			return []rune{l, v}
+		dst = append(dst, hangulLBase+index/hangulNCount, hangulVBase+(index%hangulNCount)/hangulTCount)
+		if t := hangulTBase + index%hangulTCount; t != hangulTBase {
+			dst = append(dst, t)
 		}
-		return []rune{l, v, t}
+		return dst, true
 	}
 	mapped := canonicalDecomposition.of(r)
 	if mapped == nil && compatibility {
 		mapped = compatibilityDecomposition.of(r)
 	}
 	if mapped == nil {
-		return nil
+		return dst, false
 	}
-	var full []rune
 	for _, part := range mapped {
-		if further := decompose(part, compatibility); further != nil {
-			full = append(full, further...)
-		} else {
-			full = append(full, part)
+		var further bool
+		if dst, further = decomposeInto(dst, part, compatibility); !further {
+			dst = append(dst, part)
 		}
 	}
-	return full
+	return dst, true
 }
 
 // combiningClass is r's canonical combining class: 0 for a starter, and for a mark the class
 // canonical ordering sorts it by. No Hangul jamo or syllable has one other than 0.
 func combiningClass(r rune) uint8 {
-	i, found := slices.BinarySearchFunc(combiningClasses, r, func(c combining, r rune) int {
-		return int(c.r - r)
-	})
-	if found {
-		return combiningClasses[i].class
+	// No code point below the first one the table names has a class, which is most text.
+	if len(combiningClasses) == 0 || r < combiningClasses[0].r {
+		return 0
+	}
+	low, high := 0, len(combiningClasses)
+	for low < high {
+		mid := int(uint(low+high) >> 1)
+		if combiningClasses[mid].r < r {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	if low < len(combiningClasses) && combiningClasses[low].r == r {
+		return combiningClasses[low].class
 	}
 	return 0
 }
 
-// compositions is the pair-composition table, inverted once from canonicalDecomposition rather
-// than kept as a generated table of its own: every two-member canonical decomposition whose first
+// derived is what normalization works out from the generated tables once, the first time text is
+// normalized past its trivial limit, so that a program that never does pays nothing for it.
+type derived struct {
+	compositions                       map[[2]rune]rune
+	inertCanonical, inertCompatibility *codePointBits
+}
+
+var derivedTables = sync.OnceValue(func() *derived {
+	inert := inertCanonical()
+	return &derived{
+		compositions:       compositions(),
+		inertCanonical:     inert,
+		inertCompatibility: inertCompatibility(inert),
+	}
+})
+
+// compositions is the pair-composition table, inverted from canonicalDecomposition rather than
+// kept as a generated table of its own: every two-member canonical decomposition whose first
 // member is a starter and whose result is not a script-specific exclusion. The other two
 // Full_Composition_Exclusion categories, singleton and non-starter decompositions, are read off
 // the decomposition and the combining classes themselves, so decomposition and composition cannot
 // disagree.
-var compositions = func() map[[2]rune]rune {
+func compositions() map[[2]rune]rune {
 	pairs := make(map[[2]rune]rune)
 	for _, each := range canonicalDecomposition {
 		if len(each.to) == 2 && combiningClass(each.to[0]) == 0 {
@@ -365,11 +394,11 @@ var compositions = func() map[[2]rune]rune {
 		}
 	}
 	return pairs
-}()
+}
 
 // compose is the primary composite of starter followed by r, and false where the pair does not
 // compose: Hangul's L+V and LV+T, or the table.
-func compose(starter, r rune) (rune, bool) {
+func (c *composing) compose(starter, r rune) (rune, bool) {
 	if starter >= hangulLBase && starter < hangulLBase+hangulLCount &&
 		r >= hangulVBase && r < hangulVBase+hangulVCount {
 		return hangulSBase + ((starter-hangulLBase)*hangulVCount+(r-hangulVBase))*hangulTCount, true
@@ -378,7 +407,7 @@ func compose(starter, r rune) (rune, bool) {
 		r > hangulTBase && r < hangulTBase+hangulTCount {
 		return starter + (r - hangulTBase), true
 	}
-	composed, ok := compositions[[2]rune{starter, r}]
+	composed, ok := c.compositions[[2]rune{starter, r}]
 	return composed, ok
 }
 
@@ -393,7 +422,7 @@ func (b *codePointBits) clear(r rune) { b[r>>6] &^= 1 << (r & 63) }
 // decomposition and are the second member of no composition, Hangul's included. Each composes with
 // nothing before it, and no table is asked to know that. Most text in a script written without
 // combining marks is made of them.
-var inertCanonical = func() *codePointBits {
+func inertCanonical() *codePointBits {
 	bits := new(codePointBits)
 	for i := range bits {
 		bits[i] = ^uint64(0)
@@ -418,14 +447,14 @@ var inertCanonical = func() *codePointBits {
 		bits.clear(r)
 	}
 	return bits
-}()
+}
 
 // inertCompatibility is inertCanonical for a compatibility form: without the code points a
 // compatibility mapping decomposes.
-var inertCompatibility = func() *codePointBits {
+func inertCompatibility(inertCanonical *codePointBits) *codePointBits {
 	bits := *inertCanonical
 	for _, each := range compatibilityDecomposition {
 		bits.clear(each.from)
 	}
 	return &bits
-}()
+}

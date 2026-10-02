@@ -56,11 +56,37 @@ func UppercaseWithin(s string, longest int) (string, bool) {
 // Case_Ignorable code points as there are, and looks at them in the text. What is bounded is what
 // is written: each code point's mapping is measured before any of it is, so the answer never
 // holds more than longest, nor part of a mapping that would take it past.
+//
+// Text that maps to itself is answered with itself. Otherwise what maps to itself is copied a run
+// at a time, from kept, and the answer is made only once a code point that changes is met.
 func mapCase(s string, lower bool, longest int) (string, bool) {
+	table, ascii := upperMapping, &caseOfASCII[1]
+	if lower {
+		table, ascii = lowerMapping, &caseOfASCII[0]
+	}
 	var out strings.Builder
-	out.Grow(room(len(s), longest))
-	written := 0
+	// changed is whether a code point that changes has been met, and out holds the answer up to
+	// kept.
+	changed := false
+	kept, written := 0, 0
 	for at := 0; at < len(s); {
+		if c := s[at]; c < utf8.RuneSelf && ascii[c] >= 0 {
+			if longest >= 0 && written >= longest {
+				return "", false
+			}
+			written++
+			if mapped := byte(ascii[c]); mapped != c {
+				if !changed {
+					out.Grow(room(len(s), longest))
+					changed = true
+				}
+				out.WriteString(s[kept:at])
+				out.WriteByte(mapped)
+				kept = at + 1
+			}
+			at++
+			continue
+		}
 		r, size := utf8.DecodeRuneInString(s[at:])
 		after := at + size
 		var to []rune
@@ -70,11 +96,7 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 			}
 		}
 		if to == nil {
-			if lower {
-				to = lowerMapping.of(r)
-			} else {
-				to = upperMapping.of(r)
-			}
+			to = table.of(r)
 		}
 		adding := len(to)
 		if to == nil {
@@ -84,17 +106,47 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 			return "", false
 		}
 		written += adding
-		if to == nil {
-			out.WriteString(s[at:after])
-		} else {
+		if to != nil {
+			if !changed {
+				out.Grow(room(len(s), longest))
+				changed = true
+			}
+			out.WriteString(s[kept:at])
 			for _, each := range to {
 				out.WriteRune(each)
 			}
+			kept = after
 		}
 		at = after
 	}
+	if !changed {
+		return s, true
+	}
+	out.WriteString(s[kept:])
 	return out.String(), true
 }
+
+// caseOfASCII is, for the lowercase and the uppercase mapping, what each ASCII character maps to
+// where the mapping makes it one ASCII character and no Final_Sigma entry names it, and -1 where
+// the tables are asked. Read off the tables, so that most text is mapped a byte at a time without
+// a search and without a rule of its own about ASCII.
+var caseOfASCII = func() (out [2][utf8.RuneSelf]int16) {
+	for c := rune(0); c < utf8.RuneSelf; c++ {
+		for i, table := range []mapping{lowerMapping, upperMapping} {
+			out[i][c] = -1
+			if i == 0 && finalSigmaMapping.of(c) != nil {
+				continue
+			}
+			switch to := table.of(c); {
+			case to == nil:
+				out[i][c] = int16(c)
+			case len(to) == 1 && to[0] < utf8.RuneSelf:
+				out[i][c] = int16(to[0])
+			}
+		}
+	}
+	return out
+}()
 
 // isFinalSigma is Unicode's Final_Sigma condition of the code point between at and after:
 // preceded, skipping Case_Ignorable code points, by a Cased one, and not followed, skipping the

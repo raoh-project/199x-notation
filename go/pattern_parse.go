@@ -225,7 +225,7 @@ func (r *patternReader) atom() *written {
 		// Every symbol but the line terminators, written as a difference, so that a negated
 		// class, which does not leave them out, is the same algebra with a different set taken
 		// away.
-		return symbolsWritten(everything.less(lineTerminators))
+		return symbolsWritten(dotSymbols)
 	case '^', '$':
 		end := r.peek() == '$'
 		r.take()
@@ -325,19 +325,19 @@ func (r *patternReader) escaped() symbols {
 		return digitSymbols
 	case 'D':
 		r.take()
-		return digitSymbols.not()
+		return notDigitSymbols
 	case 'w':
 		r.take()
 		return wordSymbols
 	case 'W':
 		r.take()
-		return wordSymbols.not()
+		return notWordSymbols
 	case 's':
 		r.take()
 		return spaceSymbols
 	case 'S':
 		r.take()
-		return spaceSymbols.not()
+		return notSpaceSymbols
 	case 'n':
 		r.take()
 		return one('\n')

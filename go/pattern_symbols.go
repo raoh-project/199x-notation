@@ -1,9 +1,6 @@
 package notation199x
 
-import (
-	"slices"
-	"sort"
-)
+import "slices"
 
 // symbols is a set of the characters a string is made of: Unicode scalar values, every code point
 // but the surrogates.
@@ -44,6 +41,13 @@ var (
 	// a carriage return. Not the White_Space set, which is a separate set the specifications state
 	// separately.
 	spaceSymbols = unionOf(one(' '), between('\t', '\r'))
+
+	// The sets a pattern writes as differences, worked out once rather than at each place a
+	// pattern writes them.
+	dotSymbols      = everything.less(lineTerminators)
+	notDigitSymbols = digitSymbols.not()
+	notWordSymbols  = wordSymbols.not()
+	notSpaceSymbols = spaceSymbols.not()
 )
 
 // one is the set of r alone, a scalar value.
@@ -99,8 +103,7 @@ func normalized(given []runeRange) symbols {
 // has is whether r is one of these: a search, since a machine asks it of every step at every
 // character, and a class written wide would make a walk as long as the class.
 func (s symbols) has(r rune) bool {
-	i := sort.Search(len(s), func(i int) bool { return s[i].last >= r })
-	return i < len(s) && s[i].first <= r
+	return inRanges(s, r)
 }
 
 // not is every scalar value these do not hold.

@@ -1,7 +1,5 @@
 package notation199x
 
-import "sort"
-
 // mapping is a code point and the code points it maps to, sorted by the code point, as the
 // generated tables hold a case mapping or a decomposition.
 type mapping []mapped
@@ -11,11 +9,20 @@ type mapped struct {
 	to   []rune
 }
 
-// of is what r maps to, or nil where r is not in the mapping.
+// of is what r maps to, or nil where r is not in the mapping. A search written out rather than
+// sort.Search, whose call through a function value a lookup a character pays for.
 func (m mapping) of(r rune) []rune {
-	i := sort.Search(len(m), func(i int) bool { return m[i].from >= r })
-	if i < len(m) && m[i].from == r {
-		return m[i].to
+	low, high := 0, len(m)
+	for low < high {
+		mid := int(uint(low+high) >> 1)
+		if m[mid].from < r {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	if low < len(m) && m[low].from == r {
+		return m[low].to
 	}
 	return nil
 }
@@ -30,8 +37,22 @@ type runeRange struct {
 
 // has is whether r is in one of the ranges.
 func (s rangeSet) has(r rune) bool {
-	i := sort.Search(len(s), func(i int) bool { return s[i].last >= r })
-	return i < len(s) && s[i].first <= r
+	return inRanges(s, r)
+}
+
+// inRanges is whether r is in one of ranges, sorted and apart: the first range that ends at or
+// after r, searched for, holds it or nothing does.
+func inRanges(ranges []runeRange, r rune) bool {
+	low, high := 0, len(ranges)
+	for low < high {
+		mid := int(uint(low+high) >> 1)
+		if ranges[mid].last < r {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	return low < len(ranges) && ranges[low].first <= r
 }
 
 // combining is a code point and its canonical combining class.
