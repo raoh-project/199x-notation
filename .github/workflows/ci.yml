@@ -55,6 +55,13 @@ jobs:
         env:
           NOTATION199X_REQUIRE_SUITE: '1'
         run: go test -race ./...
+      # Without the race detector too, under which sync.Pool drops what it is handed and what a
+      # match allocates is not held.
+      - name: Test without the race detector
+        working-directory: go
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: go test ./...
 
   # A tag names a release: vX.Y.Z on a commit whose version is X.Y.Z. Checked when it is pushed,
   # before anything is deployed from it.

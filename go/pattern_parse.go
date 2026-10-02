@@ -56,7 +56,7 @@ func readPattern(text string) (read PatternRead) {
 	if writtenStates(w) > int64(MachineStates.Most()) {
 		return PatternBeyond{Limit: MachineStates, From: 0, Construct: text}
 	}
-	return &Pattern{meaning: m}
+	return &Pattern{compiled: &compiled{meaning: m}}
 }
 
 // open is a choice being read, in a group or at the top: the arms read so far, and the parts of

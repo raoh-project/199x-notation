@@ -17,10 +17,18 @@ type PatternRead interface {
 	patternRead()
 }
 
-// Pattern is a pattern that was read, as the strings it accepts.
+// Pattern is a pattern that was read, as the strings it accepts. Only [ReadPattern] makes one.
 //
-// A Pattern is safe for use by several goroutines at once.
+// A Pattern is safe for use by several goroutines at once, and a copy of one is the same pattern:
+// what it is matched with is built once and shared by every copy.
 type Pattern struct {
+	compiled *compiled
+}
+
+// compiled is what a Pattern is matched with: the meaning, and the machine built from it the
+// first time it is matched. The once is held here and not in Pattern, so that a Pattern carries no
+// rule about being copied.
+type compiled struct {
 	meaning *meaning
 	once    sync.Once
 	machine *machine
@@ -75,28 +83,30 @@ const (
 	MachineStates
 )
 
-// Most is the greatest count, depth or number of states within the limit.
-func (l PatternLimit) Most() int {
-	switch l {
-	case RepetitionCount:
-		return 134_217_727
-	case NestingDepth:
-		return 200
-	default:
-		return 250_000
-	}
+var patternLimits = [...]struct {
+	name string
+	most int
+}{
+	RepetitionCount: {"RepetitionCount", 134_217_727},
+	NestingDepth:    {"NestingDepth", 200},
+	MachineStates:   {"MachineStates", 250_000},
 }
 
-// String is the limit's name.
-func (l PatternLimit) String() string {
-	switch l {
-	case RepetitionCount:
-		return "RepetitionCount"
-	case NestingDepth:
-		return "NestingDepth"
-	default:
-		return "MachineStates"
+// Most is the greatest count, depth or number of states within the limit. Most panics where l is
+// none of the limits.
+func (l PatternLimit) Most() int {
+	if int(l) >= len(patternLimits) {
+		noneOf("PatternLimit", uint8(l))
 	}
+	return patternLimits[l].most
+}
+
+// String is the limit's name, or PatternLimit(n) where it is none of the limits.
+func (l PatternLimit) String() string {
+	if int(l) < len(patternLimits) {
+		return patternLimits[l].name
+	}
+	return nameOf(nil, "PatternLimit", uint8(l))
 }
 
 // PatternRefusal is what makes text no pattern of the language, told apart by what an author
@@ -142,6 +152,17 @@ const (
 	AnAnchorThisCannotPlace
 )
 
+var patternRefusalNames = []string{
+	"SomethingUnclosed", "ACountThisCannotRead", "AnEscapeThisDoesNotRead", "ACharacterNoStringHolds",
+	"AGroupTheGrammarDoesNotHave", "ABackReference", "ACharacterProperty", "ABoundary", "AQuotation",
+	"AClassOfClasses", "APossessiveRepetition", "AnAnchorThisCannotPlace",
+}
+
+// String is the refusal's name, or PatternRefusal(n) where it is none of the refusals.
+func (r PatternRefusal) String() string {
+	return nameOf(patternRefusalNames, "PatternRefusal", uint8(r))
+}
+
 // ReadPattern is what text means as a pattern, or what makes it no pattern, or which limit it is
 // past.
 //
@@ -163,11 +184,17 @@ func ReadPattern(text string) PatternRead {
 //
 // The subject is read a scalar value at a time, once, and never gone back over: the machine the
 // pattern means is walked as the set of states it may be in, so a match takes time linear in the
-// subject, for each character as many steps as the machine has at most. Where a character leads
-// from a set is kept once it is worked out, so a walk that comes to the set again with the same
-// character looks it up, which is what most characters of most subjects cost. subject may be any
-// string, and one holding bytes that are not UTF-8 is no text and is accepted by nothing.
+// subject. Where a character leads from the set the walk is in is kept once it is worked out, so a
+// walk that comes to the set again with the same character looks it up, which is what most
+// characters of most subjects cost. A character that leads somewhere not yet worked out costs
+// moving each state of the set, at most the machine's, and putting the set it comes to in order.
+// subject may be any string, and one holding bytes that are not UTF-8 is no text and is accepted
+// by nothing.
 func (p *Pattern) Matches(subject string) bool {
-	p.once.Do(func() { p.machine = build(p.meaning) })
-	return p.machine.matches(subject)
+	c := p.compiled
+	if c == nil {
+		panic("notation199x: a Pattern that ReadPattern did not make")
+	}
+	c.once.Do(func() { c.machine = build(c.meaning) })
+	return c.machine.matches(subject)
 }

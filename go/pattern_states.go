@@ -46,18 +46,26 @@ func statesIn(w *written) int64 {
 			sum = plusStates(sum, plusStates(1, statesIn(arm)))
 		}
 		return sum
-	default: // repeatedWritten
+	case repeatedWritten:
 		return repeatedStates(statesIn(w.parts[0]), w.least, w.most)
+	default:
+		unreachable("written", uint8(w.kind))
+		return 0
 	}
 }
 
 // meaningStatesIn is the states of a meaning the reader holds before the anchors are placed,
 // which is a set of symbols or nothing.
 func meaningStatesIn(m *meaning) int64 {
-	if m.kind == nothingMeaning {
+	switch m.kind {
+	case nothingMeaning:
+		return 0
+	case symbolsMeaning:
+		return 1
+	default:
+		unreachable("meaning the reader writes", uint8(m.kind))
 		return 0
 	}
-	return 1
 }
 
 // repeatedStates is a repetition of a body of body states: its copies, and the state it ends in.

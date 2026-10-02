@@ -90,6 +90,8 @@ func placeAnchors(w *written) *meaning {
 				// Any other count leaves how many copies come before the anchor to the string.
 				return nil
 			}
+		default:
+			unreachable("written", uint8(w.kind))
 		}
 	}
 	return results[0]
@@ -101,12 +103,18 @@ func placeAnchors(w *written) *meaning {
 // refused rather than read the same way: the language keeps the set of patterns it reads, and
 // that set has no pattern of this shape.
 func anchor(end bool, at where) *meaning {
-	switch {
-	case at == whereYes:
+	switch at {
+	case whereYes:
 		return nothing
-	case at == whereNo && !end:
+	case whereNo:
+		if end {
+			return nil
+		}
 		return &meaning{kind: neverMeaning}
+	case whereUnsettled:
+		return nil
 	default:
+		unreachable("where", uint8(at))
 		return nil
 	}
 }
@@ -137,10 +145,14 @@ func putTogether(w *written, results []*meaning) []*meaning {
 		default:
 			return append(results, &meaning{kind: inTurnMeaning, parts: parts})
 		}
-	default: // repeatedWritten
+	case repeatedWritten:
 		last := len(results) - 1
 		results[last] = &meaning{kind: repeatedMeaning, parts: []*meaning{results[last]}, least: w.least, most: w.most}
 		return results
+	default:
+		// A leaf has no parts to put together.
+		unreachable("written", uint8(w.kind))
+		return nil
 	}
 }
 
@@ -236,13 +248,16 @@ func partFacts(w *written, known map[*written]facts) facts {
 			f.holds = f.holds || known[arm].holds
 		}
 		return f
-	default: // repeatedWritten
+	case repeatedWritten:
 		what := known[w.parts[0]]
 		return facts{
 			may:   (w.most == noCeiling || w.most > 0) && what.may,
 			must:  w.least > 0 && what.must,
 			holds: what.holds,
 		}
+	default:
+		unreachable("written", uint8(w.kind))
+		return facts{}
 	}
 }
 
@@ -261,7 +276,10 @@ func mayTake(m *meaning) bool {
 		return false
 	case repeatedMeaning:
 		return (m.most == noCeiling || m.most > 0) && mayTake(m.parts[0])
+	case nothingMeaning, neverMeaning:
+		return false
 	default:
+		unreachable("meaning", uint8(m.kind))
 		return false
 	}
 }
@@ -288,7 +306,10 @@ func mustTake(m *meaning) bool {
 		return true
 	case repeatedMeaning:
 		return m.least > 0 && mustTake(m.parts[0])
+	case nothingMeaning:
+		return false
 	default:
+		unreachable("meaning", uint8(m.kind))
 		return false
 	}
 }

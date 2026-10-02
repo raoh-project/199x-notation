@@ -1,6 +1,7 @@
 package notation199x
 
 import (
+	"slices"
 	"sync"
 	"unicode/utf8"
 )
@@ -71,8 +72,11 @@ func (b *machine) build(m *meaning, from int32) int32 {
 			b.freely(b.build(arm, in), out)
 		}
 		return out
-	default: // repeatedMeaning
+	case repeatedMeaning:
 		return b.repeated(m, from)
+	default:
+		unreachable("meaning", uint8(m.kind))
+		return 0
 	}
 }
 
@@ -124,7 +128,10 @@ func buildsNoState(m *meaning) bool {
 			}
 		}
 		return true
+	case neverMeaning, symbolsMeaning, eitherOfMeaning, repeatedMeaning:
+		return false
 	default:
+		unreachable("meaning", uint8(m.kind))
 		return false
 	}
 }
@@ -132,6 +139,9 @@ func buildsNoState(m *meaning) bool {
 // stateSet is the states a walk is in: a sparse set, the states in it listed in dense and each
 // one's place in that list in sparse. Emptying it is forgetting the list, so a walk over a machine
 // of many states that is in few of them costs the few.
+//
+// Each state's place is held in sparse for as long as it is in the set, which is what has asks
+// of. So nothing outside these methods writes to either list.
 type stateSet struct {
 	dense  []int32
 	sparse []int32
@@ -146,27 +156,43 @@ func (s *stateSet) has(q int32) bool {
 	return int(i) < len(s.dense) && s.dense[i] == q
 }
 
+// add puts q in the set, which does not hold it.
 func (s *stateSet) add(q int32) {
 	s.sparse[q] = int32(len(s.dense))
 	s.dense = append(s.dense, q)
 }
 
-// walk is the room one match works in: the sets of states it moves between, and the sets it has
-// already worked out where a character leads from.
+func (s *stateSet) clear() { s.dense = s.dense[:0] }
+
+// states is the states of the set, in the order they were put in it or, after sort, ascending.
+// The slice is the set's own and is read only.
+func (s *stateSet) states() []int32 { return s.dense }
+
+// sort puts the states in ascending order, writing each one's place again.
+func (s *stateSet) sort() {
+	slices.Sort(s.dense)
+	for i, q := range s.dense {
+		s.sparse[q] = int32(i)
+	}
+}
+
+// walk is the room one match works in: the sets of states it moves between, the sets it has
+// already worked out where a character leads from, and which of the two it is going by.
 type walk struct {
 	now, next *stateSet
 	pending   []int32
 	known     knownSets
+	// in is the kept set the walk is in, or nil where it is going on without kept sets and is in
+	// now.
+	in *knownSet
 }
 
 // matches is whether the whole of subject is accepted: every state the machine may be in is
 // walked at once, a scalar value at a time, and nothing is gone back over. Bytes that are not
 // UTF-8 are no text, and no step is over them.
 //
-// Where a character leads from a set of states is worked out the first time a walk needs it, and
-// kept with the set ([knownSets]), so a walk that comes to the set again with the same character
-// looks it up. Where what is kept stops being looked up again, the walk goes on moving each state
-// for every character, which answers the same.
+// An ASCII character whose step from the kept set the walk is in is known is taken here, as one
+// lookup. Every other character is taken by take.
 func (m *machine) matches(subject string) bool {
 	w, _ := m.scratch.Get().(*walk)
 	if w == nil {
@@ -174,43 +200,68 @@ func (m *machine) matches(subject string) bool {
 		w.known.forget()
 	}
 	defer m.scratch.Put(w)
-	at := 0
-	set, kept := w.known.start(m, w)
-	for kept && at < len(subject) {
+	m.begin(w)
+	for at := 0; at < len(subject); {
+		if c := subject[at]; c < utf8.RuneSelf && w.in != nil {
+			if next := w.in.ascii[c]; next != nil {
+				w.in = next
+				w.known.read++
+				if next.none {
+					return false
+				}
+				at++
+				continue
+			}
+		}
 		r, size := utf8.DecodeRuneInString(subject[at:])
 		if r == utf8.RuneError && size == 1 {
 			return false
 		}
 		at += size
-		set, kept = w.known.after(m, w, set, r)
-		if kept && len(w.known.sets[set].states) == 0 {
+		if !m.take(w, r) {
 			return false
 		}
 	}
-	if kept {
-		return w.known.sets[set].accepts
-	}
-	// What is kept was given up on, and the walk is in w.now.
-	for at < len(subject) {
-		r, size := utf8.DecodeRuneInString(subject[at:])
-		if r == utf8.RuneError && size == 1 {
-			return false
-		}
-		at += size
-		m.advance(w, r)
-		if len(w.now.dense) == 0 {
-			return false
-		}
+	if w.in != nil {
+		return w.in.accepts
 	}
 	return w.now.has(m.accept)
 }
 
-// advance moves the walk over one symbol: from each state it is in, each step over r, and the
-// states the steps for nothing reach from where those lead. This is the one place a walk does
-// work that grows with the machine.
+// begin puts the walk in the state it starts in, with every state the steps for nothing reach
+// from it: the kept set it starts in where that is kept, and otherwise those states, worked out.
+func (m *machine) begin(w *walk) {
+	if w.in = w.known.first; w.in != nil {
+		return
+	}
+	w.now.clear()
+	m.enter(w, w.now, 0)
+	w.in = w.known.start(m, w)
+}
+
+// take moves the walk over one symbol, and is false where it is in no state after it. Where the
+// set it is in is kept, where r leads from it is looked up or worked out and kept (knownSets.after);
+// otherwise the set is moved by advance. Every step a walk takes that does work growing with the
+// machine is taken here.
+func (m *machine) take(w *walk, r rune) bool {
+	if w.in != nil {
+		if w.in = w.known.after(m, w, w.in, r); w.in != nil {
+			return !w.in.none
+		}
+		return len(w.now.states()) > 0
+	}
+	m.advance(w, r)
+	return len(w.now.states()) > 0
+}
+
+// advance moves the set the walk is in, w.now, over one symbol: from each state, each step over r,
+// and the states the steps for nothing reach from where those lead. It is the one place states
+// are moved, and its work is the steps out of the set and the states it comes to, at most the
+// machine's. Keeping a set it has not kept before is work of the same size besides
+// (knownSets.keep), so a checkpoint added to a match later asks in both.
 func (m *machine) advance(w *walk, r rune) {
-	w.next.dense = w.next.dense[:0]
-	for _, q := range w.now.dense {
+	w.next.clear()
+	for _, q := range w.now.states() {
 		for _, s := range m.states[q].steps {
 			if s.over.has(r) {
 				m.enter(w, w.next, s.to)

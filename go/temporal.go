@@ -16,6 +16,11 @@ const (
 	Instant
 )
 
+var temporalKindNames = []string{"Date", "Time", "DateTime", "OffsetDateTime", "Instant"}
+
+// String is the kind's name, or TemporalKind(n) where it is none of the kinds.
+func (k TemporalKind) String() string { return nameOf(temporalKindNames, "TemporalKind", uint8(k)) }
+
 // TemporalAnswer is what [CheckTemporal] answers: that a text is admitted, or why it is not.
 // The refusals are reasons and not a flag, because they are different things to tell a caller:
 // text that is no temporal, and text that names a leap second.
@@ -29,6 +34,13 @@ const (
 	// LeapSecond is an instant whose second is 60.
 	LeapSecond
 )
+
+var temporalAnswerNames = []string{"Admitted", "Malformed", "LeapSecond"}
+
+// String is the answer's name, or TemporalAnswer(n) where it is none of the answers.
+func (a TemporalAnswer) String() string {
+	return nameOf(temporalAnswerNames, "TemporalAnswer", uint8(a))
+}
 
 const (
 	// YearMin is the least year of a date.
@@ -71,7 +83,8 @@ const (
 //
 // A time and a date-time may carry a fraction of a second of one to nine digits, as an instant
 // may. The forms are ASCII, so a text that was admitted carries one exactly where it holds a full
-// stop.
+// stop. CheckTemporal panics where kind is none of the kinds: that is a mistake in the calling
+// program, and not text that is malformed.
 func CheckTemporal(kind TemporalKind, text string) TemporalAnswer {
 	r := temporalReader{text: text}
 	var f fields
@@ -108,6 +121,8 @@ func CheckTemporal(kind TemporalKind, text string) TemporalAnswer {
 		if f.momentExists(f.second) {
 			return Admitted
 		}
+	default:
+		noneOf("TemporalKind", uint8(kind))
 	}
 	return Malformed
 }

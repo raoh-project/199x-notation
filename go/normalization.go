@@ -2,7 +2,6 @@ package notation199x
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -22,38 +21,39 @@ const (
 	NFKD
 )
 
-// String is the form's name, NFC, NFD, NFKC or NFKD.
-func (f Form) String() string {
-	switch f {
-	case NFC:
-		return "NFC"
-	case NFD:
-		return "NFD"
-	case NFKC:
-		return "NFKC"
-	case NFKD:
-		return "NFKD"
-	}
-	return "Form(" + strconv.Itoa(int(f)) + ")"
+// formFacts is what the algorithm asks of a form.
+type formFacts struct {
+	name string
+	// compatibility is whether the compatibility mappings are followed as well as the canonical.
+	compatibility bool
+	// composes is whether canonical composition follows the decomposition.
+	composes bool
+	// trivialLimit is the code point below which every code point is its own normalization in
+	// the form, so text made only of those is.
+	trivialLimit rune
 }
 
-func (f Form) compatibility() bool { return f == NFKC || f == NFKD }
+var forms = [...]formFacts{
+	NFC:  {"NFC", false, true, nfcTrivialLimit},
+	NFD:  {"NFD", false, false, nfdTrivialLimit},
+	NFKC: {"NFKC", true, true, nfkcTrivialLimit},
+	NFKD: {"NFKD", true, false, nfkdTrivialLimit},
+}
 
-func (f Form) composes() bool { return f == NFC || f == NFKC }
-
-// trivialLimit is the code point below which every code point is its own normalization in the
-// form, so text made only of those is.
-func (f Form) trivialLimit() rune {
-	switch f {
-	case NFC:
-		return nfcTrivialLimit
-	case NFD:
-		return nfdTrivialLimit
-	case NFKC:
-		return nfkcTrivialLimit
-	default:
-		return nfkdTrivialLimit
+// facts is what the algorithm asks of f, which panics where f is none of the four forms.
+func (f Form) facts() *formFacts {
+	if int(f) >= len(forms) {
+		noneOf("Form", uint8(f))
 	}
+	return &forms[f]
+}
+
+// String is the form's name, NFC, NFD, NFKC or NFKD, or Form(n) where it is none of them.
+func (f Form) String() string {
+	if int(f) < len(forms) {
+		return forms[f].name
+	}
+	return nameOf(nil, "Form", uint8(f))
 }
 
 // Normalize is s in form, by Unicode 18.0.0's data.
@@ -65,7 +65,7 @@ func (f Form) trivialLimit() rune {
 // Hangul's arithmetic, put combining marks in canonical order, and in a composing form compose
 // canonically wherever nothing blocks it. The compatibility forms decompose by the compatibility
 // mappings as well as the canonical ones; composition is canonical in every form. s is valid UTF-8
-// (see [InvalidUTF8At]).
+// (see [InvalidUTF8At]). Normalize panics where form is none of the four forms.
 func Normalize(form Form, s string) string {
 	normalized, _ := normalize(form, s, -1)
 	return normalized
@@ -73,8 +73,9 @@ func Normalize(form Form, s string) string {
 
 // NormalizeWithin is [Normalize] where that is no longer than longest scalar values, and false
 // where it is longer, which is found out before more than longest is written. A negative bound is
-// one no text is within.
+// one no text is within. NormalizeWithin panics where form is none of the four forms.
 func NormalizeWithin(form Form, s string, longest int) (string, bool) {
+	form.facts()
 	if longest < 0 {
 		return "", false
 	}
@@ -92,12 +93,13 @@ func NormalizeWithin(form Form, s string, longest int) (string, bool) {
 // a starter before it. That code point is normalized with the rest, since what follows it may
 // compose with it.
 func normalize(form Form, s string, longest int) (string, bool) {
-	limit := form.trivialLimit()
+	facts := form.facts()
+	limit := facts.trivialLimit
 	last, beforeLast, read := 0, 0, 0
 	for at := 0; at < len(s); {
 		r, size := utf8.DecodeRuneInString(s[at:])
 		if r >= limit {
-			return normalizeFrom(form, s, last, beforeLast, longest)
+			return normalizeFrom(facts, s, last, beforeLast, longest)
 		}
 		last = at
 		beforeLast = read
@@ -120,22 +122,23 @@ func normalize(form Form, s string, longest int) (string, bool) {
 // or, where nothing is between them, to the starter after it, so a run settled when the next
 // starter arrives is settled as the whole text's algorithm would settle it. What is held at once
 // is one run's marks, never the decomposition of the whole text.
-func normalizeFrom(form Form, s string, from, kept, longest int) (string, bool) {
+func normalizeFrom(form *formFacts, s string, from, kept, longest int) (string, bool) {
 	if longest >= 0 && kept > longest {
 		return "", false
 	}
 	derived := derivedTables()
-	compatibility := form.compatibility()
+	compatibility := form.compatibility
 	inert := derived.inertCanonical
 	if compatibility {
 		inert = derived.inertCompatibility
 	}
-	c := composing{composes: form.composes(), compositions: derived.compositions, longest: longest, starter: -1}
+	c := composing{composes: form.composes, compositions: derived.compositions, longest: longest, starter: -1}
 	c.out.Grow(room(len(s), longest))
 	c.out.WriteString(s[:from])
 	c.written = kept
-	// What one code point decomposes into, in room the whole text shares.
-	var parts []rune
+	// What one code point decomposes into, in room the whole text shares, as long as the longest
+	// decomposition there is so that it is made once.
+	parts := make([]rune, 0, derived.longestDecomposition)
 	for at := from; at < len(s); {
 		r, size := utf8.DecodeRuneInString(s[at:])
 		at += size
@@ -367,14 +370,25 @@ func combiningClass(r rune) uint8 {
 type derived struct {
 	compositions                       map[[2]rune]rune
 	inertCanonical, inertCompatibility *codePointBits
+	// longestDecomposition is the most code points one code point decomposes into fully, in any
+	// form.
+	longestDecomposition int
 }
 
 var derivedTables = sync.OnceValue(func() *derived {
 	inert := inertCanonical()
+	longest := 0
+	for _, table := range []mapping{canonicalDecomposition, compatibilityDecomposition} {
+		for _, each := range table {
+			parts, _ := decomposeInto(nil, each.from, true)
+			longest = max(longest, len(parts))
+		}
+	}
 	return &derived{
-		compositions:       compositions(),
-		inertCanonical:     inert,
-		inertCompatibility: inertCompatibility(inert),
+		compositions:         compositions(),
+		inertCanonical:       inert,
+		inertCompatibility:   inertCompatibility(inert),
+		longestDecomposition: longest,
 	}
 })
 

@@ -245,12 +245,12 @@ func TestCaseConversionAnswersEveryLineOfTheSuite(t *testing.T) {
 	})
 }
 
-var forms = map[string]Form{"NFC": NFC, "NFD": NFD, "NFKC": NFKC, "NFKD": NFKD}
+var formsByName = map[string]Form{"NFC": NFC, "NFD": NFD, "NFKC": NFKC, "NFKD": NFKD}
 
 func TestNormalizationWithinABoundAnswersEveryLineOfTheSuite(t *testing.T) {
 	eachLine(t, "normalization-bound.txt", 5, func(l *line) string {
 		text := l.text(0)
-		form := forms[l.oneOf(1, "NFC", "NFD", "NFKC", "NFKD")]
+		form := formsByName[l.oneOf(1, "NFC", "NFD", "NFKC", "NFKD")]
 		bound := l.number(2)
 		past := l.oneOf(3, "NORMALIZED", "PAST") == "PAST"
 		var normalized string
