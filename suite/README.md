@@ -1,8 +1,10 @@
 # suite
 
-The vectors every implementation runs. An implementation agrees with another because both answer
-every line here, and not because their code happens to. A test in each language reads these files
-with its standard library and holds the implementation to every line; Java's is the first.
+The vectors every implementation runs. Every implementation is held to the same lines, taken from
+the sources and not from any implementation's own tests, so on each of them the implementations
+answer alike. A finite set of lines does not make two implementations the same everywhere; it holds
+them alike where a rule is easiest to read two ways. A test in each language reads these files with
+its standard library and holds the implementation to every line; Java's is the first.
 
 Normalization without a bound is not here: it is held to `ucd/18.0.0/NormalizationTest.txt`, which
 Unicode publishes for that and which is read the same way. Normalization in a bound is here, and the
@@ -25,13 +27,14 @@ what it quotes, is tested in that implementation's own language.
 A field is added to a file once a source decides it, and not before.
 
 The lines of a file are chosen from what its sources state, rule by rule, and not from the cases an
-implementation happens to test. They are enough when no implementation that reads a rule otherwise
-answers every line: where a rule draws a line, at a bound, a range or the ends of a set, the lines
-tell it from the readings next to it, such as `<` or `==` where it says `<=`, or no bound at all.
-How many lines that takes is the rule's to say. A bounded normalization takes three, one below the
-answer's length, at it and one above, since `==` passes the first two; a limit of 250000 states
-takes two, at it and one past it. And each kind a source names, every form, direction and kind of
-temporal text, has lines of its own.
+implementation happens to test. For each bound, range or end of a set a source states, a file holds
+lines that tell the stated answer from the readings next to it: the comparison read as `<` or `==`
+where it says `<=`, an end of a range or a set left out or taken in, or no bound at all. A reviewer
+checks a file by naming those readings for each such rule and finding, for each, a line it answers
+otherwise. How many lines that takes is the rule's to say. A bounded normalization takes three, one
+below the answer's length, at it and one above, since `==` passes the first two; a limit of 250000
+states takes two, at it and one past it. And each kind a source names, every form, direction and
+kind of temporal text, has lines of its own.
 
 ## Files
 
