@@ -30,7 +30,14 @@ implementations are not here yet. See the issues.
 The normative definitions are in the
 [Raoh Specification](https://github.com/raoh-project/raoh-specification) and the
 [Souther specification](https://github.com/souther-lang/souther/blob/develop/specification.adoc).
-This repository implements them and defines nothing of its own.
+This repository implements them and defines no rule about text of its own: which text is a date, a
+pattern or white space, and what a conversion answers, is theirs to say.
+
+What it does define is how its implementations are called, the same way in every language: the
+machines and images below, the checkpoints, and the bounded forms. For those, and only for those,
+this README is the source. A bounded case conversion or normalization takes the most scalar values
+its answer may hold, answers what the unbounded one does where that answer is no longer than the
+bound, and answers nothing where it is longer.
 
 ## What does not belong here
 
