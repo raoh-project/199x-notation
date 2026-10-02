@@ -585,7 +585,8 @@ public final class StringPattern implements Predicate<String> {
      */
     private enum ImageFormat {
 
-        /** The kind, the sets, and the states with their steps, as numbers between commas. */
+        /** The kind, the sets, and the states with their steps, as numbers between commas, as
+         *  {@code image/P1.md} defines it. */
         P1("P1");
 
         private final String marker;
@@ -1560,6 +1561,12 @@ public final class StringPattern implements Predicate<String> {
             this.at = at;
         }
 
+        /**
+         * The next number: 0, or digits that do not begin with 0, ended by a comma or by the end of
+         * the image. A comma is followed by a number, so an image does not end with one. A number
+         * past the largest {@code int} is larger than anything in an image may be, and is refused
+         * here as what an image does not write rather than read as something else.
+         */
         int next() {
             if (at >= text.length()) {
                 throw new IllegalArgumentException("an image ends before its machine does");
@@ -1571,10 +1578,21 @@ public final class StringPattern implements Predicate<String> {
                 if (digit < '0' || digit > '9') {
                     throw new IllegalArgumentException("an image is written in numbers: " + digit);
                 }
-                value = Math.addExact(Math.multiplyExact(value, 10), digit - '0');
+                if (value > (Integer.MAX_VALUE - (digit - '0')) / 10) {
+                    throw new IllegalArgumentException("an image writes no number past "
+                            + Integer.MAX_VALUE + ": " + text.substring(start, Math.min(at, start + 20)));
+                }
+                value = value * 10 + (digit - '0');
             }
             if (at == start) {
                 throw new IllegalArgumentException("an image writes no empty number");
+            }
+            if (text.charAt(start) == '0' && at - start > 1) {
+                throw new IllegalArgumentException("an image writes no number but 0 beginning with 0: "
+                        + text.substring(start, Math.min(at, start + 20)));
+            }
+            if (at == text.length() - 1) {
+                throw new IllegalArgumentException("an image ends with a number, not a comma");
             }
             at++;
             return value;
