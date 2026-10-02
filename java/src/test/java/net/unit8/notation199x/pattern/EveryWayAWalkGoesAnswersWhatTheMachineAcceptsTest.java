@@ -141,7 +141,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> new StringPattern.Budget(-1, 0, 0, 0, 0, 0));
         assertEquals(StringPattern.Way.EVERY_STATE, StringPattern.of(Automaton.of(
-                ((PatternRead.Read) PatternParser.read("a*")).meaning(), Held.roomy()), false,
+                ((PatternRead.Read) PatternParser.read("a*")).meaning(), Held.roomy()),
                 new StringPattern.Budget(0, 0, 0, 0, 0, 0)).way());
     }
 
@@ -210,9 +210,13 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         return run;
     }
 
+    /** {@code machine} walked as {@code budget} has it walk, held as its steps: read from an image
+     *  of P1 that says it is deterministic where it is, and as it is where it is not. */
     private static StringPattern way(StringPattern.Way expected, Automaton machine, boolean deterministic,
                                      StringPattern.Budget budget) {
-        StringPattern run = StringPattern.of(machine, deterministic, budget);
+        StringPattern run = deterministic
+                ? StringPattern.of(Held.saidDeterministicInP1(machine), budget)
+                : StringPattern.of(machine, budget);
         assertEquals(expected, run.way(), budget.toString());
         return run;
     }
@@ -226,7 +230,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         Automaton shaped = PatternMachine.of(((PatternRead.Read) PatternParser.read("(a?){50}b")).meaning())
                 .shaped();
         StringPattern.Budget given = StringPattern.Budget.DEFAULT;
-        StringPattern run = StringPattern.of(shaped, false, new StringPattern.Budget(given.classWork(),
+        StringPattern run = StringPattern.of(shaped, new StringPattern.Budget(given.classWork(),
                 given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(), 10));
         assertEquals(StringPattern.Way.EVERY_STATE, run.way());
         assertTrue(run.matches("a".repeat(50) + "b"));
@@ -256,7 +260,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
 
         Automaton shaped = Automaton.of(((PatternRead.Read) PatternParser.read(regex.toString())).meaning(),
                 Held.roomy());
-        StringPattern run = StringPattern.of(shaped, false);
+        StringPattern run = StringPattern.of(shaped);
         assertEquals(StringPattern.Way.EVERY_STATE, run.way());
         assertTrue(run.matches(text.toString()));
         assertFalse(run.matches(text.substring(1) + "a"));

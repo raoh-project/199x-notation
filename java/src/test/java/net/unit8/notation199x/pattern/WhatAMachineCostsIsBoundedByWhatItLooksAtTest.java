@@ -103,7 +103,7 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
         assertEquals(3, sets.size(), "the class, the rest, and every symbol out of where a walk is done");
         assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
             for (int i = 0; i < 20; i++) {
-                assertEquals(StringPattern.Way.TABLE, StringPattern.of(deterministic, true).way());
+                assertEquals(StringPattern.Way.TABLE, StringPattern.of(ClassRows.of(deterministic)).way());
                 assertInstanceOf(PatternImage.Written.class, PatternImages.p2(deterministic));
                 assertTrue(deterministic.shortest() != null);
             }

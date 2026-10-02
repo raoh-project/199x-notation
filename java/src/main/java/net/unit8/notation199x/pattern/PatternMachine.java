@@ -94,7 +94,7 @@ public final class PatternMachine {
      * @return the matcher
      */
     public StringPattern pattern() {
-        return rows != null ? StringPattern.of(rows) : StringPattern.of(shaped, false);
+        return rows != null ? StringPattern.of(rows) : StringPattern.of(shaped);
     }
 
     /**

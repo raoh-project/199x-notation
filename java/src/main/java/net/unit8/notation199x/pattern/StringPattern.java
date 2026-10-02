@@ -970,21 +970,19 @@ public final class StringPattern implements Predicate<String> {
      * <p>For the machine a pattern's shape builds, which a caller that runs a pattern where it reads
      * it has nowhere to carry an image for. The machine is one this package built, so what an image
      * is checked for on the way in holds of it already, and a set a machine steps over twice is held
-     * once. A machine made deterministic is run as its rows ({@link #of(ClassRows)}); said to be
-     * deterministic here, it is held as its steps as an image of P1 that says so is, and walked the
-     * ways such an image is.
+     * once. It is walked as sets of states whatever it is: a machine made deterministic is run as
+     * its rows ({@link #of(ClassRows)}), and the only machine held as steps that is walked one state
+     * at a time is one an image of P1 said is deterministic ({@link #of(List)}).
      *
-     * @param machine       the machine
-     * @param deterministic whether it is one where a walk is only ever in one state, which has no
-     *                      step for no character
+     * @param machine the machine
      */
-    static StringPattern of(Automaton machine, boolean deterministic) {
-        return of(machine, deterministic, Budget.DEFAULT);
+    static StringPattern of(Automaton machine) {
+        return of(machine, Budget.DEFAULT);
     }
 
-    /** {@link #of(Automaton, boolean)}, given {@code budget} to walk faster on, so that each
-     *  {@link Way} a walk goes can be run where the one it would be given is another. */
-    static StringPattern of(Automaton machine, boolean deterministic, Budget budget) {
+    /** {@link #of(Automaton)}, given {@code budget} to walk faster on, so that each {@link Way} a
+     *  walk goes can be run where the one it would be given is another. */
+    static StringPattern of(Automaton machine, Budget budget) {
         int states = machine.size();
         boolean[] accepting = new boolean[states];
         int[][][] over = new int[states][][];
@@ -1002,12 +1000,8 @@ public final class StringPattern implements Predicate<String> {
                 target[state][step] = steps.get(step).to();
             }
             free[state] = machine.freeFrom(state).clone();
-            if (deterministic && free[state].length > 0) {
-                throw new IllegalArgumentException(
-                        "a deterministic machine steps nowhere for no character");
-            }
         }
-        return new StringPattern(deterministic, accepting, over, target, free, budget);
+        return new StringPattern(false, accepting, over, target, free, budget);
     }
 
     /** A set as the ascending {@code from, to} pairs a walk searches. */
