@@ -9,6 +9,11 @@ import (
 // them and starts again.
 var knownBytes = 2 << 20
 
+// retryBytes is how many bytes of subjects are first read without kept sets after keeping them is
+// given up on, before keeping them is tried again. Each time a try ends in giving up again the
+// wait doubles, so what the tries cost stays a part of what is read that gets smaller.
+var retryBytes = 16 * (2 << 20)
+
 // knownSet is a set of states a walk has been in, and where the characters it has read from it
 // lead: the sets of states a deterministic machine would have, made only as a walk comes to them.
 //
@@ -33,9 +38,13 @@ const utf8RuneSelf = 0x80
 //
 // Where they would be more, they are forgotten and worked out again as they are come to. Where
 // what was worked out since they were last forgotten was looked up again less than once in ten,
-// keeping them saves nothing: the walk goes on without them, and so does every later walk in the
-// same room. A machine whose sets are large, or subjects that keep coming to new ones, are walked
-// a state at a time as without them.
+// keeping them saves nothing: the walk goes on without them, and so do the walks in the same room
+// after it, until they have read retryBytes of subjects. Then keeping sets is tried again, as by a
+// room that has kept none: a room is kept between matches, in the machine's pool, and what was
+// looked up too seldom then says nothing about the subjects read later. A try that gives up again
+// waits twice as long before the next, and one that keeps sets long enough to forget them waits
+// again as long as the first. A machine whose sets are large, or subjects that keep coming to new
+// ones, are walked a state at a time as without them, but for the tries.
 //
 // Keeping a set goes over it: it is put in order, its key is written and it is copied, which for
 // a set of k states is k log k. So a character that comes to a set not kept costs that besides
@@ -47,8 +56,12 @@ type knownSets struct {
 	bytes int
 	// made and read are the sets made and the characters read since they were last forgotten.
 	made, read int
-	// off is whether keeping them was given up on.
-	off bool
+	// off is whether keeping them was given up on; offRead is the bytes read since, and offFor how
+	// many are read before it is tried again, retryBytes where it is zero. retrying is whether it is
+	// being tried again, so that giving up waits longer.
+	off             bool
+	offRead, offFor int
+	retrying        bool
 	// key is the room a set's key is written in to look it up.
 	key []byte
 }
@@ -64,10 +77,16 @@ func (k *knownSets) forget() {
 	k.bytes, k.made, k.read = 0, 0, 0
 }
 
-// start keeps the set a walk starts in, which w.now holds, or is nil where sets are not kept.
-func (k *knownSets) start(m *machine, w *walk) *knownSet {
+// start keeps the set a walk of a subject of bytes bytes starts in, which w.now holds, or is nil
+// where sets are not kept. While keeping them is given up on, it counts what is read, and tries
+// again once that is offFor.
+func (k *knownSets) start(m *machine, w *walk, bytes int) *knownSet {
 	if k.off {
-		return nil
+		k.offRead += bytes
+		if k.offRead < k.wait() {
+			return nil
+		}
+		k.off, k.retrying = false, true
 	}
 	k.first, _ = k.keep(m, w)
 	return k.first
@@ -123,9 +142,12 @@ func (k *knownSets) keep(m *machine, w *walk) (set *knownSet, forgot bool) {
 		gaveUp := k.read < 10*k.made || cost > knownBytes
 		k.forget()
 		if gaveUp {
-			k.off = true
+			k.giveUp()
 			return nil, true
 		}
+		// The sets were looked up often enough to be worth keeping, so a later give-up waits as
+		// long as the first.
+		k.offFor, k.retrying = 0, false
 		forgot = true
 	}
 	states := slices.Clone(w.now.states())
@@ -134,4 +156,22 @@ func (k *knownSets) keep(m *machine, w *walk) (set *knownSet, forgot bool) {
 	k.bytes += cost
 	k.made++
 	return set, forgot
+}
+
+// wait is how many bytes are read without kept sets before keeping them is tried again.
+func (k *knownSets) wait() int {
+	if k.offFor == 0 {
+		return retryBytes
+	}
+	return k.offFor
+}
+
+// giveUp walks the walks after this without kept sets, until wait() bytes are read.
+func (k *knownSets) giveUp() {
+	if k.retrying {
+		k.offFor = 2 * k.wait()
+	}
+	k.retrying = false
+	k.off = true
+	k.offRead = 0
 }

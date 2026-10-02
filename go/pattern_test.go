@@ -249,3 +249,59 @@ func TestWhatAWalkKeepsChangesNoAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A room that gave up keeping sets tries again once it has read what it waits for, keeps sets for
+// subjects whose sets are looked up again, and waits twice as long after a try that gives up
+// again; the answers are the same throughout. A room is kept between matches in the machine's
+// pool, so one that gave up for good would walk every later subject a state at a time.
+func TestAGivenUpRoomTriesAgainAndWaitsLongerAfterEachTryThatFails(t *testing.T) {
+	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
+	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
+	m := read.compiled.machine
+	w := m.newWalk()
+	rng := uint32(7)
+	random := func(n int) string {
+		var b strings.Builder
+		for range n {
+			rng = rng*1664525 + 1013904223
+			b.WriteByte("ab"[rng>>31])
+		}
+		return b.String()
+	}
+	check := func(subject string) {
+		t.Helper()
+		want := len(subject) >= 17 && subject[len(subject)-17] == 'a'
+		if got := m.matchesIn(w, subject); got != want {
+			t.Fatalf("%q... is %v, not %v", subject[:min(20, len(subject))], got, want)
+		}
+	}
+	for !w.known.off {
+		check(random(20_000))
+	}
+	if w.known.wait() != retryBytes {
+		t.Fatalf("the first give-up waits %d, not %d", w.known.wait(), retryBytes)
+	}
+	// Waited for, so that the test reads less than the constant says.
+	w.known.offFor = 1000
+	check(strings.Repeat("ab", 400))
+	if !w.known.off {
+		t.Fatal("it tried again before it read what it waits for")
+	}
+	check(strings.Repeat("ab", 400))
+	if w.known.off {
+		t.Fatal("it did not try again once it had")
+	}
+	for !w.known.off {
+		check(random(20_000))
+	}
+	if w.known.wait() != 2000 {
+		t.Fatalf("a try that gave up again waits %d, not 2000", w.known.wait())
+	}
+	w.known.offRead = w.known.wait()
+	for range 1000 {
+		check(strings.Repeat("ab", 20))
+	}
+	if w.known.off {
+		t.Fatal("subjects whose sets are looked up again made it give up")
+	}
+}

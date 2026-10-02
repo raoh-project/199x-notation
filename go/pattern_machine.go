@@ -196,11 +196,23 @@ type walk struct {
 func (m *machine) matches(subject string) bool {
 	w, _ := m.scratch.Get().(*walk)
 	if w == nil {
-		w = &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states))}
-		w.known.forget()
+		w = m.newWalk()
 	}
 	defer m.scratch.Put(w)
-	m.begin(w)
+	return m.matchesIn(w, subject)
+}
+
+// newWalk is a walk of m that has kept no sets.
+func (m *machine) newWalk() *walk {
+	w := &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states))}
+	w.known.forget()
+	return w
+}
+
+// matchesIn is whether the whole of subject is accepted, walked in w, which keeps what it works
+// out for the next walk in it.
+func (m *machine) matchesIn(w *walk, subject string) bool {
+	m.begin(w, len(subject))
 	for at := 0; at < len(subject); {
 		if c := subject[at]; c < utf8.RuneSelf && w.in != nil {
 			if next := w.in.ascii[c]; next != nil {
@@ -230,13 +242,13 @@ func (m *machine) matches(subject string) bool {
 
 // begin puts the walk in the state it starts in, with every state the steps for nothing reach
 // from it: the kept set it starts in where that is kept, and otherwise those states, worked out.
-func (m *machine) begin(w *walk) {
+func (m *machine) begin(w *walk, bytes int) {
 	if w.in = w.known.first; w.in != nil {
 		return
 	}
 	w.now.clear()
 	m.enter(w, w.now, 0)
-	w.in = w.known.start(m, w)
+	w.in = w.known.start(m, w, bytes)
 }
 
 // take moves the walk over one symbol, and is false where it is in no state after it. Where the

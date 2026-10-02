@@ -7,6 +7,11 @@ use super::machine::{Classes, Machine};
 /// starts again.
 const KNOWN_BYTES: usize = 2 << 20;
 
+/// How many bytes of subjects are first read a state at a time after keeping sets is given up on,
+/// before keeping them is tried again. Each time a try ends in giving up again the wait doubles, so
+/// what the tries cost stays a part of what is read that gets smaller.
+const RETRY_BYTES: usize = 16 * KNOWN_BYTES;
+
 /// Where a class leads from a kept set before that has been worked out.
 const UNKNOWN: u32 = u32::MAX;
 /// The kept set no state is in, from which no string is accepted.
@@ -21,9 +26,13 @@ const EMPTY: u32 = u32::MAX;
 ///
 /// Where they would be more, they are forgotten and worked out again as they are come to. Where what
 /// was worked out since they were last forgotten was looked up again less than once in ten, keeping
-/// them saves nothing: the walk goes on without them, a state at a time, and so does every later
-/// match with this cache. A machine whose sets are large, or subjects that keep coming to new ones,
-/// are walked a state at a time as without them.
+/// them saves nothing: the walk goes on without them, a state at a time, and so do the matches with
+/// this cache after it, until they have read [`RETRY_BYTES`] of subjects. Then keeping sets is tried
+/// again, as a cache that has kept none: what was looked up too seldom then says nothing about the
+/// subjects a matcher that is kept for long reads later. A try that gives up again waits twice as
+/// long before the next, and one that keeps sets long enough to forget them waits again as long as
+/// the first. A machine whose sets are large, or subjects that keep coming to new ones, are walked a
+/// state at a time as without them, but for the tries.
 ///
 /// A set is the same set in whatever order its states were come to, so it is found by a hash that
 /// does not turn on the order, summed as its states are entered ([`Walk::enter`]), and told apart
@@ -52,6 +61,12 @@ pub(crate) struct Cache {
     read: usize,
     /// Whether keeping sets was given up on.
     off: bool,
+    /// The bytes read since keeping sets was given up on, and how many are read before it is tried
+    /// again.
+    off_read: usize,
+    off_for: usize,
+    /// Whether keeping sets is being tried again, so that giving up waits longer.
+    retrying: bool,
     walk: Walk,
 }
 
@@ -68,6 +83,9 @@ impl Cache {
             made: 0,
             read: 0,
             off: false,
+            off_read: 0,
+            off_for: RETRY_BYTES,
+            retrying: false,
             walk: Walk {
                 entered: Vec::new(),
                 generation: 0,
@@ -78,6 +96,32 @@ impl Cache {
                 accepting: false,
             },
         }
+    }
+
+    /// Walks the matches after this a state at a time, until [`Cache::off_for`] bytes are read.
+    fn give_up(&mut self) {
+        if self.retrying {
+            self.off_for = self.off_for.saturating_mul(2);
+        }
+        self.retrying = false;
+        self.off = true;
+        self.off_read = 0;
+    }
+
+    /// Whether the match of a subject of `bytes` bytes walks a state at a time: keeping sets was
+    /// given up on and is not to be tried again yet. It counts what is read while it is given up
+    /// on, and is tried again, as by a cache that has kept none, once that is [`Cache::off_for`].
+    fn walks_alone(&mut self, bytes: usize) -> bool {
+        if !self.off {
+            return false;
+        }
+        self.off_read = self.off_read.saturating_add(bytes);
+        if self.off_read < self.off_for {
+            return true;
+        }
+        self.off = false;
+        self.retrying = true;
+        false
     }
 
     /// Forgets every kept set. What is dropped is at most what [`KNOWN_BYTES`] holds.
@@ -119,9 +163,13 @@ impl Cache {
             let gave_up = self.read < 10 * self.made || cost > KNOWN_BYTES;
             self.forget();
             if gave_up {
-                self.off = true;
+                self.give_up();
                 return None;
             }
+            // The sets were looked up often enough to be worth keeping, so a later give-up waits
+            // as long as the first.
+            self.off_for = RETRY_BYTES;
+            self.retrying = false;
             forgot = true;
         }
         let kept = self.sets.len();
@@ -285,7 +333,7 @@ impl Walk {
 /// [`Walk::next_set`], over every state, once in four billion sets.
 pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bool {
     let classes = machine.classes.count();
-    if cache.off {
+    if cache.walks_alone(subject.len()) {
         cache.walk.begin(machine);
         return walk_on(machine, &mut cache.walk, subject.chars());
     }
@@ -529,5 +577,49 @@ mod tests {
             assert_eq!(matcher.matches(&subject), expected);
         }
         assert!(matcher.cache.off, "the cache gave up keeping sets");
+    }
+
+    /// A cache that gave up keeping sets tries again once it has read what it waits for, keeps sets
+    /// for subjects whose sets are looked up again, and waits twice as long after a try that gives
+    /// up again; the answers are the same throughout.
+    #[test]
+    fn a_cache_that_gave_up_tries_again_and_waits_longer_after_each_try_that_fails() {
+        let pattern = pattern("(?:a|b)*a(?:a|b){16}");
+        let mut matcher = pattern.matcher();
+        let mut numbers = Numbers(7);
+        let mut random = |n: usize| -> String {
+            (0..n)
+                .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
+                .collect()
+        };
+        let check = |matcher: &mut crate::Matcher<'_>, subject: &str| {
+            let expected = subject.len() >= 17 && subject.as_bytes()[subject.len() - 17] == b'a';
+            assert_eq!(matcher.matches(subject), expected);
+        };
+        while !matcher.cache.off {
+            check(&mut matcher, &random(20_000));
+        }
+        let first = matcher.cache.off_for;
+        assert_eq!(first, RETRY_BYTES);
+        // Waited for, so that the test reads less than the constant says.
+        matcher.cache.off_for = 1_000;
+        check(&mut matcher, &"ab".repeat(400));
+        assert!(
+            matcher.cache.off,
+            "it waits until it has read what it waits for"
+        );
+        check(&mut matcher, &"ab".repeat(400));
+        assert!(!matcher.cache.off, "it tries again once it has");
+        // Subjects that come to new sets all the time make it give up again, and wait longer.
+        while !matcher.cache.off {
+            check(&mut matcher, &random(20_000));
+        }
+        assert_eq!(matcher.cache.off_for, 2_000);
+        // Subjects whose sets are looked up again keep it keeping them.
+        matcher.cache.off_read = matcher.cache.off_for;
+        for _ in 0..1_000 {
+            check(&mut matcher, &"ab".repeat(20));
+        }
+        assert!(!matcher.cache.off);
     }
 }
