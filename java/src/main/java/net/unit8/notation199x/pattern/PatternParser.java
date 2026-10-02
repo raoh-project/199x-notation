@@ -547,12 +547,12 @@ public final class PatternParser {
     }
 
     /**
-     * The character here, the reading moved past it whole.
+     * The code point here as the text holds it, the reading moved past it whole.
      *
-     * <p>{@link #at} counts units, as a refusal's place does, but a character past the basic plane
-     * is taken as one: moved past half of it, the reading would stop between the two halves of a
-     * pair, and a refusal would quote the first half, which is no text. Half a pair with no other
-     * half beside it is taken as the one unit it is.
+     * <p>{@link #at} counts units, as a refusal's place does, but a pair is taken as one: moved past
+     * half of it, the reading would stop between the two halves, and a refusal would quote the first
+     * half, which is no text. Half a pair with no other half beside it is taken as the one unit it is,
+     * and is refused by {@link #symbol} where it is named.
      */
     private int take() {
         if (done()) {
