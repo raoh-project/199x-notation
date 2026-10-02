@@ -9,8 +9,10 @@ use Raoh\Notation199x\Internal\Pattern\Machine;
 use Raoh\Notation199x\Pattern;
 
 /**
- * A machine that gave up keeping sets tries again, as Go's and Rust's do: a pattern may be held for
- * long, and one that gave up for good would walk every later subject a state at a time.
+ * What a machine keeps changes how fast it walks and no answer. A machine that gave up keeping
+ * sets tries again, as Go's and Rust's do: a pattern may be held for long, and one that gave up
+ * for good would walk every later subject a state at a time. Sets that share a hash are told
+ * apart, and the two loops that move states take the same steps.
  */
 final class MachineTest extends TestCase
 {
