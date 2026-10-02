@@ -8,6 +8,7 @@ mod read;
 mod states;
 mod symbols;
 mod tree;
+mod walk;
 
 use alloc::string::{String, ToString};
 
@@ -46,10 +47,24 @@ impl Pattern {
     /// The subject is read a scalar value at a time, once, and never gone back over: the machine the
     /// pattern means is walked as the set of states it may be in, so for a pattern a match takes
     /// time linear in the subject. The machine is built from the shape of the pattern, its
-    /// repetitions written out, and is not made deterministic, so each scalar value may cost as many
-    /// steps as the machine has states, which for a pattern read from text is at most 250,000.
+    /// repetitions written out, and no deterministic machine is built ahead of a match. A match keeps
+    /// the sets of states it comes to and where each class of characters leads from them, so a
+    /// character read from a set before is one lookup; a character that leads somewhere not yet
+    /// worked out may cost as many steps as the machine has states, which for a pattern read from
+    /// text is at most 250,000.
+    ///
+    /// What one match keeps is dropped when it ends. A caller that matches the pattern again and
+    /// again keeps it between them with a [`Matcher`].
     pub fn matches(&self, subject: &str) -> bool {
-        self.machine.matches(subject)
+        self.matcher().matches(subject)
+    }
+
+    /// A [`Matcher`] of this pattern, which keeps what its matches work out for the next.
+    pub fn matcher(&self) -> Matcher<'_> {
+        Matcher {
+            pattern: self,
+            cache: walk::Cache::new(),
+        }
     }
 
     /// The pattern `image` is an image of, in the format P1 that `image/P1.md` in the repository
@@ -72,6 +87,32 @@ impl Pattern {
     /// The crate writes no image.
     pub fn from_image(image: &str) -> Result<Pattern, NotAnImage> {
         image::read(image).map(|machine| Pattern { machine })
+    }
+}
+
+/// A [`Pattern`] and what its matches have worked out: the sets of states they came to and where
+/// each class of characters leads from them, kept within about two megabytes. A match against a
+/// subject that comes to sets an earlier one came to looks them up rather than working them out
+/// again, which is what most characters of most subjects cost. What is kept changes how fast a match
+/// is and never what it answers.
+///
+/// A `Matcher` is not shared: each thread that matches makes its own from the pattern, which is.
+pub struct Matcher<'a> {
+    pattern: &'a Pattern,
+    cache: walk::Cache,
+}
+
+impl Matcher<'_> {
+    /// Whether the whole of `subject` is one of the strings the pattern accepts, as
+    /// [`Pattern::matches`] answers.
+    pub fn matches(&mut self, subject: &str) -> bool {
+        walk::matches(&self.pattern.machine, &mut self.cache, subject)
+    }
+}
+
+impl core::fmt::Debug for Matcher<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Matcher").finish_non_exhaustive()
     }
 }
 

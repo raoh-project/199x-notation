@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -22,6 +23,8 @@ pub(crate) struct Machine {
     /// The free steps out of state `q`, the same way.
     free_starts: Vec<u32>,
     free: Vec<u32>,
+    /// The classes of characters no set tells apart.
+    pub(crate) classes: Classes,
 }
 
 impl Machine {
@@ -40,7 +43,9 @@ impl Machine {
             steps.iter().map(|&(from, set, to)| (from, (set, to))),
         );
         let (free_starts, free) = by_state(states, free.iter().copied());
+        let classes = Classes::of(&sets);
         Machine {
+            classes,
             sets,
             accepting,
             step_starts,
@@ -59,79 +64,74 @@ impl Machine {
         &self.steps[self.step_starts[q] as usize..self.step_starts[q + 1] as usize]
     }
 
-    fn free_from(&self, q: usize) -> &[u32] {
+    pub(crate) fn free_from(&self, q: usize) -> &[u32] {
         &self.free[self.free_starts[q] as usize..self.free_starts[q + 1] as usize]
     }
+}
 
-    /// Whether the whole of `subject` is accepted.
-    ///
-    /// Every state the machine may be in is walked at once, a scalar value at a time, and nothing is
-    /// gone back over, so a match takes time linear in the subject: each scalar value costs the steps
-    /// out of the states the walk is in and the free steps from where they lead, at most the
-    /// machine's. Each state is entered at most once at each scalar value, which the generation it
-    /// was last entered in says. Every step of a match is taken in this loop.
-    pub(crate) fn matches(&self, subject: &str) -> bool {
-        let mut walk = Walk {
-            entered: vec![0; self.states()],
-            generation: 1,
-            pending: Vec::new(),
+/// The scalar values cut where any set of a machine begins or ends, so that two characters of one
+/// class are in the same sets: a step is over the whole of a class or none of it. A walk asks where a
+/// class leads rather than a character, so what it keeps is kept for every character of the class.
+pub(crate) struct Classes {
+    /// Class `k` is the scalar values from `starts[k]` to the one before `starts[k + 1]`, or to the
+    /// last where it is the last class. No class begins at a surrogate.
+    starts: Vec<u32>,
+    /// The class of each ASCII character, by its byte. A byte past ASCII is the first of a character
+    /// of two bytes or more, whose class is found by searching `starts`; its place here is 0 and is
+    /// never read, and is here so that a byte looks its class up with no check of its own.
+    ascii: Box<[u32; 256]>,
+}
+
+impl Classes {
+    fn of(sets: &[Symbols]) -> Classes {
+        // Where a run ends, the next scalar value begins a class; one past the surrogates is where a
+        // class begins that would otherwise begin among them.
+        let mut starts: Vec<u32> = vec![0];
+        for set in sets {
+            for &(first, last) in set.runs() {
+                starts.push(u32::from(first));
+                starts.push(u32::from(last) + 1);
+            }
+        }
+        for start in &mut starts {
+            if (0xD800..=0xDFFF).contains(start) {
+                *start = 0xE000;
+            }
+        }
+        starts.retain(|start| *start <= u32::from(char::MAX));
+        starts.sort_unstable();
+        starts.dedup();
+        let mut classes = Classes {
+            starts,
+            ascii: Box::new([0; 256]),
         };
-        let mut now = Vec::new();
-        let mut next = Vec::new();
-        walk.enter(self, &mut now, 0);
-        for c in subject.chars() {
-            walk.next_generation();
-            next.clear();
-            for &q in &now {
-                for &(set, to) in self.steps_from(q as usize) {
-                    if self.sets[set as usize].has(c) {
-                        walk.enter(self, &mut next, to);
-                    }
-                }
-            }
-            core::mem::swap(&mut now, &mut next);
-            if now.is_empty() {
-                return false;
-            }
+        for c in 0..128u8 {
+            classes.ascii[usize::from(c)] = classes.class_of(char::from(c));
         }
-        now.iter().any(|&q| self.accepting[q as usize])
-    }
-}
-
-/// The room one match works in: the generation each state was last entered in, and the states the
-/// free steps are still to be followed from.
-struct Walk {
-    entered: Vec<u32>,
-    generation: u32,
-    pending: Vec<u32>,
-}
-
-impl Walk {
-    fn next_generation(&mut self) {
-        if self.generation == u32::MAX {
-            self.entered.fill(0);
-            self.generation = 0;
-        }
-        self.generation += 1;
+        classes
     }
 
-    /// Puts `q` in `into`, with every state the free steps reach from it, each once.
-    fn enter(&mut self, machine: &Machine, into: &mut Vec<u32>, q: u32) {
-        if self.entered[q as usize] == self.generation {
-            return;
+    /// The class of each ASCII character, by its byte; the places of the bytes past ASCII are not
+    /// classes.
+    pub(crate) fn ascii(&self) -> &[u32; 256] {
+        &self.ascii
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        self.starts.len()
+    }
+
+    /// The class of `c`.
+    pub(crate) fn class(&self, c: char) -> u32 {
+        if c.is_ascii() {
+            self.ascii[c as usize]
+        } else {
+            self.class_of(c)
         }
-        self.entered[q as usize] = self.generation;
-        into.push(q);
-        self.pending.push(q);
-        while let Some(from) = self.pending.pop() {
-            for &to in machine.free_from(from as usize) {
-                if self.entered[to as usize] != self.generation {
-                    self.entered[to as usize] = self.generation;
-                    into.push(to);
-                    self.pending.push(to);
-                }
-            }
-        }
+    }
+
+    fn class_of(&self, c: char) -> u32 {
+        (self.starts.partition_point(|start| *start <= u32::from(c)) - 1) as u32
     }
 }
 
@@ -227,8 +227,13 @@ impl Builder<'_> {
     }
 
     /// A repetition as the copies it is: the floor is copies one after another, what is above it is
-    /// copies each of which may be stepped over, and an unbounded ceiling is one more copy with a
-    /// free step back to where it began.
+    /// copies each of which may be stepped over, and an unbounded ceiling is a copy with a free step
+    /// back to where it began.
+    ///
+    /// With no ceiling, the last copy of the floor is that copy, and is left by its end: `X+` is one
+    /// copy of X, entered once and again as often as the string asks, and `X*` is the same entered
+    /// from a state the walk may also leave by. So a walk that has read the first copy is where one
+    /// that has read the tenth is, and the sets of states a match keeps do not tell the two apart.
     fn repeated(&mut self, body: usize, least: u32, most: Option<u32>, from: u32) -> u32 {
         // A body that makes no state is the empty string however many times it is taken, and is
         // built as that: one state to end in. Copied a count at a time it would cost the count and
@@ -239,16 +244,19 @@ impl Builder<'_> {
             return out;
         }
         let mut at = from;
-        for _ in 0..least {
-            at = self.build(body, at);
-        }
         let Some(most) = most else {
+            for _ in 1..least {
+                at = self.build(body, at);
+            }
             let back = self.state();
             self.freely(at, back);
             let exit = self.build(body, back);
             self.freely(exit, back);
-            return back;
+            return if least == 0 { back } else { exit };
         };
+        for _ in 0..least {
+            at = self.build(body, at);
+        }
         let out = self.state();
         self.freely(at, out);
         for _ in least..most {
