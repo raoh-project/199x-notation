@@ -5,8 +5,10 @@
 #
 # image ; subject ; outcome
 #
-# image is written as it is: it holds no ; and begins and ends with no space. subject is a text as
-# its scalar values in hex, as in suite/. outcome is ACCEPTED or NOT_ACCEPTED for an image and the
+# image is the text as it is, in printable ASCII, but for a space and any character outside printable
+# ASCII, each written <U+XXXX> with its scalar value in hex: so a line can hold an image with a space
+# or a line break at either end, which a line otherwise drops. subject is a text as its scalar values
+# in hex, as in suite/. outcome is ACCEPTED or NOT_ACCEPTED for an image and the
 # subject, or REFUSED for text that is not an image of P1, whose subject is empty. Every line is
 # written by hand from image/P1.md, not by a writer.
 
@@ -112,12 +114,28 @@ P1,,0,0,1,1,0,0 ; ; REFUSED
 P1,00,0,1,1,0,0 ; ; REFUSED
 P1,0,1,1,097,97,2,0,1,0,1,0,1,1,0,1,0 ; ; REFUSED
 P1,0,0,1,+1,0,0 ; ; REFUSED
-P1,0,0,1,1 ,0,0 ; ; REFUSED
-P1,0,0,1,١,0,0 ; ; REFUSED
+P1,0,0,1,1<U+0020>,0,0 ; ; REFUSED
+P1,0,0,1,<U+0661>,0,0 ; ; REFUSED
 P1,0,0,1,x,0,0 ; ; REFUSED
 
-# A number larger than its place allows is refused however many digits it has.
+# Nothing comes before the marker or after the last number, not even a space or a line break.
+<U+0020>P1,0,0,1,1,0,0 ; ; REFUSED
+<U+FEFF>P1,0,0,1,1,0,0 ; ; REFUSED
+P1,0,0,1,1,0,0<U+0020> ; ; REFUSED
+P1,0,0,1,1,0,0<U+000A> ; ; REFUSED
+P1,0,0,1,1,0,0<U+000D><U+000A> ; ; REFUSED
+P1,0,0,1,1,0,0<U+0000> ; ; REFUSED
+P1,0,0,1,<U+000A>1,0,0 ; ; REFUSED
+P1,0,0,1,<U+0009>1,0,0 ; ; REFUSED
+
+# Every number is at most 2147483647, and a place may allow less: a number past 2147483647 is refused
+# in every place, however many digits it has, and so is one past what its place allows.
 P1,1,1,1,97,2147483648,2,0,1,0,1,0,1,0,0 ; ; REFUSED
 P1,1,1,1,97,4294967296,2,0,1,0,1,0,1,0,0 ; ; REFUSED
 P1,1,1,1,97,99999999999999999999,2,0,1,0,1,0,1,0,0 ; ; REFUSED
 P1,0,0,99999999999999999999,1,0,0 ; ; REFUSED
+P1,0,0,2147483648,1,0,0 ; ; REFUSED
+P1,0,2147483648,0,1,1,0,0 ; ; REFUSED
+P1,0,1,2147483648,1,1,0,0 ; ; REFUSED
+P1,0,0,1,1,2147483648,0 ; ; REFUSED
+P1,0,0,1,1,0,2147483648 ; ; REFUSED

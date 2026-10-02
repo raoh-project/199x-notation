@@ -17,22 +17,22 @@ class ImagesAreReadAsEveryLineOfTheFixturesSaysTest {
     @Test
     void everyImageIsReadOrRefusedAndAcceptsAsTheLineSays() {
         assertEquals(List.of(), Suite.wrong(Path.of("..", "image", "p1.txt"), 3, line -> {
-            String image = line.asWritten(0);
+            String image = line.textAsShown(0);
             String outcome = line.oneOf(2, "ACCEPTED", "NOT_ACCEPTED", "REFUSED");
             StringPattern read;
             try {
                 read = StringPattern.of(List.of(image));
             } catch (IllegalArgumentException refused) {
                 line.empty(1);
-                return outcome.equals("REFUSED") ? null : image + " is refused: " + refused.getMessage();
+                return outcome.equals("REFUSED") ? null : Suite.shown(image) + " is refused: " + refused.getMessage();
             }
             if (outcome.equals("REFUSED")) {
                 line.empty(1);
-                return image + " is read";
+                return Suite.shown(image) + " is read";
             }
             String subject = line.text(1);
             return read.matches(subject) == outcome.equals("ACCEPTED") ? null
-                    : image + (outcome.equals("ACCEPTED") ? " refuses " : " accepts ") + Suite.shown(subject);
+                    : Suite.shown(image) + (outcome.equals("ACCEPTED") ? " refuses " : " accepts ") + Suite.shown(subject);
         }));
     }
 }

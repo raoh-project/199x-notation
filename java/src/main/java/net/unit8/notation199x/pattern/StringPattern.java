@@ -1563,9 +1563,9 @@ public final class StringPattern implements Predicate<String> {
 
         /**
          * The next number: 0, or digits that do not begin with 0, ended by a comma or by the end of
-         * the image. A comma is followed by a number, so an image does not end with one. A number
-         * past the largest {@code int} is larger than anything in an image may be, and is refused
-         * here as what an image does not write rather than read as something else.
+         * the image. A comma is followed by a number, so an image does not end with one. A number of
+         * P1 is at most 2,147,483,647 wherever it stands ({@code image/P1.md}), and a larger one is
+         * refused here, before what its place allows is asked.
          */
         int next() {
             if (at >= text.length()) {

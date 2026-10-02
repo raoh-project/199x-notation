@@ -66,10 +66,38 @@ public final class Suite {
             return Suite.text(take(index), where);
         }
 
-        /** The field at {@code index} as it is written, for a file that says a field is written so,
-         *  as {@code image/p1.txt} writes an image. */
-        public String asWritten(int index) {
-            return take(index);
+        /**
+         * The field at {@code index} as the text it writes the way {@link #shown} does, without the
+         * quotes: printable ASCII other than a space as itself, and any other scalar value as
+         * {@code <U+XXXX>}. For a field that is mostly ASCII and has to hold what a line cannot,
+         * as {@code image/p1.txt} writes an image with a space or a line break at either end.
+         */
+        public String textAsShown(int index) {
+            String field = take(index);
+            StringBuilder text = new StringBuilder();
+            int at = 0;
+            while (at < field.length()) {
+                char each = field.charAt(at);
+                if (each == '<') {
+                    int end = field.indexOf('>', at);
+                    String named = end < 0 ? "" : field.substring(at + 1, end);
+                    if (!named.matches("U\\+[0-9A-F]{4,6}")) {
+                        throw wrong(index, "printable ASCII and <U+XXXX>");
+                    }
+                    int scalar = Integer.parseInt(named.substring(2), 16);
+                    if (scalar > 0x10FFFF || scalar >= 0xD800 && scalar <= 0xDFFF) {
+                        throw wrong(index, "printable ASCII and <U+XXXX> of a scalar value");
+                    }
+                    text.appendCodePoint(scalar);
+                    at = end + 1;
+                } else if (each > 0x20 && each < 0x7F) {
+                    text.append(each);
+                    at++;
+                } else {
+                    throw wrong(index, "printable ASCII other than a space, and <U+XXXX>");
+                }
+            }
+            return text.toString();
         }
 
         /** The field at {@code index} as the one scalar value it writes. */
