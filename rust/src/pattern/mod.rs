@@ -11,6 +11,7 @@ mod tree;
 mod walk;
 
 use alloc::string::{String, ToString};
+use core::borrow::Borrow;
 
 pub use image::NotAnImage;
 use machine::Machine;
@@ -71,11 +72,8 @@ impl Pattern {
     /// An [`OwnedMatcher`] of this pattern, which holds the pattern and keeps what its matches
     /// work out for the next: what a caller keeps where the pattern cannot be borrowed for as long,
     /// as a value that holds both does.
-    pub fn into_matcher(self) -> OwnedMatcher {
-        OwnedMatcher {
-            pattern: self,
-            cache: walk::Cache::new(),
-        }
+    pub fn into_matcher(self) -> OwnedMatcher<Pattern> {
+        OwnedMatcher::new(self)
     }
 
     /// The pattern `image` is an image of, in the format P1 that `image/P1.md` in the repository
@@ -126,27 +124,49 @@ impl Matcher<'_> {
 /// that is to match again and again, for instance. What is kept changes how fast a match is and
 /// never what it answers.
 ///
-/// An `OwnedMatcher` is not shared any more than a [`Matcher`] is: a caller that matches from
-/// several threads keeps one for each, or takes turns at one.
-pub struct OwnedMatcher {
-    pattern: Pattern,
+/// `P` is how the pattern is held: the pattern itself, or a pointer to one that several matchers
+/// share, such as an `Arc<Pattern>`. A pattern is not changed by matching it and can be shared;
+/// what a matcher keeps is its own. So a caller that matches from several threads shares the
+/// pattern and keeps a matcher for each, as it would a [`Matcher`].
+///
+/// ```
+/// use notation199x::{OwnedMatcher, PatternRead, read_pattern};
+/// use std::sync::Arc;
+///
+/// let PatternRead::Pattern(pattern) = read_pattern("[a-z]+[0-9]+") else { unreachable!() };
+/// let pattern = Arc::new(pattern);
+/// let mut here = OwnedMatcher::new(Arc::clone(&pattern));
+/// let mut there = OwnedMatcher::new(Arc::clone(&pattern));
+/// assert!(here.matches("abc123"));
+/// assert!(!there.matches("123abc"));
+/// ```
+pub struct OwnedMatcher<P: Borrow<Pattern> = Pattern> {
+    pattern: P,
     cache: walk::Cache,
 }
 
-impl OwnedMatcher {
+impl<P: Borrow<Pattern>> OwnedMatcher<P> {
+    /// A matcher of the pattern `pattern` holds, which has worked nothing out yet.
+    pub fn new(pattern: P) -> Self {
+        OwnedMatcher {
+            pattern,
+            cache: walk::Cache::new(),
+        }
+    }
+
     /// Whether the whole of `subject` is one of the strings the pattern accepts, as
     /// [`Pattern::matches`] answers.
     pub fn matches(&mut self, subject: &str) -> bool {
-        walk::matches(&self.pattern.machine, &mut self.cache, subject)
+        walk::matches(&self.pattern.borrow().machine, &mut self.cache, subject)
     }
 
-    /// The pattern.
-    pub fn pattern(&self) -> &Pattern {
+    /// How the pattern is held.
+    pub fn pattern(&self) -> &P {
         &self.pattern
     }
 }
 
-impl core::fmt::Debug for OwnedMatcher {
+impl<P: Borrow<Pattern>> core::fmt::Debug for OwnedMatcher<P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("OwnedMatcher").finish_non_exhaustive()
     }

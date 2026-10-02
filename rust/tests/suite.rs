@@ -234,9 +234,9 @@ fn patterns_accept_what_every_line_of_the_suite_says() {
     });
 }
 
-/// An owned matcher answers every line as the pattern does, and answers it again the same after
-/// matching the other subjects of the suite, so what it keeps from one match never changes the
-/// answer of another.
+/// Owned matchers sharing one pattern answer every line as the pattern does, and answer it again
+/// the same after matching the other subjects of the suite, so what one keeps from a match never
+/// changes the answer of another match, or of another matcher.
 #[test]
 fn an_owned_matcher_answers_every_line_as_the_pattern_does() {
     let mut subjects = Vec::new();
@@ -252,10 +252,12 @@ fn an_owned_matcher_answers_every_line_as_the_pattern_does() {
             return None;
         };
         let expected: Vec<bool> = subjects.iter().map(|s| read.matches(s)).collect();
-        let mut matcher = read.into_matcher();
+        let shared = std::sync::Arc::new(read);
+        let mut alone = OwnedMatcher::new(std::sync::Arc::clone(&shared));
+        let mut other = OwnedMatcher::new(std::sync::Arc::clone(&shared));
         for round in 0..2 {
             for (subject, &want) in subjects.iter().zip(&expected) {
-                if matcher.matches(subject) != want {
+                if alone.matches(subject) != want || other.matches(subject) != want {
                     return Some(format!(
                         "{} accepts {} in round {round}: {}",
                         shown(&pattern),
