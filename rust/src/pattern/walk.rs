@@ -305,6 +305,11 @@ fn scatter(q: u32) -> u32 {
 /// Every walk enters states through [`Walk::enter`], with kept sets or without, so it does only what
 /// both need. What only keeping a set needs, its hash and whether it accepts, is worked out of the
 /// set where it is kept ([`hash_of`], [`accepts`]), and nothing of it is held here.
+///
+/// `pending`, `now` and `next` each hold a state at most once at a time, so each is made as large as
+/// the machine when the walk first starts a set ([`Walk::next_set`]) and never grows: putting a state
+/// in one is never a copy of all of it. Nothing moves one out of the walk to keep, which would leave
+/// it no room for the next set; a kept set is a copy ([`Cache::keep`]).
 struct Walk {
     entered: Vec<u32>,
     generation: u32,
@@ -317,7 +322,11 @@ impl Walk {
     /// Starts the set the walk comes to next, in a generation of its own.
     fn next_set(&mut self, machine: &Machine) {
         if self.entered.is_empty() {
-            self.entered = vec![0; machine.states()];
+            let states = machine.states();
+            self.entered = vec![0; states];
+            self.pending = Vec::with_capacity(states);
+            self.now = Vec::with_capacity(states);
+            self.next = Vec::with_capacity(states);
         }
         if self.generation == u32::MAX {
             // A loop of its own and not `fill`: it goes over every state of the machine, and is one a
@@ -561,6 +570,56 @@ mod tests {
                     "{text} against {subject:?}"
                 );
             }
+        }
+    }
+
+    /// The walk's lists of states are made as large as the machine once, and no match grows them:
+    /// not one that keeps a new set at most characters, nor one that looks kept sets up, nor one
+    /// that gives keeping them up and walks a state at a time.
+    #[test]
+    fn no_match_grows_the_walks_lists_of_states() {
+        let mut numbers = Numbers(7);
+        for (text, length) in [
+            ("(?:a|b)*a(?:a|b){8}", 400),
+            ("(?:a|b)*a(?:a|b){16}", 20_000),
+        ] {
+            let pattern = pattern(text);
+            let mut matcher = pattern.matcher();
+            matcher.matches("");
+            let walk = &matcher.cache.walk;
+            let room = [
+                walk.pending.capacity(),
+                walk.now.capacity(),
+                walk.next.capacity(),
+            ];
+            let super::super::Run::Steps(machine) = &pattern.run else {
+                unreachable!("a pattern read from text is walked by its steps")
+            };
+            assert!(
+                room.iter().all(|&each| each >= machine.states()),
+                "{text}: {room:?}"
+            );
+            for _ in 0..4 {
+                let subject: String = (0..length)
+                    .map(|_| if numbers.below(2) == 0 { 'a' } else { 'b' })
+                    .collect();
+                matcher.matches(&subject);
+                let walk = &matcher.cache.walk;
+                assert_eq!(
+                    [
+                        walk.pending.capacity(),
+                        walk.now.capacity(),
+                        walk.next.capacity()
+                    ],
+                    room,
+                    "{text}"
+                );
+            }
+            assert_eq!(
+                matcher.cache.off,
+                length > 400,
+                "{text} took the way it is here for"
+            );
         }
     }
 
