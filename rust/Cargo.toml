@@ -10,3 +10,6 @@ keywords = ["unicode", "normalization", "case", "pattern", "no_std"]
 categories = ["text-processing", "no-std"]
 
 [dependencies]
+
+[dev-dependencies]
+regex = "1"
