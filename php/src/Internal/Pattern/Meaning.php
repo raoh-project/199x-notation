@@ -42,14 +42,15 @@ final class Meaning
      * @param self::NOTHING|self::NEVER|self::SYMBOLS|self::IN_TURN|self::EITHER_OF|self::REPEATED $kind
      * @param list<int>  $held  the set of a SYMBOLS meaning
      * @param list<self> $parts what an IN_TURN meaning has one after another, the arms of an
-     *                          EITHER_OF, two or more, and what a REPEATED repeats, alone
+     *                          EITHER_OF, two or more, and what a REPEATED repeats, alone;
+     *                          emptied when a tree no pattern is made of is taken apart (see Nodes)
      * @param int        $least the fewest times of a REPEATED
      * @param int        $most  the most times of a REPEATED, or NO_CEILING
      */
     public function __construct(
         public readonly int $kind,
         public readonly array $held = [],
-        public readonly array $parts = [],
+        public array $parts = [],
         public readonly int $least = 0,
         public readonly int $most = 0,
     ) {

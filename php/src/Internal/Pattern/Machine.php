@@ -26,6 +26,9 @@ final class Machine
      */
     public static int $knownBytes = 2 << 20;
 
+    /** About what one step a kept set holds takes. */
+    private const STEP_BYTES = 48;
+
     /** @var list<list<array{list<int>, int}>> each state's steps: the symbols it is over and where it leads */
     private array $steps = [];
     /** @var list<list<int>> each state's steps for nothing */
@@ -237,10 +240,16 @@ final class Machine
         $from = $in;
         $now = $this->advance($from->states, $symbol);
         [$next, $forgot] = $this->keep($now);
+        // $from was forgotten to make room where $forgot, and is not looked up again. Where an
+        // ASCII character leads is room every set is charged for when it is kept; where another
+        // leads is kept only while there is room for it.
         if ($next !== null && !$forgot) {
-            // $from was forgotten to make room where $forgot, and is not looked up again.
-            $from->next[$character] = $next;
-            $this->bytes += 48;
+            if (strlen($character) === 1) {
+                $from->next[$character] = $next;
+            } elseif ($this->bytes < self::$knownBytes) {
+                $from->next[$character] = $next;
+                $this->bytes += self::STEP_BYTES;
+            }
         }
         $in = $next;
         if ($next !== null) {
@@ -324,7 +333,7 @@ final class Machine
         if ($set !== null) {
             return [$set, false];
         }
-        $cost = 2 * strlen($key) + 16 * count($states) + 128;
+        $cost = 2 * strlen($key) + 16 * count($states) + 128 * self::STEP_BYTES + 128;
         $forgot = false;
         if ($this->bytes + $cost > self::$knownBytes) {
             $gaveUp = $this->read < 10 * $this->made || $cost > self::$knownBytes;

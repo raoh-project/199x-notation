@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Raoh\Notation199x\Tests;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Raoh\Notation199x\Internal\Pattern\Machine;
 use Raoh\Notation199x\Pattern;
@@ -145,8 +147,11 @@ final class PatternTest extends TestCase
      * Groups are read with a stack of their own, and so are the anchors placed, so text nested far
      * past any limit is read to its end.
      */
+    #[RunInSeparateProcess, PreserveGlobalState(false)]
     public function testTextNestedFarPastTheDepthIsReadToItsEnd(): void
     {
+        // Each level of the tree is about a kilobyte of PHP objects.
+        ini_set('memory_limit', '512M');
         $deep = 100_000;
         $read = Pattern::read(str_repeat('(', $deep) . '^a$' . str_repeat(')', $deep));
         self::assertInstanceOf(PatternBeyond::class, $read);
@@ -155,6 +160,52 @@ final class PatternTest extends TestCase
         self::assertSame(PatternRefusal::AnAnchorThisCannotPlace,
             self::refusedOf(str_repeat('(', $deep) . 'a|)^b' . str_repeat(')', $deep - 1))->why);
         self::assertSame(PatternRefusal::SomethingUnclosed, self::refusedOf(str_repeat('(', $deep))->why);
+    }
+
+    /**
+     * A tree as deep as the text is nested is taken apart before it is let go of, whatever the
+     * answer: PHP frees nested objects by recursion in C, and a repetition of each group is what
+     * makes each level of the tree a part of its own.
+     */
+    #[RunInSeparateProcess, PreserveGlobalState(false)]
+    public function testATreeAsDeepAsTheTextIsLetGoOfWithoutRecursion(): void
+    {
+        ini_set('memory_limit', '512M');
+        $deep = 50_000;
+        $nested = str_repeat('(', $deep) . 'a' . str_repeat(')*', $deep);
+        $read = Pattern::read($nested);
+        self::assertInstanceOf(PatternBeyond::class, $read);
+        self::assertSame(PatternLimit::NestingDepth, $read->limit);
+        $read = Pattern::read(str_repeat('(?:a|', $deep) . 'b' . str_repeat(')*', $deep));
+        self::assertInstanceOf(PatternBeyond::class, $read);
+        self::assertSame(PatternRefusal::SomethingUnclosed, self::refusedOf($nested . '(')->why);
+        self::assertSame(PatternRefusal::AnAnchorThisCannotPlace,
+            self::refusedOf(str_repeat('(', $deep) . 'a|)^b' . str_repeat(')*', $deep - 1))->why);
+    }
+
+    /**
+     * What a machine keeps of the sets it has worked out stays about the room it is given, however
+     * many characters a subject leads from one set by.
+     */
+    public function testWhatAMachineKeepsStaysWithinItsRoom(): void
+    {
+        $subject = '';
+        for ($cp = 0x80; $cp < 0x30000; $cp++) {
+            if ($cp < 0xD800 || $cp > 0xDFFF) {
+                $subject .= \Raoh\Notation199x\Internal\Utf8::encode($cp);
+            }
+        }
+        $was = Machine::$knownBytes;
+        Machine::$knownBytes = 1 << 16;
+        try {
+            $read = self::read('[\\x{80}-\\x{10FFFF}]*');
+            $before = memory_get_usage();
+            self::assertTrue($read->matches($subject));
+            self::assertTrue($read->matches($subject));
+            self::assertLessThan(4 << 20, memory_get_usage() - $before);
+        } finally {
+            Machine::$knownBytes = $was;
+        }
     }
 
     /**

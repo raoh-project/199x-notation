@@ -29,10 +29,13 @@ final class Reader
     /** The first limit met in the text, or null while none has been. */
     private ?PatternBeyond $past = null;
     private readonly int $length;
+    /** Every part of the written tree that holds others. */
+    private readonly Nodes $nodes;
 
     private function __construct(private readonly string $text)
     {
         $this->length = strlen($text);
+        $this->nodes = new Nodes();
     }
 
     /**
@@ -41,26 +44,43 @@ final class Reader
     public static function read(string $text): Meaning|PatternRefused|PatternBeyond
     {
         $r = new self($text);
+        // The trees are as deep as the text is nested, and are taken apart before they are let go
+        // of, whatever the answer: the written one always, and the meaning where it is not the
+        // answer. A meaning that is the answer is within the nesting depth.
+        $meanings = new Nodes();
         try {
-            $w = $r->pattern();
+            $read = $r->answer($meanings);
+        } finally {
+            $r->nodes->release();
+        }
+        if (!$read instanceof Meaning) {
+            $meanings->release();
+        }
+        return $read;
+    }
+
+    private function answer(Nodes $meanings): Meaning|PatternRefused|PatternBeyond
+    {
+        try {
+            $w = $this->pattern();
         } catch (Refusal $refused) {
-            $to = min(strlen($text), max($refused->to, $refused->from));
-            return new PatternRefused($refused->why, $refused->from, substr($text, $refused->from, $to - $refused->from));
+            $to = min($this->length, max($refused->to, $refused->from));
+            return new PatternRefused($refused->why, $refused->from, substr($this->text, $refused->from, $to - $refused->from));
         }
         // Every anchor has to come to something, and what it comes to is settled by where it
         // stands, which is known now that the whole of the pattern is.
-        $m = Anchors::place($w);
+        $m = Anchors::place($w, $meanings);
         if ($m === null) {
-            return new PatternRefused(PatternRefusal::AnAnchorThisCannotPlace, 0, $text);
+            return new PatternRefused(PatternRefusal::AnAnchorThisCannotPlace, 0, $this->text);
         }
         // The text is a pattern. Whether it is one every implementation takes is asked now.
-        if ($r->past !== null) {
-            return $r->past;
+        if ($this->past !== null) {
+            return $this->past;
         }
         // Counted on what was written, where an anchor is one state whatever it came to, so the
         // count is never below the states of the machine the meaning builds.
         if (States::written($w) > PatternLimit::MachineStates->most()) {
-            return new PatternBeyond(PatternLimit::MachineStates, 0, $text);
+            return new PatternBeyond(PatternLimit::MachineStates, 0, $this->text);
         }
         return $m;
     }
@@ -73,7 +93,7 @@ final class Reader
     {
         /** @var list<OpenChoice> $around */
         $around = [];
-        $reading = new OpenChoice();
+        $reading = new OpenChoice($this->nodes);
         while (true) {
             $next = $this->peek();
             if ($next !== self::END_OF_TEXT && $next !== 0x7C && $next !== 0x29) {
@@ -81,7 +101,7 @@ final class Reader
                 if ($next === 0x28) {
                     $this->opened();
                     $around[] = $reading;
-                    $reading = new OpenChoice();
+                    $reading = new OpenChoice($this->nodes);
                 } else {
                     $reading->part($this->quantified($this->atom()));
                 }
@@ -182,7 +202,7 @@ final class Reader
             $this->take();
             $this->refuse(PatternRefusal::APossessiveRepetition);
         }
-        return new Written(Written::REPEATED, parts: [$one], least: $least, most: $most);
+        return $this->nodes->held(new Written(Written::REPEATED, parts: [$one], least: $least, most: $most));
     }
 
     /**

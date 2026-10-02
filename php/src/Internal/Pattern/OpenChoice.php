@@ -17,6 +17,10 @@ final class OpenChoice
     /** @var list<Written> */
     public array $parts = [];
 
+    public function __construct(private readonly Nodes $nodes)
+    {
+    }
+
     /**
      * The arm being read: an arm of one part is that part, and an arm of none is nothing.
      */
@@ -25,7 +29,7 @@ final class OpenChoice
         return match (count($this->parts)) {
             0 => Written::meant(Meaning::nothing()),
             1 => $this->parts[0],
-            default => new Written(Written::IN_TURN, parts: $this->parts),
+            default => $this->nodes->held(new Written(Written::IN_TURN, parts: $this->parts)),
         };
     }
 
@@ -38,7 +42,7 @@ final class OpenChoice
         if (count($this->arms) === 1) {
             return $this->arms[0];
         }
-        return new Written(Written::EITHER_OF, parts: $this->arms);
+        return $this->nodes->held(new Written(Written::EITHER_OF, parts: $this->arms));
     }
 
     /**

@@ -24,13 +24,14 @@ final class Written
      * @param self::MEANT|self::ANCHOR|self::IN_TURN|self::EITHER_OF|self::REPEATED $kind
      * @param Meaning|null $meaning what a MEANT means
      * @param bool         $end     whether an ANCHOR is $ rather than ^
-     * @param list<self>   $parts   as a meaning's are
+     * @param list<self>   $parts   as a meaning's are, and emptied when the tree is taken apart
+     *                              (see Nodes)
      */
     public function __construct(
         public readonly int $kind,
         public readonly ?Meaning $meaning = null,
         public readonly bool $end = false,
-        public readonly array $parts = [],
+        public array $parts = [],
         public readonly int $least = 0,
         public readonly int $most = 0,
     ) {

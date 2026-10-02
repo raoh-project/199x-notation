@@ -30,11 +30,19 @@ final class Anchors
     private const NO = 1;
     private const UNSETTLED = 2;
 
+    // What a part is, as far as the anchors around it ask, one bit each: whether it accepts any
+    // string of one symbol or more, whether every string it accepts has a symbol in it, and
+    // whether it holds an anchor. A bit and not an array, since there is one of these for each
+    // part of a tree as deep as the text is nested.
+    private const MAY = 1;
+    private const MUST = 2;
+    private const HOLDS = 4;
+
     /**
      * The meaning of $w with every anchor read as what it comes to, or null where one cannot be
-     * settled.
+     * settled. Every part of the meaning that holds others is held in $nodes as well.
      */
-    public static function place(Written $w): ?Meaning
+    public static function place(Written $w, Nodes $nodes): ?Meaning
     {
         $known = self::factsOf($w);
         // A part to place, standing where its two sides say, or, where together, one whose parts
@@ -46,7 +54,7 @@ final class Anchors
         while ($tasks !== []) {
             [$part, $atStart, $atEnd, $together] = array_pop($tasks);
             if ($together) {
-                $results = self::putTogether($part, $results);
+                self::putTogether($part, $results, $nodes);
                 continue;
             }
             switch ($part->kind) {
@@ -75,7 +83,7 @@ final class Anchors
                     }
                     break;
                 case Written::REPEATED:
-                    if (!$known[spl_object_id($part->parts[0])][2]) {
+                    if (($known[spl_object_id($part->parts[0])] & self::HOLDS) === 0) {
                         $tasks[] = [$part, $atStart, $atEnd, true];
                         $tasks[] = [$part->parts[0], $atStart, $atEnd, false];
                     } elseif ($part->least === 1 && $part->most === 1) {
@@ -109,40 +117,41 @@ final class Anchors
     }
 
     /**
-     * Takes the meanings of $w's parts off the end of $results, and puts $w's meaning there.
+     * Takes the meanings of $w's parts off the end of $results, and puts $w's meaning there. The
+     * list is changed where it is, so that putting a part together costs its own parts and not
+     * the meanings waiting before them.
      *
      * @param list<Meaning> $results
-     * @return list<Meaning>
      */
-    private static function putTogether(Written $w, array $results): array
+    private static function putTogether(Written $w, array &$results, Nodes $nodes): void
     {
-        switch ($w->kind) {
-            case Written::EITHER_OF:
-                $cut = count($results) - count($w->parts);
-                $arms = array_slice($results, $cut);
-                return [...array_slice($results, 0, $cut), new Meaning(Meaning::EITHER_OF, parts: $arms)];
-            case Written::IN_TURN:
-                // An anchor that asks for nothing leaves nothing in the sequence, so ^abc$ means
-                // what abc means and is the same tree.
-                $cut = count($results) - count($w->parts);
-                $parts = [];
-                foreach (array_slice($results, $cut) as $made) {
-                    if ($made->kind !== Meaning::NOTHING) {
-                        $parts[] = $made;
-                    }
-                }
-                return [...array_slice($results, 0, $cut), match (count($parts)) {
-                    0 => Meaning::nothing(),
-                    1 => $parts[0],
-                    default => new Meaning(Meaning::IN_TURN, parts: $parts),
-                }];
-            case Written::REPEATED:
-                $repeated = array_pop($results) ?? throw new \LogicException('a repetition with nothing placed to repeat');
-                $results[] = new Meaning(Meaning::REPEATED, parts: [$repeated], least: $w->least, most: $w->most);
-                return $results;
-            default:
-                throw new \LogicException('a leaf has no parts to put together');
+        if ($w->kind === Written::REPEATED) {
+            $repeated = array_pop($results) ?? throw new \LogicException('a repetition with nothing placed to repeat');
+            $results[] = $nodes->held(new Meaning(Meaning::REPEATED, parts: [$repeated], least: $w->least, most: $w->most));
+            return;
         }
+        $taken = [];
+        for ($i = count($w->parts); $i > 0; $i--) {
+            $taken[] = array_pop($results) ?? throw new \LogicException('a part with fewer meanings placed than it has parts');
+        }
+        $taken = array_reverse($taken);
+        if ($w->kind === Written::EITHER_OF) {
+            $results[] = $nodes->held(new Meaning(Meaning::EITHER_OF, parts: $taken));
+            return;
+        }
+        // A sequence. An anchor that asks for nothing leaves nothing in it, so ^abc$ means what abc
+        // means and is the same tree.
+        $parts = [];
+        foreach ($taken as $made) {
+            if ($made->kind !== Meaning::NOTHING) {
+                $parts[] = $made;
+            }
+        }
+        $results[] = match (count($parts)) {
+            0 => Meaning::nothing(),
+            1 => $parts[0],
+            default => $nodes->held(new Meaning(Meaning::IN_TURN, parts: $parts)),
+        };
     }
 
     /**
@@ -151,7 +160,7 @@ final class Anchors
      * the same for the end. What stands before each part and after it is gathered once from each
      * end, so that a literal written out a symbol at a time does not cost its length squared.
      *
-     * @param array<int, array{bool, bool, bool}> $known
+     * @param array<int, int> $known
      * @return list<array{int, int}>
      */
     private static function sidesOf(Written $w, array $known, int $atStart, int $atEnd): array
@@ -161,15 +170,15 @@ final class Anchors
         $mustBefore = [true];
         foreach ($w->parts as $at => $part) {
             $facts = $known[spl_object_id($part)];
-            $mayBefore[$at + 1] = $mayBefore[$at] || $facts[0];
-            $mustBefore[$at + 1] = $mustBefore[$at] && $facts[1];
+            $mayBefore[$at + 1] = $mayBefore[$at] || ($facts & self::MAY) !== 0;
+            $mustBefore[$at + 1] = $mustBefore[$at] && ($facts & self::MUST) !== 0;
         }
         $mayAfter = [$count => false];
         $mustAfter = [$count => true];
         for ($at = $count - 1; $at >= 0; $at--) {
             $facts = $known[spl_object_id($w->parts[$at])];
-            $mayAfter[$at] = $mayAfter[$at + 1] || $facts[0];
-            $mustAfter[$at] = $mustAfter[$at + 1] && $facts[1];
+            $mayAfter[$at] = $mayAfter[$at + 1] || ($facts & self::MAY) !== 0;
+            $mustAfter[$at] = $mustAfter[$at + 1] && ($facts & self::MUST) !== 0;
         }
         $out = [];
         for ($at = 0; $at < $count; $at++) {
@@ -197,13 +206,11 @@ final class Anchors
     }
 
     /**
-     * The facts of every part of $w, by the part's object id, worked out from the leaves up:
-     * whether it accepts any string of one symbol or more, whether every string it accepts has a
-     * symbol in it, and whether it holds an anchor. A part is pushed once to have its parts worked
+     * The facts of every part of $w, by the part's object id, worked out from the leaves up. A part is pushed once to have its parts worked
      * out and once more, below them, to be worked out from theirs. Every part stays held by $w, so
      * no id is reused while the table is.
      *
-     * @return array<int, array{bool, bool, bool}>
+     * @return array<int, int>
      */
     private static function factsOf(Written $w): array
     {
@@ -227,37 +234,36 @@ final class Anchors
     /**
      * The facts of $w, whose parts' facts are known.
      *
-     * @param array<int, array{bool, bool, bool}> $known
-     * @return array{bool, bool, bool}
+     * @param array<int, int> $known
      */
-    private static function partFacts(Written $w, array $known): array
+    private static function partFacts(Written $w, array $known): int
     {
         switch ($w->kind) {
             case Written::MEANT:
-                return [self::mayTake($w->meaning()), self::mustTake($w->meaning()), false];
+                return (self::mayTake($w->meaning()) ? self::MAY : 0) | (self::mustTake($w->meaning()) ? self::MUST : 0);
             case Written::ANCHOR:
-                return [false, false, true];
+                return self::HOLDS;
             case Written::IN_TURN:
-                $f = [false, false, false];
+                // A sequence may, must and holds where any part does.
+                $f = 0;
                 foreach ($w->parts as $part) {
-                    $p = $known[spl_object_id($part)];
-                    $f = [$f[0] || $p[0], $f[1] || $p[1], $f[2] || $p[2]];
+                    $f |= $known[spl_object_id($part)];
                 }
                 return $f;
             case Written::EITHER_OF:
-                $f = [false, true, false];
+                // A choice may and holds where any arm does, and must where every arm does.
+                $any = 0;
+                $every = self::MUST;
                 foreach ($w->parts as $arm) {
-                    $p = $known[spl_object_id($arm)];
-                    $f = [$f[0] || $p[0], $f[1] && $p[1], $f[2] || $p[2]];
+                    $any |= $known[spl_object_id($arm)];
+                    $every &= $known[spl_object_id($arm)];
                 }
-                return $f;
+                return ($any & (self::MAY | self::HOLDS)) | $every;
             default:
                 $what = $known[spl_object_id($w->parts[0])];
-                return [
-                    ($w->most === Meaning::NO_CEILING || $w->most > 0) && $what[0],
-                    $w->least > 0 && $what[1],
-                    $what[2],
-                ];
+                return (($w->most === Meaning::NO_CEILING || $w->most > 0) ? $what & self::MAY : 0)
+                    | ($w->least > 0 ? $what & self::MUST : 0)
+                    | ($what & self::HOLDS);
         }
     }
 
