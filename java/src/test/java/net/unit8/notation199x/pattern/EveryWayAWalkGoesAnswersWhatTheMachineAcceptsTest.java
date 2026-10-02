@@ -52,6 +52,7 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
             runs.addAll(everyWay(shaped, false));
             if (machine.deterministic() != null) {
                 runs.addAll(everyWay(machine.deterministic(), true));
+                runs.addAll(everyWayOfP2(machine.deterministic()));
             }
             for (int each = 0; each < 400; each++) {
                 String subject = subject(random);
@@ -113,7 +114,9 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         Automaton deterministic = machine.deterministic();
         String subject = "abcあいう😀😀xyz".repeat(20) + ",123";
         int characters = subject.codePointCount(0, subject.length());
-        for (StringPattern run : everyWay(deterministic, true)) {
+        List<StringPattern> every = new ArrayList<>(everyWay(deterministic, true));
+        every.addAll(everyWayOfP2(deterministic));
+        for (StringPattern run : every) {
             if (run.way() == StringPattern.Way.SETS_KEPT || run.way() == StringPattern.Way.EVERY_STATE) {
                 // Walked as sets of states, which asks as such a walk does.
                 continue;
@@ -170,6 +173,28 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
                     given.remembered())));
         }
         return out;
+    }
+
+    /** {@code machine} written as an image of P2 and read back, walked over a table and, where
+     *  the budget gives it none, over the spans the image writes. */
+    private static List<StringPattern> everyWayOfP2(Automaton machine) {
+        List<String> image = ((PatternImage.Written) PatternImages.p2(machine)).strings();
+        StringPattern.Budget given = StringPattern.Budget.DEFAULT;
+        StringPattern.Budget noTable = new StringPattern.Budget(given.classWork(), 0,
+                given.asciiEntries(), given.runs(), given.subsets(), given.remembered());
+        StringPattern.Budget noClasses = new StringPattern.Budget(0, given.tableEntries(),
+                given.asciiEntries(), given.runs(), given.subsets(), given.remembered());
+        return List.of(
+                wayOfP2(StringPattern.Way.TABLE, image, given),
+                wayOfP2(StringPattern.Way.SPANS, image, noTable),
+                wayOfP2(StringPattern.Way.SPANS, image, noClasses));
+    }
+
+    private static StringPattern wayOfP2(StringPattern.Way expected, List<String> image,
+                                         StringPattern.Budget budget) {
+        StringPattern run = StringPattern.of(image, budget);
+        assertEquals(expected, run.way(), "P2 " + budget);
+        return run;
     }
 
     private static StringPattern way(StringPattern.Way expected, Automaton machine, boolean deterministic,

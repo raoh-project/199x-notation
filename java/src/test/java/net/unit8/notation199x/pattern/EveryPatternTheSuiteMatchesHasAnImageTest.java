@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Every pattern of {@code suite/pattern-match.txt} has an image here, and the images are written to
- * {@code target/images/pattern-match.txt} for an implementation that reads P1 to read.
+ * {@code target/images/pattern-match.txt} for an implementation that reads P1 and P2 to read.
  *
  * <p>What the other implementation is held to is the suite: it reads each image and answers what
  * the suite's lines say the pattern accepts. Neither the images' text nor this implementation's

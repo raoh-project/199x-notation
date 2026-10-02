@@ -162,13 +162,14 @@ class WhatARunWalksIsWhatThePatternMeansTest {
 
     /**
      * A deterministic machine whose characters are all told apart, and whose states are many, is
-     * past the table a walk looks its classes up in, and walks by its runs with the same answers.
+     * past the table a walk looks its classes up in, and walks by the spans its image of P2 writes
+     * with the same answers.
      *
      * <p>Every ASCII character written in turn, twenty-five times over: each character is a class
      * of its own and there is a state for each place in the text.
      */
     @Test
-    void aMachineTooWideForItsTableAnswersByItsRuns() {
+    void aMachineTooWideForItsTableAnswersByItsSpans() {
         StringBuilder regex = new StringBuilder();
         StringBuilder text = new StringBuilder();
         for (int copy = 0; copy < 25; copy++) {
@@ -180,7 +181,7 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
         StringPattern run = StringPattern.of(PatternImages.deterministic(meaning, plenty()));
         String whole = text.toString();
-        assertEquals(StringPattern.Way.RUNS, run.way());
+        assertEquals(StringPattern.Way.SPANS, run.way());
 
         assertTrue(run.matches(whole));
         assertFalse(run.matches(whole.substring(0, whole.length() - 1)));

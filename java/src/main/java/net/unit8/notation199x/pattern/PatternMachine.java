@@ -99,7 +99,9 @@ public final class PatternMachine {
      * ({@link StringPattern#of(java.util.List)}), or that it takes more characters than one image
      * is given.
      *
-     * <p>The deterministic machine where there is one and its image fits, and otherwise the shape's.
+     * <p>The deterministic machine as P2 where there is one and its image fits, and otherwise the
+     * shape's as P1. No machine is written as a deterministic image of P1, which a reader would have
+     * to hold to leading one way at a cost the image's length does not bound.
      * Either accepts what the pattern does, and which is written is this implementation's choice:
      * the shape's image is often the larger, since the deterministic machine is the smallest there
      * is, and a pattern may have an image here that another implementation, writing another machine,
@@ -111,12 +113,12 @@ public final class PatternMachine {
      */
     public PatternImage image() {
         if (deterministic != null) {
-            PatternImage one = PatternImages.of(deterministic, true);
+            PatternImage one = PatternImages.p2(deterministic);
             if (one instanceof PatternImage.Written) {
                 return one;
             }
         }
-        return PatternImages.of(shaped, false);
+        return PatternImages.p1(shaped);
     }
 
     /** The machine the shape builds, for a check holding it against the deterministic one. */
