@@ -3,7 +3,6 @@ package net.unit8.notation199x.pattern;
 import net.unit8.notation199x.Suite;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -15,25 +14,24 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class PatternStatesAreCountedAsEveryLineOfTheSuiteSaysTest {
 
-    private static final int MOST = PatternRead.Limit.MACHINE_STATES.most();
+    /** The limit the specifications state, which the file's rule is written against: not the one
+     *  this implementation holds, which is what is tested. */
+    private static final long MOST = 250_000;
 
     @Test
     void eachPatternIsReadAtTheLimitAndIsPastItOneStateOn() {
-        List<String> wrong = new ArrayList<>();
-        for (Suite.Line line : Suite.read("pattern-states.txt", 2)) {
+        assertEquals(List.of(), Suite.wrong("pattern-states.txt", 2, line -> {
             String pattern = line.text(0);
-            long states = Long.parseLong(line.field(1));
-            String at = "(?:" + pattern + ")|a{0," + (MOST - 5 - states) + "}";
-            String past = "(?:" + pattern + ")|a{0," + (MOST - 4 - states) + "}";
-            if (!(PatternParser.read(at) instanceof PatternRead.Read)) {
-                wrong.add(line.where() + ": " + Suite.shown(pattern) + " at the limit is " + PatternParser.read(at));
+            long states = line.number(1);
+            PatternRead at = PatternParser.read("(?:" + pattern + ")|a{0," + (MOST - 5 - states) + "}");
+            PatternRead past = PatternParser.read("(?:" + pattern + ")|a{0," + (MOST - 4 - states) + "}");
+            if (!(at instanceof PatternRead.Read)) {
+                return Suite.shown(pattern) + " at the limit is " + at;
             }
-            if (!(PatternParser.read(past) instanceof PatternRead.Beyond beyond)
-                    || beyond.limit() != PatternRead.Limit.MACHINE_STATES) {
-                wrong.add(line.where() + ": " + Suite.shown(pattern) + " past the limit is "
-                        + PatternParser.read(past));
+            if (!(past instanceof PatternRead.Beyond beyond) || beyond.limit() != PatternRead.Limit.MACHINE_STATES) {
+                return Suite.shown(pattern) + " past the limit is " + past;
             }
-        }
-        assertEquals(List.of(), wrong);
+            return null;
+        }));
     }
 }

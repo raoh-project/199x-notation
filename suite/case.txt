@@ -1,7 +1,7 @@
 # Unicode 18.0.0 default case conversion, untailored.
 #
 # Source:
-#   Raoh spec/decoder-language.md — Types
+#   Raoh catalog/operations.json — toLowerCase, toUpperCase
 #   Souther specification.adoc — string-case
 #   199x-notation README.md — What belongs here (the bounded forms)
 #

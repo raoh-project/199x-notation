@@ -2,7 +2,6 @@ package net.unit8.notation199x;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,33 +11,29 @@ class CaseConversionAnswersEveryLineOfTheSuiteTest {
 
     @Test
     void everyLineIsAnswered() {
-        List<String> wrong = new ArrayList<>();
-        for (Suite.Line line : Suite.read("case.txt", 5)) {
+        assertEquals(List.of(), Suite.wrong("case.txt", 5, line -> {
             String text = line.text(0);
-            boolean lower = switch (line.field(1)) {
-                case "LOWER" -> true;
-                case "UPPER" -> false;
-                default -> throw new IllegalStateException(line.where() + ": no direction " + line.field(1));
-            };
-            String expected = switch (line.field(3)) {
-                case "MAPPED" -> line.text(4);
-                case "PAST" -> null;
-                default -> throw new IllegalStateException(line.where() + ": no outcome " + line.field(3));
-            };
-            String answered;
-            if (line.field(2).isEmpty()) {
-                answered = lower ? CaseConversion.lowercase(text) : CaseConversion.uppercase(text);
+            boolean lower = line.oneOf(1, "LOWER", "UPPER").equals("LOWER");
+            Long bound = line.numberOrNothing(2);
+            String expected;
+            if (line.oneOf(3, "MAPPED", "PAST").equals("MAPPED")) {
+                expected = line.text(4);
             } else {
-                long bound = Long.parseLong(line.field(2));
-                answered = lower ? CaseConversion.lowercaseWithin(text, bound)
-                        : CaseConversion.uppercaseWithin(text, bound);
+                line.empty(4);
+                if (bound == null) {
+                    throw new IllegalStateException(line.where() + ": a conversion with no bound is never past it");
+                }
+                expected = null;
             }
-            if (expected == null ? answered != null : !expected.equals(answered)) {
-                wrong.add(line.where() + ": " + line.field(1) + " " + Suite.shown(text) + " within "
-                        + line.field(2) + " is " + (answered == null ? "past" : Suite.shown(answered))
-                        + ", not " + (expected == null ? "past" : Suite.shown(expected)));
+            String answered = bound == null
+                    ? (lower ? CaseConversion.lowercase(text) : CaseConversion.uppercase(text))
+                    : (lower ? CaseConversion.lowercaseWithin(text, bound) : CaseConversion.uppercaseWithin(text, bound));
+            if (expected == null ? answered == null : expected.equals(answered)) {
+                return null;
             }
-        }
-        assertEquals(List.of(), wrong);
+            return (lower ? "LOWER " : "UPPER ") + Suite.shown(text) + (bound == null ? "" : " within " + bound)
+                    + " is " + (answered == null ? "past" : Suite.shown(answered))
+                    + ", not " + (expected == null ? "past" : Suite.shown(expected));
+        }));
     }
 }

@@ -18,11 +18,12 @@ class WhiteSpaceIsTheSetTheSuiteListsTest {
     @Test
     void everyScalarValueIsAnsweredAsTheSuiteLists() {
         Set<Integer> listed = new TreeSet<>();
-        for (Suite.Line line : Suite.read("white-space.txt", 1)) {
-            listed.add(line.text(0).codePointAt(0));
-        }
+        assertEquals(List.of(), Suite.wrong("white-space.txt", 1, line -> {
+            int listedHere = line.scalar(0);
+            return listed.add(listedHere) ? null : "U+%04X is listed twice".formatted(listedHere);
+        }));
         List<String> wrong = new ArrayList<>();
-        for (int cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
+        for (int cp = 0; cp <= 0x10FFFF; cp++) {
             if (cp >= 0xD800 && cp <= 0xDFFF) {
                 continue;
             }

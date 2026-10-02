@@ -2,7 +2,6 @@ package net.unit8.notation199x;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -15,33 +14,27 @@ class ScalarValuesAnswerEveryLineOfTheSuiteTest {
 
     @Test
     void everyLengthIsCountedInScalarValues() {
-        List<String> wrong = new ArrayList<>();
-        for (Suite.Line line : Suite.read("scalar-length.txt", 2)) {
-            long counted = ScalarValues.count(line.text(0));
-            if (counted != Long.parseLong(line.field(1))) {
-                wrong.add(line.where() + ": " + Suite.shown(line.text(0)) + " is counted " + counted
-                        + ", not " + line.field(1));
-            }
-        }
-        assertEquals(List.of(), wrong);
+        assertEquals(List.of(), Suite.wrong("scalar-length.txt", 2, line -> {
+            String text = line.text(0);
+            long expected = line.number(1);
+            long counted = ScalarValues.count(text);
+            return counted == expected ? null : Suite.shown(text) + " is counted " + counted + ", not " + expected;
+        }));
     }
 
     @Test
     void everyOrderIsTheScalarValuesOneAfterAnother() {
-        List<String> wrong = new ArrayList<>();
-        for (Suite.Line line : Suite.read("scalar-order.txt", 3)) {
-            int expected = switch (line.field(2)) {
+        assertEquals(List.of(), Suite.wrong("scalar-order.txt", 3, line -> {
+            String a = line.text(0);
+            String b = line.text(1);
+            int expected = switch (line.oneOf(2, "LESS", "EQUAL", "GREATER")) {
                 case "LESS" -> -1;
                 case "EQUAL" -> 0;
-                case "GREATER" -> 1;
-                default -> throw new IllegalStateException(line.where() + ": no order " + line.field(2));
+                default -> 1;
             };
-            int answered = Integer.signum(ScalarValues.compare(line.text(0), line.text(1)));
-            if (answered != expected) {
-                wrong.add(line.where() + ": " + Suite.shown(line.text(0)) + " against "
-                        + Suite.shown(line.text(1)) + " is " + answered + ", not " + line.field(2));
-            }
-        }
-        assertEquals(List.of(), wrong);
+            int answered = Integer.signum(ScalarValues.compare(a, b));
+            return answered == expected ? null
+                    : Suite.shown(a) + " against " + Suite.shown(b) + " is " + answered + ", not " + expected;
+        }));
     }
 }

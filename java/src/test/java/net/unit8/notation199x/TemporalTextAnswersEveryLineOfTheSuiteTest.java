@@ -2,36 +2,28 @@ package net.unit8.notation199x;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * {@link TemporalText} answers every line of {@code suite/temporal.txt}: whether a text is admitted,
- * and the reason it is refused where the line names one.
+ * {@link TemporalText} answers every line of {@code suite/temporal.txt}: whether a text is admitted
+ * or refused. Which refusal it answers is Java's, and is tested in
+ * {@link ATemporalTextIsRefusedForWhatItIsTest}.
  */
 class TemporalTextAnswersEveryLineOfTheSuiteTest {
 
     @Test
     void everyTextIsAdmittedOrRefusedAsTheLineSays() {
-        List<String> wrong = new ArrayList<>();
-        for (Suite.Line line : Suite.read("temporal.txt", 4)) {
-            TemporalText.Kind kind = TemporalText.Kind.valueOf(line.field(0));
-            Optional<TemporalText.Refusal> answered = TemporalText.refusal(kind, line.text(1));
-            boolean asSaid = switch (line.field(2)) {
-                case "ADMITTED" -> answered.isEmpty();
-                case "REFUSED" -> answered.isPresent()
-                        && (line.field(3).isEmpty() || answered.get().name().equals(line.field(3)));
-                default -> throw new IllegalStateException(line.where() + ": no outcome " + line.field(2));
-            };
-            if (!asSaid) {
-                wrong.add(line.where() + ": " + kind + " " + Suite.shown(line.text(1)) + " is "
-                        + answered.map(refusal -> "REFUSED " + refusal).orElse("ADMITTED") + ", not "
-                        + line.field(2) + " " + line.field(3));
-            }
-        }
-        assertEquals(List.of(), wrong);
+        assertEquals(List.of(), Suite.wrong("temporal.txt", 3, line -> {
+            TemporalText.Kind kind = TemporalText.Kind.valueOf(
+                    line.oneOf(0, "DATE", "TIME", "DATETIME", "OFFSET_DATETIME", "INSTANT"));
+            String text = line.text(1);
+            boolean admitted = line.oneOf(2, "ADMITTED", "REFUSED").equals("ADMITTED");
+            Optional<TemporalText.Refusal> answered = TemporalText.refusal(kind, text);
+            return answered.isEmpty() == admitted ? null
+                    : kind + " " + Suite.shown(text) + " is " + answered.map(Enum::name).orElse("ADMITTED");
+        }));
     }
 }

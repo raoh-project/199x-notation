@@ -2,7 +2,7 @@
 #
 # Source:
 #   Raoh spec/pattern.md — What is refused, Limits on an admissible pattern
-#   Souther specification.adoc — string-patterns, a-pattern-is-admitted-within-three-limits, e2110
+#   Souther specification.adoc — string-patterns, a-pattern-is-admitted-within-three-limits, e1323, e2110
 #
 # pattern ; outcome ; limit
 #

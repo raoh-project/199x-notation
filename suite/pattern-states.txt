@@ -1,9 +1,9 @@
 # The states a pattern is counted as, with its repetitions written out, before the one a whole
+# pattern adds.
 #
 # Source:
 #   Raoh spec/pattern.md — Limits on an admissible pattern
 #   Souther specification.adoc — a-pattern-is-admitted-within-three-limits
-# pattern adds.
 #
 # pattern ; states
 #
