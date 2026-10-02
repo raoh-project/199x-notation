@@ -1,0 +1,20 @@
+# The order of two texts: the lexicographic order of the scalar values they are made of.
+#
+# a ; b ; order
+#
+# order is LESS, EQUAL or GREATER, and says where a is against b. Most lines are where an order of
+# UTF-16 code units answers otherwise: a scalar value past U+FFFF is written in units below U+E000.
+ ; ; EQUAL
+ ; 0061 ; LESS
+0061 ; ; GREATER
+0061 ; 0061 0062 ; LESS
+0061 0062 ; 0062 ; LESS
+D7FF ; E000 ; LESS
+E000 ; 10000 ; LESS
+FFE5 ; 20BB7 ; LESS
+FFFF ; 10000 ; LESS
+10000 ; FFFF ; GREATER
+10FFFF ; FFFF ; GREATER
+103FF ; 10400 ; LESS
+0061 10000 ; 0061 FFFF ; GREATER
+1F600 ; 1F600 ; EQUAL

@@ -14,7 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * where it does not, without writing anything past the bound.
  *
  * <p>The bound is in scalar values, as {@link Normalization#normalizeWithin} counts it, and not in
- * the UTF-16 units a Java string is made of.
+ * the UTF-16 units a Java string is made of. The vectors every implementation runs are in
+ * {@code suite/case.txt}; what is here holds the bounded conversion to the unbounded one over every
+ * bound around a text's length, and to writing nothing past it.
  */
 class ACaseConversionStopsAtItsBoundTest {
 
@@ -39,41 +41,11 @@ class ACaseConversionStopsAtItsBoundTest {
         }
     }
 
-    @Test
-    void aMappingThatWidensIsCountedAsWhatItWrites() {
-        // ß is one scalar value and SS is two.
-        assertEquals("SS", CaseConversion.uppercaseWithin("ß", 2));
-        assertNull(CaseConversion.uppercaseWithin("ß", 1));
-        // İ lowercases to i and a combining dot above, which NFC leaves as two.
-        assertEquals("i̇", CaseConversion.lowercaseWithin("İ", 2));
-        assertNull(CaseConversion.lowercaseWithin("İ", 1));
-    }
-
-    @Test
-    void theBoundIsInScalarValuesAndNotInUnits() {
-        // Two characters past the basic plane: four units, two scalar values, and a case pair.
-        String deseret = "𐐀𐐀";
-        assertEquals(4, deseret.length());
-        assertEquals("𐐨𐐨", CaseConversion.lowercaseWithin(deseret, 2));
-        assertNull(CaseConversion.lowercaseWithin(deseret, 1));
-    }
-
+    /** A bound below nought, which {@code suite/case.txt} has no way to write, holds nothing. */
     @Test
     void nothingFitsBelowNothing() {
-        assertEquals("", CaseConversion.lowercaseWithin("", 0));
-        assertNull(CaseConversion.lowercaseWithin("a", 0));
         assertNull(CaseConversion.lowercaseWithin("", -1), "the empty text is longer than -1");
         assertNull(CaseConversion.uppercaseWithin("", Long.MIN_VALUE));
-    }
-
-    @Test
-    void theFinalSigmaIsDecidedAsWithoutABound() {
-        // Whether a sigma is final turns on what follows it, which a bound does not cut short.
-        assertEquals("ος", CaseConversion.lowercaseWithin("ΟΣ", 2));
-        assertEquals("οσα", CaseConversion.lowercaseWithin("ΟΣΑ", 3));
-        assertEquals("ο'ς", CaseConversion.lowercaseWithin("Ο'Σ", 3));
-        assertEquals("οσ'α", CaseConversion.lowercaseWithin("ΟΣ'Α", 4));
-        assertNull(CaseConversion.lowercaseWithin("ΟΣΑ", 2));
     }
 
     @Test

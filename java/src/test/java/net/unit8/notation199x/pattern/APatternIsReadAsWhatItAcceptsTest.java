@@ -179,43 +179,14 @@ class APatternIsReadAsWhatItAcceptsTest {
                 assertInstanceOf(PatternMeaning.Symbols.class, read("\\u0041")).held());
         assertEquals(CodePoints.of(0x10FFFF),
                 assertInstanceOf(PatternMeaning.Symbols.class, read("\\x{10FFFF}")).held());
-
-        // U+FF11 and U+FF12 are the fullwidth one and two, U+FF21 the fullwidth A: digits to the
-        // JDK and not to the language.
-        for (String each : List.of("\\x\uFF11\uFF12", "\\x1\uFF12", "\\u\uFF10\uFF10\uFF14\uFF11",
-                "\\u004\uFF11", "\\x{\uFF21}", "\\x{1\uFF10}", "[\\x\uFF11\uFF12]")) {
-            assertEquals(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ, refused(each), each);
-        }
     }
 
     /**
-     * A backslash before a letter or a decimal digit the grammar does not name is refused, and the
-     * character is classified whole wherever it is.
-     *
-     * <p>Classified by the first half of its pair, a letter past the basic plane was no letter and
-     * read as itself. A character past the basic plane that is neither is still read as itself, so
-     * what is refused is the classification and not the plane.
+     * A backslash before a character that is neither a letter nor a decimal digit is the character,
+     * wherever it is. What is kept for an escape, in every plane, is in {@code suite/pattern-read.txt}.
      */
     @Test
-    void aBackslashBeforeALetterOrADigitIsKeptForAnEscapeWhateverPlaneItIsOn() {
-        String gothic = new String(Character.toChars(0x10330));
-        String doubleStruckZero = new String(Character.toChars(0x1D7D8));
-        for (String each : List.of("\\é", "\\あ", "\\" + gothic, "\\٣",
-                "\\" + doubleStruckZero, "[\\" + gothic + "]")) {
-            assertEquals(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ, refused(each), each);
-        }
-        assertEquals("\\" + gothic, refusal("a\\" + gothic).construct(),
-                "the refusal quotes the whole character and not half of it");
-
-        // The classification is Unicode 18.0.0's and not the running JDK's. U+A7DD is a letter
-        // from 18.0.0 on, and U+11DE0 a decimal digit from 17.0.0 on; a JDK of an earlier Unicode
-        // calls either nothing.
-        assertEquals("18.0.0", PatternAlphabet.unicodeVersion());
-        assertEquals(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ, refused("\\꟝"));
-        String tolongSikiZero = new String(Character.toChars(0x11DE0));
-        assertEquals(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ,
-                refused("\\" + tolongSikiZero));
-
+    void aBackslashBeforeAnythingElseIsTheCharacter() {
         String grinning = new String(Character.toChars(0x1F600));
         assertEquals(CodePoints.of(0x1F600),
                 assertInstanceOf(PatternMeaning.Symbols.class, read("\\" + grinning)).held());
@@ -261,84 +232,5 @@ class APatternIsReadAsWhatItAcceptsTest {
                 "an arm nothing satisfies leaves the choice its other arms");
         assertEquals(accepted("a|b"), accepted("(^a|b$)"),
                 "an anchor inside a choice at the edge asks for nothing either");
-    }
-
-    /** A pattern whose anchor has no answer is refused. */
-    @Test
-    void anAnchorWhosePlaceIsNotSettledIsRefused() {
-        assertEquals(PatternRead.Refusal.AN_ANCHOR_THIS_CANNOT_PLACE, refused("(a|)^b"),
-                "what is before it sometimes takes a symbol and sometimes does not");
-        assertEquals(PatternRead.Refusal.AN_ANCHOR_THIS_CANNOT_PLACE, refused("(^a)*"),
-                "how many copies come before it is the string's answer and not the pattern's");
-        // And `$` away from the end is refused where `^` away from the start is read as no string:
-        // the language states that shape as refused.
-        assertEquals(PatternRead.Refusal.AN_ANCHOR_THIS_CANNOT_PLACE, refused("a$b"),
-                "a `$` before something that must take a symbol is not in the language");
-    }
-
-    /** Every construct the language does not have is refused, and says which it was. */
-    @Test
-    void whatTheLanguageDoesNotHaveIsRefusedAndNamed() {
-        assertEquals(PatternRead.Refusal.A_GROUP_THE_GRAMMAR_DOES_NOT_HAVE, refused("(?=a)b"));
-        assertEquals(PatternRead.Refusal.A_GROUP_THE_GRAMMAR_DOES_NOT_HAVE, refused("(?<name>a)"));
-        assertEquals(PatternRead.Refusal.A_GROUP_THE_GRAMMAR_DOES_NOT_HAVE, refused("(?i)a"));
-        assertEquals(PatternRead.Refusal.A_BACK_REFERENCE, refused("(a)\\1"));
-        assertEquals(PatternRead.Refusal.A_BACK_REFERENCE, refused("\\k<a>"));
-        assertEquals(PatternRead.Refusal.A_CHARACTER_PROPERTY, refused("\\p{Alpha}"));
-        assertEquals(PatternRead.Refusal.A_BOUNDARY, refused("\\bword\\b"));
-        assertEquals(PatternRead.Refusal.A_QUOTATION, refused("\\Qa+b\\E"));
-        assertEquals(PatternRead.Refusal.A_CLASS_OF_CLASSES, refused("[a-z&&[^bc]]"));
-        assertEquals(PatternRead.Refusal.A_CLASS_OF_CLASSES, refused("[a[bc]]"));
-        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refused("(a"));
-        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refused("[a"));
-        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refused("a)"));
-        assertEquals(PatternRead.Refusal.SOMETHING_UNCLOSED, refused("*a"));
-        assertEquals(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ, refused("\\y"));
-        assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ, refused("a{6,2}"));
-        assertEquals(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ, refused("a{"));
-    }
-
-    /**
-     * A refusal quotes what stopped it, from where that construct begins.
-     *
-     * <p>What an author is shown is the construct and not the pattern: a lookahead in the middle of
-     * a long format is found by what it is, and a pattern that ended before it was closed has no
-     * construct to show.
-     */
-    @Test
-    void aRefusalQuotesTheConstructThatStoppedIt() {
-        assertEquals("(?=", refusal("[0-9]{3}(?=a)").construct());
-        assertEquals("\\p", refusal("a\\p{Alpha}").construct());
-        assertEquals("\\1", refusal("(a)\\1").construct());
-        assertEquals("++", refusal("a++").construct());
-        assertEquals("&&", refusal("[a-z&&b]").construct());
-        assertEquals("\\uD800", refusal("x\\uD800").construct());
-        assertEquals(1, refusal("x\\uD800").from());
-        assertEquals("", refusal("(ab").construct(), "the text ended where a `)` was wanted");
-    }
-
-    /**
-     * A pattern the language does not have is refused whole, and never read in part.
-     *
-     * <p>What a reading of the part it understood would hold is a language narrower than the rule,
-     * and every value the author meant would go on being accepted by it.
-     */
-    @Test
-    void aPatternIsReadWholeOrNotAtAll() {
-        assertInstanceOf(PatternRead.Refused.class, PatternParser.read("[0-9]{3}\\p{Alpha}"));
-        assertInstanceOf(PatternRead.Refused.class, PatternParser.read("(a)\\1[0-9]"));
-    }
-
-    /** Written more deeply than every implementation reads is past a limit, and it says so
-     *  rather than falling over — and not as a refusal, since every construct in it is one the
-     *  language has. What is quoted is the group that went past it. */
-    @Test
-    void aPatternNestedPastTheLimitSaysSo() {
-        int deepest = PatternRead.Limit.NESTING_DEPTH.most();
-        String past = "(?:".repeat(deepest) + "(a)" + ")".repeat(deepest);
-        assertEquals(new PatternRead.Beyond(PatternRead.Limit.NESTING_DEPTH, 3 * deepest, "("),
-                PatternParser.read(past));
-        assertInstanceOf(PatternRead.Read.class, PatternParser.read(
-                "(?:".repeat(deepest) + "a" + ")".repeat(deepest)));
     }
 }

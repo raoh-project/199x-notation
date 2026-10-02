@@ -1,0 +1,83 @@
+# What a pattern that is read accepts: whether the whole of a text is one of its strings.
+#
+# pattern ; subject ; accepted
+#
+# accepted is true or false.
+
+# A negated class leaves every scalar value but the ones written, the line terminators and the
+# characters past the basic plane among them.
+005B 005E 0061 0062 0063 005D ; 0061 ; false
+005B 005E 0061 0062 0063 005D ; 0063 ; false
+005B 005E 0061 0062 0063 005D ; 0064 ; true
+005B 005E 0061 0062 0063 005D ; 10330 ; true
+005B 005E 0061 0062 0063 005D ; 000A ; true
+
+# A dot leaves out the five line terminators and nothing else.
+002E ; 000A ; false
+002E ; 000D ; false
+002E ; 0085 ; false
+002E ; 2028 ; false
+002E ; 2029 ; false
+002E ; 0020 ; true
+002E ; 10330 ; true
+002E ; 0061 0062 ; false
+
+# A character past the basic plane is one, written out, by its number, or as a pair of \u escapes.
+10330 ; 10330 ; true
+005C 0078 007B 0031 0030 0033 0033 0030 007D ; 10330 ; true
+005B 005C 0078 007B 0031 0030 0030 0030 0030 007D 002D 005C 0078 007B 0031 0030 0034 0030 0030 007D 005D ; 10400 ; true
+005B 005C 0078 007B 0031 0030 0030 0030 0030 007D 002D 005C 0078 007B 0031 0030 0034 0030 0030 007D 005D ; 10401 ; false
+005B 005C 0078 007B 0031 0030 0030 0030 0030 007D 002D 005C 0078 007B 0031 0030 0034 0030 0030 007D 005D ; FFFF ; false
+10000 ; 10000 ; true
+005B 10000 005D ; 10000 ; true
+005C 0075 0044 0038 0030 0030 005C 0075 0044 0043 0030 0030 ; 10000 ; true
+005C 0075 0044 0038 0030 0030 005C 0075 0044 0043 0030 0030 ; 0061 ; false
+005C 0078 007B 0031 0030 0030 0030 0030 007D ; 10000 ; true
+005C 1F600 ; 1F600 ; true
+
+# U+0000 written in a pattern stands for itself.
+0000 ; 0000 ; true
+005C 0078 0030 0030 ; 0000 ; true
+0061 0000 0062 ; 0061 0000 0062 ; true
+005B 0000 0061 005D ; 0000 ; true
+0000 002A ; 0000 0000 0000 ; true
+
+# Every escape that spells a number reads ASCII hex digits, in either case.
+005C 0078 0030 0066 ; 000F ; true
+005C 0078 0041 0046 ; 00AF ; true
+005C 0078 007B 0061 0042 007D ; 00AB ; true
+005C 0075 0030 0030 0034 0031 ; 0041 ; true
+005C 0078 007B 0031 0030 0046 0046 0046 0046 007D ; 10FFFF ; true
+
+# The shorthands are ASCII sets. \s is six characters, and U+3000 is not one of them.
+005C 0064 ; 0035 ; true
+005C 0064 ; FF10 ; false
+005C 0044 ; FF10 ; true
+005C 0077 ; 005F ; true
+005C 0077 ; 10330 ; false
+005C 0073 ; 0020 ; true
+005C 0073 ; 0009 ; true
+005C 0073 ; 3000 ; false
+
+# A reluctant marker changes the order a matcher tries things in, and not what is accepted.
+0061 002B 003F ; 0061 0061 0061 ; true
+0061 007B 0032 002C 0036 007D 003F ; 0061 0061 0061 0061 0061 0061 ; true
+0061 007B 0032 002C 0036 007D 003F ; 0061 0061 0061 0061 0061 0061 0061 ; false
+
+# An anchor at the edge asks for nothing, and one after a character that must be taken asks for a
+# position no string has.
+005E 0061 0062 0063 0024 ; 0061 0062 0063 ; true
+0061 005E 0062 ; 0061 0062 ; false
+0061 005E 0062 ; ; false
+005E 0061 0024 007C 0061 005E 0062 ; 0061 ; true
+005E 0061 0024 007C 0061 005E 0062 ; 0061 0062 ; false
+0028 005E 0061 007C 0062 0024 0029 ; 0061 ; true
+0028 005E 0061 007C 0062 0024 0029 ; 0062 ; true
+
+# Every arm of a choice, and both ends of a repetition.
+0030 005B 0031 002D 0039 005D 007C 005B 0031 002D 0033 005D 005B 0030 002D 0039 005D 007C 0034 005B 0030 002D 0037 005D ; 0034 0037 ; true
+0030 005B 0031 002D 0039 005D 007C 005B 0031 002D 0033 005D 005B 0030 002D 0039 005D 007C 0034 005B 0030 002D 0037 005D ; 0034 0038 ; false
+0061 007B 0032 002C 0036 007D ; 0061 ; false
+0061 007B 0032 002C 0036 007D ; 0061 0061 ; true
+0061 007B 0032 002C 0036 007D ; 0061 0061 0061 0061 0061 0061 ; true
+0061 007B 0032 002C 0036 007D ; 0061 0061 0061 0061 0061 0061 0061 ; false
