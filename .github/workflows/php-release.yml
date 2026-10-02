@@ -1,0 +1,67 @@
+name: PHP release
+
+# A tag php/vX.Y.Z releases php/ as version vX.Y.Z of raoh/199x-notation. Packagist reads
+# composer.json at the root of a repository, so the release is published to a mirror whose root is
+# php/, raoh-project/199x-notation-php, and Packagist reads the mirror. Nothing is committed to the
+# mirror but what this workflow writes.
+
+on:
+  push:
+    tags: ['php/v*']
+
+concurrency:
+  group: php-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: The tag is a version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version="${tag#php/}"
+          if ! echo "$version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::$tag is not php/vX.Y.Z"
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: :mbstring, :intl, :iconv
+          coverage: none
+      # What is released is what the tests pass on, at the commit the tag names.
+      - name: Test
+        working-directory: php
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: |
+          composer validate --strict
+          composer install --no-progress
+          vendor/bin/phpunit
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PHP_MIRROR_DEPLOY_KEY }}
+      # The mirror's tree is the files git tracks under php/ and the license, and nothing else.
+      # A version Packagist has seen is never moved, so a tag the mirror already has stops here.
+      - name: Publish to the mirror
+        run: |
+          git clone git@github.com:raoh-project/199x-notation-php.git mirror
+          if [ -n "$(git -C mirror ls-remote --tags origin "refs/tags/$VERSION")" ]; then
+            echo "::error::the mirror already has $VERSION, and a released version is never moved"
+            exit 1
+          fi
+          git -C mirror checkout -B main
+          find mirror -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          git ls-files -z -- php | sed -z 's|^php/||' | rsync -a --from0 --files-from=- php/ mirror/
+          cp LICENSE mirror/LICENSE
+          cd mirror
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit --allow-empty -m "$VERSION from raoh-project/199x-notation@$GITHUB_SHA"
+          git tag -a "$VERSION" -m "$VERSION is php/ of raoh-project/199x-notation at $GITHUB_SHA ($TAG)"
+          git push origin main "refs/tags/$VERSION"

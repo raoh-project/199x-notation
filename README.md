@@ -11,9 +11,9 @@ the same way everywhere.
 
 ## Status
 
-The Java implementation is here, moved from Souther's runtime and compiler, and the Go and Rust
-implementations beside it. Souther, raoh-java, raoh-go and raoh-rust do not depend on them yet, and
-all three are held to `suite/`. The PHP implementation is not here yet. See the issues.
+The Java implementation is here, moved from Souther's runtime and compiler, and the Go, Rust and PHP
+implementations beside it. Souther, raoh-java, raoh-go, raoh-rust and raoh-php do not depend on them
+yet, and all four are held to `suite/`.
 
 ## What belongs here
 
@@ -117,10 +117,11 @@ One directory per language, beside the data they are all generated from and chec
 | `java/` | Maven artifact `net.unit8.199x:199x-notation`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
 | `go/` | Module `github.com/raoh-project/199x-notation/go`, package `notation199x` |
-| `php/` | Package `notation199x` |
+| `php/` | Composer package `raoh/199x-notation`, namespace `Raoh\Notation199x` |
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
-`notation199x`.
+`notation199x`. A Composer package name can, so the PHP package is `raoh/199x-notation`, under the
+vendor raoh-php is published under.
 
 Tables are generated from `ucd/` and checked in. Generation is run by hand and never during a
 build: taking a later Unicode version is a change to the specifications, not a dependency update.
@@ -171,6 +172,19 @@ failure. The crate is `no_std` and allocates through `alloc`; a run time without
 library provides the global allocator. It is built, linted and tested with the Rust that
 `rust/rust-toolchain.toml` names, and CI also builds it with the oldest Rust its `rust-version` says
 it builds with.
+
+The PHP tests read `ucd/` and `suite/`, and run in `php/` with the tools Composer installs:
+
+```sh
+cd php && composer install && vendor/bin/phpunit
+```
+
+A package made from `php/` holds only what is under it, so as for Go and Rust, the tests that read
+files outside it are skipped where the files are not there, and `NOTATION199X_REQUIRE_SUITE` makes
+that a failure. The package needs a 64-bit PHP 8.2 or later and no extension, and CI tests it on
+the oldest PHP it takes and the newest, without mbstring, intl and iconv, and runs PHPStan at its
+highest level over it. A PHP string is bytes, so the question a caller asks before it takes text
+in is whether the string is UTF-8, and a pattern reader refuses one that is not.
 
 Rust reads images of P1 and writes none. Java's tests write the image of each pattern in
 `suite/pattern-match.txt` to `java/target/images/pattern-match.txt`, which is never checked in, and
@@ -235,6 +249,34 @@ module's version `vX.Y.Z` is the tag `go/vX.Y.Z`. The first release is `go/v0.1.
 
 A tag that has been pushed is never moved: the proxy and the checksum database keep the first
 contents a version had, and a module fetched by version is checked against them.
+
+### PHP
+
+The package is `raoh/199x-notation`, and a release of it is a tag: nothing in `php/` names its
+version. Packagist reads `composer.json` at the root of a repository, and this one's is in `php/`,
+so a release is published to a mirror whose root is `php/`,
+[raoh-project/199x-notation-php](https://github.com/raoh-project/199x-notation-php), and Packagist
+reads the mirror. The mirror is written by CI and by nothing else: nobody commits to it, and an issue
+or a pull request there is sent here. As for Go, a tag here begins with the directory, so the
+package's version `vX.Y.Z` is the tag `php/vX.Y.Z` here and the tag `vX.Y.Z` on the mirror. The
+first release is `php/v0.1.0`.
+
+1. Merge what is to be released into `main`, as for a Java release.
+2. Tag the commit on `main` `php/vX.Y.Z` and push the tag. The `PHP release` workflow fails a tag
+   that is not `php/` and a version, runs the PHP tests on the commit, writes the files git tracks
+   under `php/` and the license as one commit on the mirror's `main`, and tags it `vX.Y.Z` with a
+   message naming the commit here it was written from.
+3. Packagist takes the version from the mirror's tag, by the mirror's webhook.
+
+A tag that has been pushed is never moved, here or on the mirror: Packagist keeps the commit a
+version was first published at, and the workflow refuses a version the mirror already has. A
+release that is wrong is followed by another.
+
+The workflow pushes to the mirror with a deploy key that can write to it, held here as the secret
+`PHP_MIRROR_DEPLOY_KEY`. Setting up the mirror is done once: create
+`raoh-project/199x-notation-php` empty, add the public half of the key to it as a deploy key with
+write access and the private half here as that secret, push the first tag, and submit the mirror
+to Packagist under the `raoh` vendor, with its GitHub hook on.
 
 ## The name
 
