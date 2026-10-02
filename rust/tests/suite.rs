@@ -176,8 +176,12 @@ fn temporal_readers_admit_what_the_check_admits_on_every_line_of_the_suite() {
             TemporalKind::Instant => read_instant(&text).map(drop),
         };
         let checked = check_temporal(kind, &text);
-        (read != checked)
-            .then(|| format!("{} as {kind:?} reads {read:?}, checks {checked:?}", shown(&text)))
+        (read != checked).then(|| {
+            format!(
+                "{} as {kind:?} reads {read:?}, checks {checked:?}",
+                shown(&text)
+            )
+        })
     });
 }
 

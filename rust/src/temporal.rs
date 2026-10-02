@@ -517,7 +517,12 @@ mod tests {
         assert_eq!(time("12:34:56.123456789"), (12, 34, 56, 123_456_789));
         let dt = read_date_time("2026-09-30T23:59:59.999999999").unwrap();
         assert_eq!(
-            (dt.date.year, dt.date.day, dt.time.second, dt.time.nanosecond),
+            (
+                dt.date.year,
+                dt.date.day,
+                dt.time.second,
+                dt.time.nanosecond
+            ),
             (2026, 30, 59, 999_999_999)
         );
     }
