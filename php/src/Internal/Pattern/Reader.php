@@ -106,14 +106,17 @@ final class Reader
             $partsFrom = $opened[$top] + $opened[$top + 1];
             if ($next === 0x7C) {
                 $this->take();
-                $arm = $this->arm(self::takeFrom($items, $partsFrom));
+                $arm = $this->arm($items, $partsFrom);
                 $items[] = $arm;
                 $opened[$top + 1]++;
                 continue;
             }
-            $arms = self::takeFrom($items, $opened[$top]);
-            $arms = [...array_slice($arms, 0, $opened[$top + 1]), $this->arm(array_slice($arms, $opened[$top + 1]))];
-            $choice = count($arms) === 1 ? $arms[0] : $this->written->of(Tree::EITHER_OF, $arms);
+            $arm = $this->arm($items, $partsFrom);
+            $items[] = $arm;
+            // A choice of one arm is that arm.
+            $choice = $opened[$top + 1] === 0
+                ? array_pop($items)
+                : $this->written->taken(Tree::EITHER_OF, $items, $opened[$top]);
             if ($top === 0) {
                 if (!$this->done()) {
                     // A bracket closing nothing, which is what is left when the reading of a
@@ -134,33 +137,18 @@ final class Reader
     }
 
     /**
-     * The items of $list from $from on, taken off it. Taken from the end, so that it costs what is
-     * taken and not the list: array_splice would write the whole list out again, and the list is as
-     * long as the groups open around the one being closed.
+     * The arm whose parts are $items from $from on, taken off it: an arm of one part is that part,
+     * and an arm of none is nothing. The parts go from $items into the tree as they are, and are
+     * never a list of their own: an arm may be as long as the text.
      *
-     * @param list<int> $list
-     * @return list<int>
+     * @param list<int> $items
      */
-    private static function takeFrom(array &$list, int $from): array
+    private function arm(array &$items, int $from): int
     {
-        $taken = [];
-        for ($i = count($list); $i > $from; $i--) {
-            $taken[] = array_pop($list) ?? throw new \LogicException('a list shorter than it was counted');
-        }
-        return array_reverse($taken);
-    }
-
-    /**
-     * An arm of $parts: an arm of one part is that part, and an arm of none is nothing.
-     *
-     * @param list<int> $parts
-     */
-    private function arm(array $parts): int
-    {
-        return match (count($parts)) {
+        return match (count($items) - $from) {
             0 => $this->written->leaf(Tree::NOTHING),
-            1 => $parts[0],
-            default => $this->written->of(Tree::IN_TURN, $parts),
+            1 => array_pop($items) ?? throw new \LogicException('a part counted and not held'),
+            default => $this->written->taken(Tree::IN_TURN, $items, $from),
         };
     }
 

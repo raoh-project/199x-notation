@@ -554,4 +554,25 @@ final class MachineTest extends TestCase
             );
         }
     }
+
+    /**
+     * Building a machine holds its rows and, beside them until each step is in its place, the
+     * state each step came from: what it takes at its most is not much more than the machine it
+     * built. Laying the steps out into rows of their own, after gathering them in lists, held them
+     * twice over, and took twice what the machine does.
+     */
+    public function testBuildingAMachineHoldsItsStepsOnce(): void
+    {
+        foreach (['a{249000}', '(?:ab){124998}'] as $pattern) {
+            $read = Pattern::read($pattern);
+            self::assertInstanceOf(Pattern::class, $read);
+            gc_collect_cycles();
+            $before = memory_get_usage();
+            memory_reset_peak_usage();
+            $read->matches('');
+            $peak = memory_get_peak_usage() - $before;
+            $held = memory_get_usage() - $before;
+            self::assertLessThan(1.5 * $held, $peak, "$pattern took $peak bytes at its most for a machine of $held");
+        }
+    }
 }
