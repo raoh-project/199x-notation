@@ -296,6 +296,57 @@ class WhatAMatchDecidesGoesNoFurtherThanTheMatchTest {
         assertEquals(List.of(), failed);
     }
 
+    /**
+     * A match whose new steps lead only to sets already kept, and fill the budget with steps past
+     * the rows, keeps no more once it fills a generation the second time having read little by
+     * steps worked out, as a match that fills it with sets does: what it worked out is counted step
+     * by step, and not set by set. The y before the thousand and twenty-four characters cuts them
+     * into a class each, and every one of them leads the set a walk goes round back to itself.
+     * Counted in sets made, the match counted nothing it worked out and went into a new generation
+     * each time it filled one, to the end of the subject. Looked at as the match goes, from its
+     * checkpoint.
+     */
+    @Test
+    void aMatchThatFillsTheBudgetWithStepsKeepsNoMore() {
+        StringBuilder text = new StringBuilder("y(?:");
+        for (int c = 0x100; c < 0x500; c++) {
+            if (c > 0x100) {
+                text.append('|');
+            }
+            text.appendCodePoint(c);
+        }
+        text.append(")|[\\x{100}-\\x{4FF}]*");
+        // Room for the sets and a table of a few dozen steps past the rows.
+        StringPattern pattern = StringPattern.of(shaped(text.toString()), new StringPattern.Budget(
+                StringPattern.Budget.DEFAULT.classWork(), StringPattern.Budget.DEFAULT.tableEntries(),
+                StringPattern.Budget.DEFAULT.asciiEntries(), StringPattern.Budget.DEFAULT.runs(),
+                StringPattern.Budget.DEFAULT.subsets(), 400));
+        assertEquals(StringPattern.Way.SETS_KEPT, pattern.way());
+        List<long[]> seen = new ArrayList<>();
+        long[] asked = {0};
+        Checkpoint looking = () -> {
+            if (++asked[0] % 2_000 == 0) {
+                seen.add(new long[] {pattern.setsKept(), pattern.stepsKnown()});
+            }
+            return true;
+        };
+        StringBuilder subject = new StringBuilder();
+        int at = 11;
+        for (int i = 0; i < 40_000; i++) {
+            at = at * 1_664_525 + 1_013_904_223;
+            subject.appendCodePoint(0x100 + (at >>> 22));
+        }
+        assertEquals(new Outcome.Answered<>(true), pattern.matches(subject.toString(), looking));
+        assertTrue(pattern.setsKept() <= 3, pattern.setsKept() + " sets kept");
+        long[] last = seen.get(seen.size() - 1);
+        int still = 0;
+        for (int i = seen.size() - 1; i >= 0 && seen.get(i)[0] == last[0] && seen.get(i)[1] == last[1]; i--) {
+            still++;
+        }
+        assertTrue(still * 2 > seen.size(), "what is kept stayed as it was for " + still + " of "
+                + seen.size() + " looks");
+    }
+
     /** How many times a match of {@code subject}, which ends in b and is not accepted, asks. */
     private static long asks(StringPattern pattern, String subject) {
         long[] asked = {0};

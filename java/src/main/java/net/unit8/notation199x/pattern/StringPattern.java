@@ -1338,8 +1338,8 @@ public final class StringPattern implements Predicate<String> {
      * more than its generation holds goes into another, and what it may do then is decided in one
      * place ({@link Keeping#into}), which counts every generation a walk goes into, whichever walk
      * started it. It goes into one the first time it fills its own, whatever came before it, and
-     * again only where it has read ten characters by steps already worked out for each set it made
-     * since it last went into one. Where it makes the generation it goes into, the set it has come to
+     * again only where it has read ten characters by steps already worked out for each it worked out
+     * a state at a time since it last went into one. Where it makes the generation it goes into, the set it has come to
      * is kept there whatever it takes, beside the set a walk starts in, as the generation is made;
      * where another walk made it, the set is kept there within the budget, or the walk keeps no
      * more. Otherwise the sets it comes to are too seldom met again to be worth
@@ -1410,6 +1410,9 @@ public final class StringPattern implements Predicate<String> {
                     }
                     count = move(steps, from.states, from.states.length, classes.some(each), room,
                             checkpoint);
+                    if (!keeping.frozen) {
+                        keeping.worked++;
+                    }
                 } else {
                     count = move(steps, Objects.requireNonNull(room).here, count, classes.some(each),
                             room, checkpoint);
@@ -1420,7 +1423,6 @@ public final class StringPattern implements Predicate<String> {
                 // that keeps no more. The set with no state in it is in no generation.
                 @Nullable Subset to = count == 0 ? nothing
                         : kept.held(working, count, accepting, !keeping.frozen, checkpoint);
-                boolean made = count != 0 && to != null && working.made;
                 boolean fits = to != null
                         && (from == null || keeping.frozen || kept.learn(from, each, to, checkpoint));
                 if (!fits && !keeping.frozen) {
@@ -1431,7 +1433,6 @@ public final class StringPattern implements Predicate<String> {
                             over, checkpoint);
                     if (into != null) {
                         kept = into;
-                        made = false;
                         // The walk that made the generation finds the set it has come to there,
                         // with the step to it from the set a walk starts in where it came from that
                         // one; one that went into a generation another walk made keeps the set
@@ -1442,7 +1443,6 @@ public final class StringPattern implements Predicate<String> {
                             to = into.entry;
                         } else {
                             to = kept.held(working, count, accepting, true, checkpoint);
-                            made = to != null && working.made;
                             if (to == null) {
                                 keeping.frozen = true;
                             }
@@ -1461,9 +1461,6 @@ public final class StringPattern implements Predicate<String> {
                     working.there = was;
                     in = null;
                     continue;
-                }
-                if (made) {
-                    keeping.made++;
                 }
                 if (to == from && checkpoint == null) {
                     int was = at;
@@ -1485,8 +1482,9 @@ public final class StringPattern implements Predicate<String> {
 
     /**
      * What one match decides about keeping the sets it comes to, and nothing past the match: the
-     * sets it made and the characters it read by steps already worked out since it last went into a
-     * generation or since it began, whether it has gone into one, and whether it keeps no more.
+     * characters it worked out a state at a time and those it read by steps already worked out since
+     * it last went into a generation or since it began, whether it has gone into one, and whether
+     * it keeps no more.
      *
      * <p>{@link #into} is the one place a walk goes from the generation it keeps sets in to another,
      * so every such change is counted against the match: one it started, and one another walk
@@ -1496,7 +1494,10 @@ public final class StringPattern implements Predicate<String> {
      */
     private static final class Keeping {
 
-        long made;
+        /** The characters this match worked out a state at a time to keep, whether that came to a
+         *  new set or to a kept one by a new step, and those it read by steps already worked out,
+         *  since it last went into a generation or since it began. */
+        long worked;
         long read;
         private boolean changed;
         boolean frozen;
@@ -1509,19 +1510,21 @@ public final class StringPattern implements Predicate<String> {
          * it: the one kept now, where another walk has started it, and otherwise one started here in
          * its place, holding that set beside the set a walk starts in ({@link #entered}), and the
          * step over class {@code over} to it from the set a walk starts in, where the walk came from
-         * that one, and {@code over} is not -1. The first time in a match the
-         * walk goes into one whatever it read; after that only where it read ten characters by steps
-         * worked out for each set it made since. Null where it does not, and it keeps no more sets
-         * for the rest of the match.
+         * that one, and {@code over} is not -1. The first time in a match the walk goes into one
+         * whatever it read; after that only where it read ten characters by steps already worked
+         * out for each it worked out a state at a time since. Counted in sets made, a walk whose new
+         * steps led only to kept sets, and filled the budget with steps, counted nothing it had
+         * worked out, and went into a new generation each time it filled one. Null where it does
+         * not, and it keeps no more sets for the rest of the match.
          */
         @Nullable Generation into(Subsets known, Generation full, Room room, int count,
                                   boolean[] accepting, int over, @Nullable Checkpoint checkpoint) {
-            if (changed && read < 10 * made) {
+            if (changed && read < 10 * worked) {
                 frozen = true;
                 return null;
             }
             changed = true;
-            made = 0;
+            worked = 0;
             read = 0;
             entered = null;
             Generation now = known.current();
@@ -1543,7 +1546,6 @@ public final class StringPattern implements Predicate<String> {
             now = known.restart(full, entry, over, overTo);
             if (entry != null && now.entry == entry) {
                 entered = entry;
-                made = 1;
             }
             return now;
         }
@@ -1913,13 +1915,12 @@ public final class StringPattern implements Predicate<String> {
          * The set of the {@code count} states first in {@code room.there}, which are the ones
          * {@code room.seen} marks with its round: the one kept where it is kept, and otherwise, where
          * {@code admit}, kept now within the budget. Null where it is not kept and is not: where not
-         * {@code admit}, where the budget has no room for it, or where every slot is taken. Whether it was made here is left in
-         * {@code room.made}. Its hash is summed here to look it up, and whether it accepts, of the
-         * states a walk may stop at ({@code accepting}), is asked only where it is kept.
+         * {@code admit}, where the budget has no room for it, or where every slot is taken. Its hash
+         * is summed here to look it up, and whether it accepts, of the states a walk may stop at
+         * ({@code accepting}), is asked only where it is kept.
          */
         @Nullable Subset held(Room room, int count, boolean[] accepting, boolean admit,
                               @Nullable Checkpoint checkpoint) {
-            room.made = false;
             int hash = hashOf(room.there, count, checkpoint);
             int mask = slots.length() - 1;
             @Nullable Subset made = null;
@@ -1937,7 +1938,6 @@ public final class StringPattern implements Predicate<String> {
                                 ids.incrementAndGet());
                     }
                     if (keep(at, made)) {
-                        room.made = true;
                         return made;
                     }
                     held = slots.get(at);
@@ -2170,9 +2170,6 @@ public final class StringPattern implements Predicate<String> {
         final int[] seen;
         final int[] pending;
         int round;
-        /** Whether the set a walk last looked for among those kept was made then and kept
-         *  ({@link Generation#held}), so that a walk counts the sets it makes. */
-        boolean made;
 
         Room(int states) {
             this.here = new int[states];
