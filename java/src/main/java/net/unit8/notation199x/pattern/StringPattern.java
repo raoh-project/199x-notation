@@ -11,8 +11,11 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.Predicate;
 import java.lang.invoke.MethodHandles;
@@ -140,16 +143,20 @@ public final class StringPattern implements Predicate<String> {
      * @param runs         the most {@link #runs} a deterministic machine with no table holds, as many
      *                     as the runs of the sets each of its states steps over; past them it is
      *                     walked as sets of states, as a machine that is not deterministic is
-     * @param subsets      the most sets of states a pattern keeps for its walks ({@link #remember})
+     * @param subsets      the most sets of states a pattern keeps for its walks at one time, in one
+     *                     {@link Generation} ({@link #remember})
      * @param remembered   the most states and steps those sets hold between them, each set's states
      *                     and one step for each class; each is an {@code int} or a reference, about
-     *                     four bytes
+     *                     four bytes. The set a walk starts in, and the one the walk that makes a
+     *                     generation has come to, are kept whatever they take as the generation is
+     *                     made, and counted beside both, not in them, so the budget bounds every
+     *                     other set ({@link Generation})
      */
     record Budget(long classWork, int tableEntries, int asciiEntries, int runs, int subsets,
                   long remembered) {
 
         /** The most sets a budget may keep: the places they are looked up in are four times as
-         *  many, and are made with the pattern. */
+         *  many, and are made with each generation of them. */
         static final int MOST_SUBSETS = 1 << 20;
 
         /** Holds every part to being none or some, and the sets kept to what can be looked up. */
@@ -267,6 +274,10 @@ public final class StringPattern implements Predicate<String> {
      *  {@link #runs}. Null for any other, where there are no {@link #classes}, or where the first set
      *  is past the {@link Budget}. */
     private final @Nullable Subsets subsets;
+
+    /** The room the last walk as sets of states to finish left for the next, or null where a walk
+     *  has it or none has finished ({@link Room}). */
+    private final AtomicReference<@Nullable Room> spare = new AtomicReference<>();
 
     private StringPattern(boolean deterministic, boolean[] accepting, int[][][] over, int[][] target,
                           int[][] free, Budget budget) {
@@ -397,27 +408,72 @@ public final class StringPattern implements Predicate<String> {
         return subsets != null ? Way.SETS_KEPT : Way.EVERY_STATE;
     }
 
-    /** How many sets of states this pattern keeps, none where it keeps none: what a test of which way
-     *  a walk went asks, and no walk. */
+    /** How many sets of states this pattern keeps now, none where it keeps none: what a test of which
+     *  way a walk went asks, and no walk. */
     int setsKept() {
         Subsets known = subsets;
-        return known == null ? 0 : known.count.get();
+        if (known == null) {
+            return 0;
+        }
+        Generation now = known.current();
+        return now.count.get() + now.needed;
     }
 
-    /** How many steps from the sets kept, each where one class leads from one set, are worked out. */
+    /** What the generation kept now counts against the budget, and what the sets and table it holds
+     *  within the budget take, worked out from them: what a test of the counting asks, and no walk. */
+    long[] counted() {
+        Subsets known = subsets;
+        if (known == null) {
+            return new long[] {0, 0};
+        }
+        Generation now = known.current();
+        return new long[] {now.remembered.get(), now.held()};
+    }
+
+    /** How many of the sets kept now are kept whatever they take, beside the budget, and the states
+     *  and steps they hold: what a test of what a generation holds asks, and no walk. */
+    long[] keptBeside() {
+        Subsets known = subsets;
+        if (known == null) {
+            return new long[] {0, 0};
+        }
+        Generation now = known.current();
+        return new long[] {now.needed, now.beside};
+    }
+
+    /** How many steps from the sets kept now, each where one class leads from one set, are worked
+     *  out. */
     int stepsKnown() {
         Subsets known = subsets;
-        return known == null ? 0 : known.stepsKnown();
+        return known == null ? 0 : known.current().stepsKnown();
     }
 
-    /** Forgets every step worked out from the sets kept, and what a walk stays in each on, and keeps
-     *  the sets: a walk after works out each step again, and finds the set it leads to among those
-     *  kept. What a test or a timing of that way does, and no walk. */
+    /** Forgets every step worked out from the sets kept now, and what a walk stays in each on, and
+     *  keeps the sets: a walk after works out each step again, and finds the set it leads to among
+     *  those kept. What a test or a timing of that way does, and no walk. */
     void forgetSteps() {
         Subsets known = subsets;
         if (known != null) {
-            known.forgetSteps();
+            known.current().forgetSteps();
         }
+    }
+
+    /** Starts the sets kept again, as a walk on another thread that filled them does: a walk going on
+     *  in the ones kept now finds a new generation in their place when it fills them. What a test
+     *  does, and no walk. */
+    void startSetsAgain() {
+        Subsets known = subsets;
+        if (known != null) {
+            known.restart(known.current(), null, -1, null);
+        }
+    }
+
+    /** Leaves a room for the next walk whose rounds are at {@code round}, so that the walks after go
+     *  past where the rounds come round to nought. What a test does, and no walk. */
+    void leaveRoomAt(int round) {
+        Room room = room();
+        room.round = round;
+        spare.set(room);
     }
 
     /** Each set the steps are over, once however many steps are over it. */
@@ -632,11 +688,10 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /** The {@link #subsets} of a machine walked as sets of states, holding the one a walk starts
-     *  in: the first state and every live one it reaches for no character. Null where that set is
-     *  past what the sets kept may hold, and every walk moves each state for every character. */
-    private @Nullable Subsets subsets(Steps steps, SymbolClasses classes, Budget budget) {
+     *  in: the first state and every live one it reaches for no character, whatever it takes. */
+    private Subsets subsets(Steps steps, SymbolClasses classes, Budget budget) {
         Room room = new Room(accepting.length);
-        room.round = 1;
+        room.nextRound();
         int count = close(steps, 0, room.there, 0, room, null);
         return Subsets.of(classes, budget, room, count, accepting);
     }
@@ -1288,9 +1343,23 @@ public final class StringPattern implements Predicate<String> {
      * <p>Where a class leads from a set is worked out the first time a walk asks, as
      * {@link #spread} works out a character, and kept with the set, so a walk that asks again is one
      * lookup. The set it leads to is looked up among the sets kept, so that a walk going round a
-     * loop of the pattern goes round a loop of sets and not into new ones. The sets kept are bounded
-     * by the {@link Budget}; a walk that needs one more than that goes on from the set it is in as
-     * {@link #spread} does.
+     * loop of the pattern goes round a loop of sets and not into new ones.
+     *
+     * <p>The sets kept are a {@link Generation}, bounded by the {@link Budget}. A walk that needs one
+     * more than its generation holds goes into another, and what it may do then is decided in one
+     * place ({@link Keeping#into}), which counts every generation a walk goes into, whichever walk
+     * started it. It goes into one the first time it fills its own, whatever came before it, and
+     * again only where it has read ten characters by steps already worked out for each it worked out
+     * a state at a time since it last went into one. Where it makes the generation it goes into, the set it has come to
+     * is kept there whatever it takes, beside the set a walk starts in, as the generation is made;
+     * where another walk made it, the set is kept there within the budget, or the walk keeps no
+     * more. Otherwise the sets it comes to are too seldom met again to be worth
+     * keeping, and it keeps no more for the rest of this match: it moves each state for every
+     * character, as {@link #spread} does, and looks the set it comes to up among those kept, going
+     * on by their steps from one it finds and writing none. So what a match pays for keeping sets is
+     * at most two generations of them beyond what it reads by their steps, however many generations
+     * other walks start. What a walk decides here is its own and goes no further than the match: the
+     * next match starts as the first did, and only the sets and their steps are held past it.
      *
      * <p>A walk that does not ask goes over a run of characters that keep it in one set as
      * {@link #look} does over a state, by the classes already found to lead from the set back to it
@@ -1299,76 +1368,221 @@ public final class StringPattern implements Predicate<String> {
      */
     private boolean remember(Steps steps, String value, Subsets known, @Nullable Checkpoint checkpoint) {
         SymbolClasses classes = known.classes;
+        int width = known.width;
         Subset nothing = known.nothing;
-        Subset in = known.start;
+        Generation kept = known.current();
+        // The set the walk is in, which is one of `kept`; or null where the walk is moving each
+        // state, and is in the first `count` of room.here.
+        @Nullable Subset in = kept.start;
         if (in == nothing) {
             // No state the walk starts in reaches one it may stop at.
             return false;
         }
         @Nullable Room room = null;
+        int count = 0;
+        // What this match has decided, and nothing past it.
+        Keeping keeping = new Keeping();
         int at = 0;
         int length = value.length();
-        while (at < length) {
-            ask(checkpoint);
-            char unit = value.charAt(at);
-            int each = classes.at(value, at);
-            if (each < 0) {
-                return false;
-            }
-            Subset next = in.next[each];
-            if (next == null) {
-                if (room == null) {
-                    // The room a walk works a set out in is as large as the machine, and is made
-                    // only once asked.
-                    ask(checkpoint);
-                    room = new Room(accepting.length);
-                }
-                next = step(steps, known, in, each, room, checkpoint);
-                if (next == null) {
-                    System.arraycopy(in.states, 0, room.here, 0, in.states.length);
-                    return spread(steps, value, at, room, in.states.length, checkpoint);
-                }
-            }
-            at += Character.isHighSurrogate(unit) ? 2 : 1;
-            if (next != in) {
-                if (next == nothing) {
+        try {
+            while (at < length) {
+                ask(checkpoint);
+                char unit = value.charAt(at);
+                int each = classes.at(value, at);
+                if (each < 0) {
                     return false;
                 }
-                in = next;
-            } else if (checkpoint == null) {
-                // As over a deterministic machine's table ({@link #look}).
-                at = in.stay.over(value, at);
+                at += Character.isHighSurrogate(unit) ? 2 : 1;
+                Subset from = in;
+                if (from != null) {
+                    // A class ASCII is in is one lookup in the set's row; another is looked for in
+                    // the generation's table of them.
+                    @Nullable Subset next = each < width ? from.next[each] : kept.cold(from, each, checkpoint);
+                    if (next != null) {
+                        keeping.read++;
+                        if (next == nothing) {
+                            return false;
+                        }
+                        if (next != from) {
+                            in = next;
+                        } else if (checkpoint == null) {
+                            // As over a deterministic machine's table ({@link #look}).
+                            int was = at;
+                            at = from.stay.over(value, at);
+                            keeping.read += at - was;
+                        }
+                        continue;
+                    }
+                    if (room == null) {
+                        // The room a walk works a set out in is as large as the machine, and is
+                        // taken only once asked.
+                        ask(checkpoint);
+                        room = room();
+                    }
+                    count = move(steps, from.states, from.states.length, classes.some(each), room,
+                            checkpoint);
+                    if (!keeping.frozen) {
+                        keeping.worked++;
+                    }
+                } else {
+                    count = move(steps, Objects.requireNonNull(room).here, count, classes.some(each),
+                            room, checkpoint);
+                }
+                Room working = Objects.requireNonNull(room);
+                // The set the walk has come to, kept where it is kept or there is room for it, and
+                // the step to it, written only from a set of the same generation and not by a walk
+                // that keeps no more. The set with no state in it is in no generation.
+                @Nullable Subset to = count == 0 ? nothing
+                        : kept.held(working, count, accepting, !keeping.frozen, checkpoint);
+                boolean fits = to != null
+                        && (from == null || keeping.frozen || kept.learn(from, each, to, checkpoint));
+                if (!fits && !keeping.frozen) {
+                    // No room for the set or for the step to it: what is done is decided in one
+                    // place, as for a set and a step alike.
+                    int over = from != null && from == kept.start ? each : -1;
+                    @Nullable Generation into = keeping.into(known, kept, working, count, accepting,
+                            over, checkpoint);
+                    if (into != null) {
+                        kept = into;
+                        // The walk that made the generation finds the set it has come to there,
+                        // with the step to it from the set a walk starts in where it came from that
+                        // one; one that went into a generation another walk made keeps the set
+                        // within the budget, or keeps no more, and a later walk works out the step.
+                        if (count == 0) {
+                            to = nothing;
+                        } else if (into.entry != null && into.entry == keeping.entered) {
+                            to = into.entry;
+                        } else {
+                            to = kept.held(working, count, accepting, true, checkpoint);
+                            if (to == null) {
+                                keeping.frozen = true;
+                            }
+                        }
+                    }
+                    // Where it keeps no more, the walk goes on from the set it came to where that
+                    // is kept, with no step to it.
+                }
+                if (count == 0) {
+                    return false;
+                }
+                if (to == null) {
+                    // Not kept, and no more will be: the walk goes on from the states it has come to.
+                    int[] was = working.here;
+                    working.here = working.there;
+                    working.there = was;
+                    in = null;
+                    continue;
+                }
+                if (to == from && checkpoint == null) {
+                    int was = at;
+                    at = to.stay.over(value, at);
+                    keeping.read += at - was;
+                }
+                in = to;
+            }
+            if (in != null) {
+                return in.accepting;
+            }
+            return acceptsAny(accepting, Objects.requireNonNull(room).here, count, checkpoint);
+        } finally {
+            if (room != null) {
+                leave(room);
             }
         }
-        return in.accepting;
     }
 
-    /** Where class {@code each} leads from {@code from}, worked out, kept and answered; or null where
-     *  the set it leads to is one more than {@code known} keeps. */
-    private @Nullable Subset step(Steps steps, Subsets known, Subset from, int each, Room room,
-                                  @Nullable Checkpoint checkpoint) {
-        int symbol = known.classes.some(each);
-        room.round++;
-        int count = 0;
-        for (int state : from.states) {
+    /**
+     * What one match decides about keeping the sets it comes to, and nothing past the match: the
+     * characters it worked out a state at a time and those it read by steps already worked out since
+     * it last went into a generation or since it began, whether it has gone into one, and whether
+     * it keeps no more.
+     *
+     * <p>{@link #into} is the one place a walk goes from the generation it keeps sets in to another,
+     * so every such change is counted against the match: one it started, and one another walk
+     * started that it takes up. Were a generation another walk started taken up without being
+     * counted, a walk among others that keep starting them would keep sets in each, and what one
+     * match pays for keeping sets would have no bound.
+     */
+    private static final class Keeping {
+
+        /** The characters this match worked out a state at a time to keep, whether that came to a
+         *  new set or to a kept one by a new step, and those it read by steps already worked out,
+         *  since it last went into a generation or since it began. */
+        long worked;
+        long read;
+        private boolean changed;
+        boolean frozen;
+        /** The set this walk made a generation with, kept there whatever it took, or null. */
+        @Nullable Subset entered;
+
+        /**
+         * The generation the walk is to keep sets in, now that {@code full} has no room for the set
+         * it has come to, the {@code count} states first in {@code room.there}, or for the step to
+         * it: the one kept now, where another walk has started it, and otherwise one started here in
+         * its place, holding that set beside the set a walk starts in ({@link #entered}), and the
+         * step over class {@code over} to it from the set a walk starts in, where the walk came from
+         * that one, and {@code over} is not -1. The first time in a match the walk goes into one
+         * whatever it read; after that only where it read ten characters by steps already worked
+         * out for each it worked out a state at a time since. Counted in sets made, a walk whose new
+         * steps led only to kept sets, and filled the budget with steps, counted nothing it had
+         * worked out, and went into a new generation each time it filled one. Null where it does
+         * not, and it keeps no more sets for the rest of the match.
+         */
+        @Nullable Generation into(Subsets known, Generation full, Room room, int count,
+                                  boolean[] accepting, int over, @Nullable Checkpoint checkpoint) {
+            if (changed && read < 10 * worked) {
+                frozen = true;
+                return null;
+            }
+            changed = true;
+            worked = 0;
+            read = 0;
+            entered = null;
+            Generation now = known.current();
+            if (now != full) {
+                return now;
+            }
             ask(checkpoint);
+            @Nullable Subset entry = null;
+            @Nullable Subset overTo = null;
+            if (count == 0) {
+                // The set with no state in it is in no generation.
+                overTo = known.nothing;
+            } else if (!Generation.same(full.start, room, count, checkpoint)) {
+                entry = new Subset(Arrays.copyOf(room.there, count),
+                        acceptsAny(accepting, room.there, count, checkpoint),
+                        hashOf(room.there, count, checkpoint), known.width, Generation.ENTRY);
+                overTo = entry;
+            }
+            now = known.restart(full, entry, over, overTo);
+            if (entry != null && now.entry == entry) {
+                entered = entry;
+            }
+            return now;
+        }
+    }
+
+    /** The states the first {@code count} of {@code from} lead to over {@code symbol}, each with the
+     *  live states it reaches for no character, put first in {@code room.there} in a round of their
+     *  own; answers how many. The one place a walk as sets of states moves its states, asking
+     *  before each state and each step it looks at. */
+    private int move(Steps steps, int[] from, int count, int symbol, Room room,
+                     @Nullable Checkpoint checkpoint) {
+        room.nextRound();
+        int next = 0;
+        for (int i = 0; i < count; i++) {
+            ask(checkpoint);
+            int state = from[i];
             int[][] sets = steps.over()[state];
             for (int step = 0; step < sets.length; step++) {
                 ask(checkpoint);
                 if (holds(sets[step], symbol)) {
-                    count = close(steps, steps.target()[state][step], room.there, count, room,
+                    next = close(steps, steps.target()[state][step], room.there, next, room,
                             checkpoint);
                 }
             }
         }
-        Subset to = count == 0 ? known.nothing : known.held(room, count, accepting, checkpoint);
-        if (to == from) {
-            from.staysOn(known.classes, each);
-        }
-        if (to != null) {
-            from.next[each] = to;
-        }
-        return to;
+        return next;
     }
 
     /**
@@ -1378,13 +1592,26 @@ public final class StringPattern implements Predicate<String> {
      * <p>A pattern is asked about from any number of threads at once, and the sets are found by
      * whichever walk gets to one first. Where a class leads ({@link #next}) is written by the walk
      * that found it, without a lock: a walk that reads null works it out again, and one that reads a
-     * set reads all of it, since everything a set holds was given to it as it was made.
+     * set reads all of it, since everything a set holds was given to it as it was made. It leads
+     * only to a set of its own {@link Generation}, or to the set with no state in it.
+     *
+     * <p>{@link #next} has a place for every class of the machine where the budget's share for one
+     * set holds them, and otherwise for each class ASCII is in, at most 128 ({@link Subsets#width}),
+     * and is counted in the budget at that length. Where the other classes lead is kept in the
+     * generation's table of them ({@link Cold}), as it is found, so what a set holds does not grow
+     * with how many classes the machine has.
      */
     private static final class Subset {
 
         final int[] states;
         final boolean accepting;
         final int hash;
+        /** What names the set in its generation's table of the steps past its row
+         *  ({@link Generation#cold}): unique in the generation, and never nought for a kept set. */
+        final int id;
+        /** Where each class ASCII is in leads, those being the first classes
+         *  ({@link SymbolClasses#asciiWidth}), or null where that is not known yet. Where the other
+         *  classes lead is kept in the generation ({@link Generation#cold}), as they are found. */
         final @Nullable Subset[] next;
 
         /**
@@ -1408,11 +1635,12 @@ public final class StringPattern implements Predicate<String> {
             }
         }
 
-        Subset(int[] states, boolean accepting, int hash, int classes) {
+        Subset(int[] states, boolean accepting, int hash, int width, int id) {
             this.states = states;
             this.accepting = accepting;
             this.hash = hash;
-            this.next = new Subset[classes];
+            this.id = id;
+            this.next = new Subset[width];
         }
 
         /**
@@ -1429,47 +1657,286 @@ public final class StringPattern implements Predicate<String> {
         }
     }
 
-    /** The sets a pattern keeps, each once, and what they may grow to. */
+    /**
+     * The sets a pattern keeps for its walks: the set with no state in it and the states a walk
+     * starts in, which are the pattern's own, and the {@link Generation} of sets kept now, which a
+     * walk may let go and start again ({@link #restart}).
+     */
     private static final class Subsets {
 
         final SymbolClasses classes;
         /**
          * The set with no state in it, which accepts nothing. A step is found to lead to it, and a
          * walk that is led there answers no; no walk is in it, so no step from it is ever found.
+         * It is in no generation, and every generation's steps may lead to it.
          */
         final Subset nothing;
-        final Subset start;
+        /** The states a walk starts in, every one reached for no character taken; and whether a walk
+         *  may stop at one of them, and their hash, which every generation's first set is made of. */
+        private final int[] start;
+        private final boolean startAccepting;
+        private final int startHash;
         private final Budget budget;
-        private final AtomicReferenceArray<Subset> slots;
-        final AtomicInteger count = new AtomicInteger();
-        private final AtomicLong remembered = new AtomicLong();
+        /**
+         * How many classes each set's row holds: every class of the machine where they are at most
+         * the budget's share for one set, what it holds over the sets it keeps, so that a step over
+         * any character is one lookup; and otherwise those ASCII is in, which come first, so that
+         * what a set holds is bounded by the budget and not by the machine.
+         */
+        final int width;
+        private final AtomicReference<Generation> current;
 
         /**
          * The sets a pattern keeps, holding the one of the {@code count} states first in
-         * {@code started.there} that a walk starts in; or null where that one is past what they may
-         * hold. It is kept as every other set is ({@link #keep}), so no set is held that is not
-         * counted. {@code accepting} is the states a walk may stop at.
+         * {@code started.there} that a walk starts in, whatever it takes, as every generation is
+         * made ({@link Generation#Generation}), and counted beside the budget. {@code accepting}
+         * is the states a walk may stop at.
          */
-        static @Nullable Subsets of(SymbolClasses classes, Budget budget, Room started, int count,
-                                    boolean[] accepting) {
+        static Subsets of(SymbolClasses classes, Budget budget, Room started, int count,
+                          boolean[] accepting) {
             // No walk is in the set with no state in it, so no step from it is kept.
-            Subset nothing = new Subset(new int[0], false, 0, 0);
-            if (count == 0) {
-                return new Subsets(classes, budget, nothing, nothing);
-            }
-            Subset start = new Subset(Arrays.copyOf(started.there, count),
+            Subset nothing = new Subset(new int[0], false, 0, 0, 0);
+            Subsets out = new Subsets(classes, budget, nothing, Arrays.copyOf(started.there, count),
                     acceptsAny(accepting, started.there, count, null),
-                    hashOf(started.there, count, null), classes.count());
-            Subsets out = new Subsets(classes, budget, nothing, start);
-            return out.keep(out.slot(start.hash), start) ? out : null;
+                    hashOf(started.there, count, null));
+            out.current.set(out.generation(null, -1, null));
+            return out;
         }
 
-        private Subsets(SymbolClasses classes, Budget budget, Subset nothing, Subset start) {
+        private Subsets(SymbolClasses classes, Budget budget, Subset nothing, int[] start,
+                        boolean startAccepting, int startHash) {
             this.classes = classes;
             this.budget = budget;
             this.nothing = nothing;
             this.start = start;
+            this.startAccepting = startAccepting;
+            this.startHash = startHash;
+            long share = budget.remembered() / Math.max(1, budget.subsets());
+            this.width = classes.count() <= share ? classes.count() : classes.asciiWidth();
+            this.current = new AtomicReference<>();
+        }
+
+        /** The generation of sets kept now. */
+        Generation current() {
+            return current.get();
+        }
+
+        /**
+         * A new generation in place of {@code full}, holding the set a walk starts in and
+         * {@code entry}, the set the walk making it has come to, where that is not null, and the step
+         * over class {@code over} from the first to {@code overTo}, or to itself where that is null,
+         * where {@code over} is not -1; or, where another walk has put one in its place first, that
+         * one, which holds nothing of them. The full one is let go: a walk in it goes on in it until
+         * it ends, and it is gone once none is.
+         */
+        Generation restart(Generation full, @Nullable Subset entry, int over, @Nullable Subset overTo) {
+            Generation fresh = generation(entry, over, overTo);
+            return current.compareAndSet(full, fresh) ? fresh : current.get();
+        }
+
+        /**
+         * A generation holding a set of the states a walk starts in, or the set with no state in it
+         * where there are none, and {@code entry} where it is not null, each kept whatever it takes,
+         * with the step {@link #restart} says. Every match needs the first, so no budget leaves a
+         * pattern walking every state for want of room for it.
+         */
+        private Generation generation(@Nullable Subset entry, int over, @Nullable Subset overTo) {
+            if (start.length == 0) {
+                return new Generation(classes, budget, width, nothing, null, -1, null);
+            }
+            return new Generation(classes, budget, width,
+                    new Subset(start, startAccepting, startHash, width, Generation.START), entry, over,
+                    overTo);
+        }
+    }
+
+    /**
+     * The sets of states kept at one time, each once, where they are looked up, and what they may
+     * grow to.
+     *
+     * <p>A step from a set of one generation leads only to a set of the same one, or to the set with
+     * no state in it, which is in none: a generation let go holds nothing of the one after it, and
+     * is gone once no walk is in it. So what a pattern holds at once is the generation kept now and
+     * one for each walk still going on in an older one.
+     *
+     * <p>What one generation holds is its slots, made with it, four for each set the budget keeps,
+     * and the sets kept in it, each counted as it is kept, as many states and steps as its arrays
+     * hold. Two sets are kept whatever they take, and only as the generation is made, before any
+     * walk sees it: the set a walk starts in, and the set the walk that made the generation had come
+     * to ({@link #entry}). Every walk needs the first, and the walk that filled the generation before
+     * this one needs the second to go on by kept steps, so neither is turned away for want of room;
+     * they are counted apart, in {@link #needed} and {@link #beside}, which are fixed when the
+     * generation is made, and not against the budget, which bounds every other set, in
+     * {@link #count} and {@link #remembered}. Every set kept after the generation is made is kept
+     * within the budget ({@link #keep}), whichever walk keeps it: a walk that goes into a generation
+     * another walk made keeps the set it has come to there only where the budget has room for it.
+     * So one generation holds at most the budget and those two sets, however many walks go into it.
+     *
+     * <p>What is counted here is held across matches, and a walk told to stop leaves wherever it
+     * asks. So nothing is counted while anything that asks is still to be done: a walk does what
+     * asks first, and then counts, and keeps or gives back what it counted, asking nothing between.
+     * Counted in the budget, a set larger than it would leave no room for any other, and a walk that
+     * went on from it to one more would be frozen.
+     */
+    private static final class Generation {
+
+        private final SymbolClasses classes;
+        /** The set a walk starts in, kept here as the others are. */
+        final Subset start;
+        private final Budget budget;
+        private final AtomicReferenceArray<Subset> slots;
+        final AtomicInteger count = new AtomicInteger();
+        final AtomicLong remembered = new AtomicLong();
+        /** The ids of the set a walk starts in and of {@link #entry}; the sets kept after are named
+         *  from {@link #ids} on. */
+        static final int START = 1;
+        static final int ENTRY = 2;
+
+        /** The set the walk that made this generation had come to, kept whatever it takes, or null
+         *  where it was the set a walk starts in or no walk made it so. */
+        final @Nullable Subset entry;
+        /** How many classes each set's row holds ({@link Subset#next}). */
+        private final int width;
+        /** The id the last set kept here was given. */
+        private final AtomicInteger ids = new AtomicInteger(ENTRY);
+        /** Where the classes past the rows lead from the sets kept here, or null before one is
+         *  found ({@link Cold}): put in place by a compare-and-set, and read plainly, so a walk that
+         *  reads an older table finds fewer steps and works the rest out again. */
+        private @Nullable Cold cold;
+
+        private static final VarHandle COLD;
+
+        static {
+            try {
+                COLD = MethodHandles.lookup().findVarHandle(Generation.class, "cold", Cold.class);
+            } catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+        /** The sets kept whatever they take, at most {@link #start} and {@link #entry}, and the
+         *  states and steps they hold, beside the budget: fixed as the generation is made. */
+        final int needed;
+        private final long beside;
+        /** What the table of steps past the rows the generation was made with was counted beside the
+         *  budget, or nought: a larger one in its place is counted in the budget for what it adds. */
+        private final long coldBeside;
+
+        /**
+         * A generation holding {@code start}, unless it is the set with no state in it, and
+         * {@code entry} where it is not null, each kept whatever it takes, and the step over class
+         * {@code over} from {@code start} to {@code overTo}, or to {@code start} where that is null,
+         * where {@code over} is not -1. No walk sees it yet, so they are put in it without asking
+         * another walk.
+         */
+        Generation(SymbolClasses classes, Budget budget, int width, Subset start,
+                   @Nullable Subset entry, int over, @Nullable Subset overTo) {
+            this.classes = classes;
+            this.budget = budget;
+            this.width = width;
+            this.start = start;
+            this.entry = entry;
             this.slots = new AtomicReferenceArray<>(Integer.highestOneBit(Math.max(budget.subsets(), 1)) * 4);
+            int kept = 0;
+            long holds = 0;
+            if (start.states.length > 0) {
+                slots.set(slot(start.hash), start);
+                kept++;
+                holds += (long) start.states.length + start.next.length;
+            }
+            if (entry != null) {
+                // At most one other slot is taken, so the probe ends within two.
+                int at = slot(entry.hash);
+                while (slots.get(at) != null) {
+                    at = (at + 1) & (slots.length() - 1);
+                }
+                slots.set(at, entry);
+                kept++;
+                holds += (long) entry.states.length + entry.next.length;
+            }
+            long firstCold = 0;
+            if (over >= 0) {
+                Subset to = overTo == null ? start : overTo;
+                if (over < width) {
+                    start.next[over] = to;
+                } else {
+                    Cold first = new Cold(Cold.FEWEST);
+                    first.put(key(start, over), to, null);
+                    cold = first;
+                    firstCold = first.holds();
+                    holds += firstCold;
+                }
+                if (to == start) {
+                    start.staysOn(classes, over);
+                }
+            }
+            this.needed = kept;
+            this.beside = holds;
+            this.coldBeside = firstCold;
+        }
+
+        /** The key a step over class {@code each} from {@code from} is kept by in {@link Cold},
+         *  never nought, since no kept set's id is. */
+        private static long key(Subset from, int each) {
+            return ((long) from.id << 32) | each;
+        }
+
+        /** Where class {@code each}, past the rows, leads from {@code from}, kept here, or null where
+         *  that is not known. */
+        @Nullable Subset cold(Subset from, int each, @Nullable Checkpoint checkpoint) {
+            @Nullable Cold table = cold;
+            return table == null ? null : table.get(key(from, each), checkpoint);
+        }
+
+        /**
+         * Keeps that class {@code each} of {@code classes} leads from {@code from}, kept here, to
+         * {@code to}, kept here or the set with no state in it, and answers whether it is kept. A
+         * class in the row is kept in it, whose room was counted when the set was kept. Another is
+         * kept in the table of them ({@link Cold}), and where the table is half full, in a table
+         * twice as large in its place, counted against the budget as it is made: where the budget
+         * has no room for it, nothing is kept, and the walk is told, to decide what to do. A step
+         * kept in a table as another walk puts a larger one in its place may be lost with the
+         * table; it is worked out again where a walk next asks, and no answer turns on it.
+         */
+        boolean learn(Subset from, int each, Subset to, @Nullable Checkpoint checkpoint) {
+            if (each < width) {
+                if (to == from) {
+                    from.staysOn(classes, each);
+                }
+                from.next[each] = to;
+                return true;
+            }
+            long key = key(from, each);
+            while (true) {
+                @Nullable Cold table = (Cold) COLD.getAcquire(this);
+                if (table != null && table.put(key, to, checkpoint)) {
+                    if (to == from) {
+                        from.staysOn(classes, each);
+                    }
+                    return true;
+                }
+                int capacity = table == null ? Cold.FEWEST : 2 * table.capacity();
+                long more = Cold.holds(capacity) - (table == null ? 0 : table.holds());
+                if (remembered.get() + more > budget.remembered()) {
+                    return false;
+                }
+                // A table is as large as the steps kept, and is made only once asked. Making it and
+                // filling it ask, and a walk told to stop leaves here: so it is made before anything
+                // is counted, and is let go uncounted where the walk stops.
+                ask(checkpoint);
+                Cold larger = new Cold(capacity);
+                if (table != null) {
+                    table.copyInto(larger, checkpoint);
+                }
+                // From here nothing asks until what is counted is settled: kept, or given back.
+                if (remembered.addAndGet(more) > budget.remembered()) {
+                    remembered.addAndGet(-more);
+                    return false;
+                }
+                if (!COLD.compareAndSet(this, table, larger)) {
+                    // Another walk put one in its place first: this one is let go, and counted no more.
+                    remembered.addAndGet(-more);
+                }
+            }
         }
 
         private int slot(int hash) {
@@ -1478,12 +1945,13 @@ public final class StringPattern implements Predicate<String> {
 
         /**
          * The set of the {@code count} states first in {@code room.there}, which are the ones
-         * {@code room.seen} marks with its round: the one kept where it is kept, and otherwise kept
-         * now. Null where it is one more than is kept. Its hash is summed here to look it up, and
-         * whether it accepts, of the states a walk may stop at ({@code accepting}), is asked only
-         * where it is kept.
+         * {@code room.seen} marks with its round: the one kept where it is kept, and otherwise, where
+         * {@code admit}, kept now within the budget. Null where it is not kept and is not: where not
+         * {@code admit}, where the budget has no room for it, or where every slot is taken. Its hash
+         * is summed here to look it up, and whether it accepts, of the states a walk may stop at
+         * ({@code accepting}), is asked only where it is kept.
          */
-        @Nullable Subset held(Room room, int count, boolean[] accepting,
+        @Nullable Subset held(Room room, int count, boolean[] accepting, boolean admit,
                               @Nullable Checkpoint checkpoint) {
             int hash = hashOf(room.there, count, checkpoint);
             int mask = slots.length() - 1;
@@ -1493,17 +1961,20 @@ public final class StringPattern implements Predicate<String> {
                 ask(checkpoint);
                 Subset held = slots.get(at);
                 if (held == null) {
+                    if (!admit) {
+                        return null;
+                    }
                     if (made == null) {
                         made = new Subset(Arrays.copyOf(room.there, count),
-                                acceptsAny(accepting, room.there, count, checkpoint), hash,
-                                classes.count());
+                                acceptsAny(accepting, room.there, count, checkpoint), hash, width,
+                                ids.incrementAndGet());
                     }
                     if (keep(at, made)) {
                         return made;
                     }
                     held = slots.get(at);
                     if (held == null) {
-                        // Not taken by another walk, so past what may be kept.
+                        // Not taken by another walk, so past what the budget holds.
                         return null;
                     }
                 }
@@ -1513,6 +1984,20 @@ public final class StringPattern implements Predicate<String> {
                 at = (at + 1) & mask;
             }
             return null;
+        }
+
+        /** {@link StringPattern#counted}: the sets kept within the budget, and the table of steps past
+         *  the rows, less what its first table was counted beside the budget. */
+        long held() {
+            long held = 0;
+            for (int at = 0; at < slots.length(); at++) {
+                Subset kept = slots.get(at);
+                if (kept != null && kept != start && kept != entry) {
+                    held += (long) kept.states.length + kept.next.length;
+                }
+            }
+            @Nullable Cold table = (Cold) COLD.getAcquire(this);
+            return table == null ? held : held + table.holds() - coldBeside;
         }
 
         /** {@link StringPattern#stepsKnown}. */
@@ -1528,10 +2013,12 @@ public final class StringPattern implements Predicate<String> {
                     }
                 }
             }
-            return known;
+            @Nullable Cold table = (Cold) COLD.getAcquire(this);
+            return table == null ? known : known + table.known();
         }
 
-        /** {@link StringPattern#forgetSteps}. */
+        /** {@link StringPattern#forgetSteps}. The table of steps past the rows is let go, and what
+         *  it was counted for is not given back: a test does this, and no walk. */
         void forgetSteps() {
             for (int at = 0; at < slots.length(); at++) {
                 Subset held = slots.get(at);
@@ -1540,10 +2027,11 @@ public final class StringPattern implements Predicate<String> {
                     held.stay = SymbolClasses.Stay.NONE;
                 }
             }
+            COLD.setRelease(this, null);
         }
 
         /** Whether {@code held} is the set {@code room} marks, asking before each state of it. */
-        private static boolean same(Subset held, Room room, int count, @Nullable Checkpoint checkpoint) {
+        static boolean same(Subset held, Room room, int count, @Nullable Checkpoint checkpoint) {
             if (held.states.length != count) {
                 return false;
             }
@@ -1557,9 +2045,10 @@ public final class StringPattern implements Predicate<String> {
         }
 
         /**
-         * Keeps {@code made} at slot {@code at}, counted against the {@link Budget}, and answers
-         * whether it is kept: not where it is past what may be kept, nor where another set was put
-         * there first. The one place a set is kept, so what is kept and what is counted are one.
+         * Keeps {@code made} at slot {@code at} and answers whether it is kept: counted against the
+         * {@link Budget}, and not kept where the budget has no room for it, nor where another set was
+         * put there first. The one place a set is kept once the generation is made, and it keeps
+         * nothing past the budget: only making a generation does ({@link Generation#Generation}).
          */
         private boolean keep(int at, Subset made) {
             long holds = (long) made.states.length + made.next.length;
@@ -1582,6 +2071,131 @@ public final class StringPattern implements Predicate<String> {
     }
 
     /**
+     * Where the classes past the rows lead from the sets of one {@link Generation}: one table for
+     * the generation, looked up by a set's id and the class, so what it holds is the steps worked
+     * out and no more, however many classes the machine has. A place holds a key, the id above the
+     * class, which is never nought, and the set the step leads to; a step is looked for from the
+     * place its key's hash names to the first empty one.
+     *
+     * <p>Many walks read and write it at once, without a lock: a key is put in an empty place by a
+     * compare-and-set, and where it leads after. A walk that finds the key before where it leads
+     * reads null, and works the step out again. A table is never more than half full: past that a
+     * walk puts one twice as large in its place ({@link Generation#learn}).
+     */
+    private static final class Cold {
+
+        /** The fewest places a table is made with. */
+        static final int FEWEST = 16;
+
+        private static final VarHandle KEYS = MethodHandles.arrayElementVarHandle(long[].class);
+        private static final VarHandle TO = MethodHandles.arrayElementVarHandle(Subset[].class);
+
+        /**
+         * The keys and where each leads. A walk writes a key by a compare-and-set and where it leads
+         * after, with release; it reads both plainly. A walk that reads a key or a target late, or
+         * not at all, finds the step not known and works it out again; one that reads a target reads
+         * all of it, since everything a set holds was given to it as it was made.
+         */
+        private final long[] keys;
+        private final @Nullable Subset[] to;
+        private final AtomicInteger count = new AtomicInteger();
+
+        Cold(int capacity) {
+            this.keys = new long[capacity];
+            this.to = new Subset[capacity];
+        }
+
+        int capacity() {
+            return keys.length;
+        }
+
+        /** What a table of {@code capacity} places holds, counted as the {@link Budget} counts: a
+         *  key is a {@code long}, two, and where it leads a reference, one. */
+        static long holds(int capacity) {
+            return 3L * capacity;
+        }
+
+        long holds() {
+            return holds(capacity());
+        }
+
+        private int slot(long key) {
+            return (int) ((key * 0x9E37_79B9_7F4A_7C15L) >>> 40) & (keys.length - 1);
+        }
+
+        /** Where the step kept by {@code key} leads, or null where it is not kept, asking before each
+         *  place it looks in. */
+        @Nullable Subset get(long key, @Nullable Checkpoint checkpoint) {
+            int mask = keys.length - 1;
+            int at = slot(key);
+            for (int probe = 0; probe <= mask; probe++) {
+                ask(checkpoint);
+                long held = keys[at];
+                if (held == key) {
+                    return to[at];
+                }
+                if (held == 0) {
+                    return null;
+                }
+                at = (at + 1) & mask;
+            }
+            return null;
+        }
+
+        /** Keeps that the step kept by {@code key} leads to {@code target}, and answers whether it
+         *  did: not where the table is half full and the key not in it, asking before each place it
+         *  looks in. */
+        boolean put(long key, Subset target, @Nullable Checkpoint checkpoint) {
+            int mask = keys.length - 1;
+            int at = slot(key);
+            for (int probe = 0; probe <= mask; probe++) {
+                ask(checkpoint);
+                long held = (long) KEYS.getVolatile(keys, at);
+                if (held == 0) {
+                    if (2 * count.get() >= keys.length) {
+                        return false;
+                    }
+                    if (KEYS.compareAndSet(keys, at, 0L, key)) {
+                        count.incrementAndGet();
+                        held = key;
+                    } else {
+                        held = (long) KEYS.getVolatile(keys, at);
+                    }
+                }
+                if (held == key) {
+                    TO.setRelease(to, at, target);
+                    return true;
+                }
+                at = (at + 1) & mask;
+            }
+            return false;
+        }
+
+        /** Puts every step this table keeps in {@code larger}, asking before each place. */
+        void copyInto(Cold larger, @Nullable Checkpoint checkpoint) {
+            for (int at = 0; at < keys.length; at++) {
+                ask(checkpoint);
+                long held = (long) KEYS.getVolatile(keys, at);
+                @Nullable Subset target = (Subset) TO.getAcquire(to, at);
+                if (held != 0 && target != null) {
+                    larger.put(held, target, checkpoint);
+                }
+            }
+        }
+
+        /** How many steps it keeps. */
+        int known() {
+            int known = 0;
+            for (int at = 0; at < keys.length; at++) {
+                if ((long) KEYS.getVolatile(keys, at) != 0 && TO.getAcquire(to, at) != null) {
+                    known++;
+                }
+            }
+            return known;
+        }
+    }
+
+    /**
      * What a walk as sets of states is held in, as large as the machine: the
      * states it is in and is going into, which of them it has put in this round, and those it has
      * yet to look past for steps for no character.
@@ -1589,6 +2203,11 @@ public final class StringPattern implements Predicate<String> {
      * <p>Every walk puts states in through {@link #close}, with sets kept or without, so nothing is
      * held here that only one of them needs. What only keeping a set needs, its hash and whether it
      * accepts, is worked out of the set where it is kept ({@link #hashOf}, {@link #acceptsAny}).
+     *
+     * <p>A pattern keeps one for the next walk, as the last walk to finish left it, so a walk does
+     * not make room the size of the machine each time ({@link #room}, {@link #leave}). Its rounds go
+     * on from one walk to the next, so nothing a walk before put in it is taken as put in by this
+     * one.
      */
     private static final class Room {
 
@@ -1603,6 +2222,15 @@ public final class StringPattern implements Predicate<String> {
             this.there = new int[states];
             this.seen = new int[states];
             this.pending = new int[states];
+        }
+
+        /** Starts a round no state has been put in yet. Once in four billion, where the rounds come
+         *  round to nought, every state is marked as put in none. */
+        void nextRound() {
+            if (++round == 0) {
+                Arrays.fill(seen, 0);
+                round = 1;
+            }
         }
     }
 
@@ -1648,47 +2276,43 @@ public final class StringPattern implements Predicate<String> {
      * for one it may stop at, and that is asked about as the rest of the walk is.
      */
     private boolean spread(Steps steps, String value, @Nullable Checkpoint checkpoint) {
-        // The room a walk is held in is as large as the machine, and is made only once asked.
+        // The room a walk is held in is as large as the machine, and is taken only once asked.
         ask(checkpoint);
-        Room room = new Room(accepting.length);
-        room.round = 1;
-        return spread(steps, value, 0, room, close(steps, 0, room.here, 0, room, checkpoint),
-                checkpoint);
+        Room room = room();
+        try {
+            room.nextRound();
+            int count = close(steps, 0, room.here, 0, room, checkpoint);
+            int at = 0;
+            while (at < value.length()) {
+                ask(checkpoint);
+                if (count == 0) {
+                    return false;
+                }
+                int symbol = value.codePointAt(at);
+                at += Character.charCount(symbol);
+                count = move(steps, room.here, count, symbol, room, checkpoint);
+                int[] was = room.here;
+                room.here = room.there;
+                room.there = was;
+            }
+            return acceptsAny(accepting, room.here, count, checkpoint);
+        } finally {
+            leave(room);
+        }
     }
 
-    /** {@link #spread} from the {@code count} states first in {@code room.here}, with the subject
-     *  read up to {@code from}. */
-    private boolean spread(Steps steps, String value, int from, Room room, int count,
-                           @Nullable Checkpoint checkpoint) {
-        int[] here = room.here;
-        int[] there = room.there;
-        int at = from;
-        while (at < value.length()) {
-            ask(checkpoint);
-            if (count == 0) {
-                return false;
-            }
-            int symbol = value.codePointAt(at);
-            at += Character.charCount(symbol);
-            room.round++;
-            int next = 0;
-            for (int i = 0; i < count; i++) {
-                ask(checkpoint);
-                int state = here[i];
-                int[][] sets = steps.over()[state];
-                for (int step = 0; step < sets.length; step++) {
-                    ask(checkpoint);
-                    if (holds(sets[step], symbol)) {
-                        next = close(steps, steps.target()[state][step], there, next, room, checkpoint);
-                    }
-                }
-            }
-            int[] was = here;
-            here = there;
-            there = was;
-            count = next;
-        }
-        return acceptsAny(accepting, here, count, checkpoint);
+    /** A room as large as this machine for a walk to work in: the one the last walk to finish left,
+     *  where no other walk has taken it, and otherwise a new one. */
+    private Room room() {
+        Room left = spare.getAndSet(null);
+        return left != null ? left : new Room(accepting.length);
+    }
+
+    /** Leaves {@code room} for the next walk, where no other walk has left one; otherwise it is let
+     *  go. A walk stopped part of the way leaves it too: what it held is never read again, as
+     *  {@link Room#nextRound} says. */
+    private void leave(Room room) {
+        spare.compareAndSet(null, room);
     }
 
     /** {@code from} and every state it reaches for no character, put into {@code into} after its

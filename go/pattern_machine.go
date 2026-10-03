@@ -1,7 +1,7 @@
 package notation199x
 
 import (
-	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
@@ -14,9 +14,13 @@ import (
 type machine struct {
 	states []state
 	accept int32
-	// scratch holds what a walk works in, so that a match does not make room the size of the
-	// machine each time.
-	scratch sync.Pool
+	// spare is a walk no match is in, with the sets it kept, or nil. A match takes it and puts it
+	// back, so that a match does not make room the size of the machine each time, nor work out
+	// again the sets the match before it kept. It is held as long as the machine is: a collection
+	// does not take it, as it would from a sync.Pool. A match that finds no spare, because another
+	// goroutine is in it, makes a walk of its own, and only one walk is put back, so no two
+	// goroutines are ever in one walk.
+	spare atomic.Pointer[walk]
 }
 
 type state struct {
@@ -173,11 +177,17 @@ func (s *stateSet) states() []int32 { return s.dense }
 // walk is the room one match works in: the sets of states it moves between, the sets it has
 // already worked out where a character leads from, and which of the two it is going by.
 //
+// The kept sets outlast a match, and nothing else here does: what a match decides from how often
+// it looked them up (forgot, frozen, made and read) starts again with the next match, in begin.
+// One match that keeps coming to new sets therefore slows no match after it.
+//
 // What a walk does that grows with the subject, the machine or the sets kept is done in these
 // loops and in no library call, so a checkpoint added to a match later asks in each of them:
 // [machine.matchesIn] over the subject; [machine.advance] over the states and their steps, and
-// [machine.enter] over the steps for nothing; [hashOf], [same] and [knownSets.keep] over a set;
-// [knownSets.find] and [knownSets.free] over the slots; and [knownSets.grow] over the sets kept.
+// [machine.enter] over the steps for nothing; [hashOf], [same] and [knownSets.made] over a set;
+// [knownSets.find] and [knownSets.free] over the slots, and [knownSets.grow] over the sets kept;
+// [otherSteps.get] and [otherSteps.put] over the slots of the table of other steps, and
+// [otherSteps.grow] over the steps kept.
 // TestTheWalkNamesEveryLoopItHas holds this list to the functions with a loop in them.
 type walk struct {
 	now, next *stateSet
@@ -186,6 +196,15 @@ type walk struct {
 	// in is the kept set the walk is in, or nil where it is going on without kept sets and is in
 	// now.
 	in *knownSet
+	// forgot is whether this match has forgotten the kept sets to make room, and frozen whether it
+	// keeps no more of them: it goes on by those kept, and a state at a time where they do not
+	// lead, until it comes back to one.
+	forgot, frozen bool
+	// worked and read are the characters this match worked out a state at a time to keep, whether
+	// that came to a new set or to a kept one by a new step, and the characters it read by kept
+	// steps, a step already known and no other, since it last forgot the kept sets or since it
+	// began.
+	worked, read int
 }
 
 // matches is whether the whole of subject is accepted: every state the machine may be in is
@@ -195,33 +214,32 @@ type walk struct {
 // An ASCII character whose step from the kept set the walk is in is known is taken here, as one
 // lookup. Every other character is taken by take.
 func (m *machine) matches(subject string) bool {
-	w, _ := m.scratch.Get().(*walk)
+	w := m.spare.Swap(nil)
 	if w == nil {
 		w = m.newWalk()
 	}
-	defer m.scratch.Put(w)
-	return m.matchesIn(w, subject)
+	accepted := m.matchesIn(w, subject)
+	m.spare.CompareAndSwap(nil, w)
+	return accepted
 }
 
 // newWalk is a walk of m that has kept no sets.
 func (m *machine) newWalk() *walk {
 	// pending holds a state at most once at a time, so it never grows past the machine's states
 	// in an append.
-	w := &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states)),
+	return &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states)),
 		pending: make([]int32, 0, len(m.states))}
-	w.known.forget()
-	return w
 }
 
-// matchesIn is whether the whole of subject is accepted, walked in w, which keeps what it works
-// out for the next walk in it.
+// matchesIn is whether the whole of subject is accepted, walked in w, which keeps the sets it
+// works out for the next walk in it.
 func (m *machine) matchesIn(w *walk, subject string) bool {
 	m.begin(w)
 	for at := 0; at < len(subject); {
 		if c := subject[at]; c < utf8.RuneSelf && w.in != nil {
 			if next := w.in.ascii[c]; next != nil {
 				w.in = next
-				w.known.read = grown(w.known.read, 1)
+				w.read++
 				if next.none {
 					return false
 				}
@@ -244,33 +262,96 @@ func (m *machine) matchesIn(w *walk, subject string) bool {
 	return w.now.has(m.accept)
 }
 
-// begin puts the walk in the state it starts in, with every state the steps for nothing reach
-// from it: the kept set it starts in where that is kept, and otherwise those states, worked out.
+// begin starts a match: it keeps sets again, whatever the match before it decided, and puts the
+// walk in the state it starts in, with every state the steps for nothing reach from it, as the
+// kept set it starts in.
 func (m *machine) begin(w *walk) {
+	w.forgot, w.frozen = false, false
+	w.worked, w.read = 0, 0
 	if w.in = w.known.first; w.in != nil {
 		return
 	}
+	// Only a walk that has kept nothing comes here: starting the kept sets again keeps this one.
 	w.now.clear()
 	m.enter(w, w.now, 0)
-	w.in = w.known.start(m, w)
+	w.in = w.known.afresh(m, w.now, hashOf(w.now), nil, 0)
 }
 
 // take moves the walk over one symbol, and is false where it is in no state after it. Where the
-// set it is in is kept, where r leads from it is looked up or worked out and kept (knownSets.after);
-// otherwise the set is moved by advance. Every step a walk takes that does work growing with the
-// machine is taken here.
+// set it is in is kept and where r leads from it is known, that is where it goes; otherwise its
+// states are moved by advance and the set they come to is held, with the step to it
+// (machine.hold). Every step a walk takes that does work growing with the machine is taken here.
 func (m *machine) take(w *walk, r rune) bool {
-	if w.in != nil {
-		if w.in = w.known.after(m, w, w.in, r); w.in != nil {
-			return !w.in.none
+	from := w.in
+	if from != nil {
+		if next := w.known.step(from, r); next != nil {
+			w.read++
+			w.in = next
+			return !next.none
 		}
-		return len(w.now.states()) > 0
+		m.advance(w, from.states, r)
+		if !w.frozen {
+			w.worked++
+		}
+	} else {
+		m.advance(w, w.now.states(), r)
 	}
-	m.advance(w, w.now.states(), r)
-	// The one place a walk without kept sets steps, so what such walks walk is counted here,
-	// whether keeping sets was given up on before the walk or during it.
-	w.known.walkedAlone(utf8.RuneLen(r))
+	next := m.hold(w, from, r)
+	if w.in = next; next != nil {
+		return !next.none
+	}
 	return len(w.now.states()) > 0
+}
+
+// hold is the kept set the walk has come to over r, in w.now, from the kept set from or from no
+// kept set where from is nil: found where it is kept, and otherwise kept now, with the step from
+// from to it. It is nil where the match keeps no more sets and this one is not kept, and the walk
+// goes on from w.now a state at a time.
+//
+// This is the one place a walk keeps anything, and so the one place it learns that something does
+// not fit: a set or a step alike goes to forgets, which decides what to do.
+func (m *machine) hold(w *walk, from *knownSet, r rune) *knownSet {
+	hash := hashOf(w.now)
+	if w.frozen {
+		return w.known.find(w.now, hash)
+	}
+	set := w.known.keep(m, w.now, hash)
+	if set == nil {
+		return m.forgets(w, hash, from, r)
+	}
+	if from == nil || w.known.lead(from, r, set) {
+		return set
+	}
+	if again := m.forgets(w, hash, from, r); again != nil {
+		return again
+	}
+	// The step does not fit and the match keeps no more: it goes on from the set it is in, which
+	// is kept, with no step to it.
+	return set
+}
+
+// forgets decides, for this match only, what is done when a set or a step does not fit beside
+// those kept, the set in w.now, whose hash is hash, come to over r from from: it is that set, kept
+// beside the set a walk starts in once the others are forgotten (knownSets.afresh), or nil where
+// they are not and the match is frozen. Nothing else forgets them, and nothing else freezes a
+// match.
+//
+// The first time, the kept sets are forgotten: they may be another match's, and say nothing of
+// this one. After that, they are forgotten again where what this match read by kept steps since
+// it last forgot them is ten times what it worked out a state at a time to keep, whether that came
+// to a new set or to a kept one by a new step; otherwise keeping them saves nothing, and the
+// match keeps no more but goes on by those it has, coming back to them wherever a step a state at
+// a time leads to one. So a match that keeps coming to new sets pays for keeping two rooms of them
+// and then walks a state at a time, and one whose sets are looked up again pays for keeping them
+// out of what it saves.
+func (m *machine) forgets(w *walk, hash uint32, from *knownSet, r rune) *knownSet {
+	if w.forgot && w.read < 10*w.worked {
+		w.frozen = true
+		return nil
+	}
+	w.forgot = true
+	w.worked, w.read = 0, 0
+	return w.known.afresh(m, w.now, hash, from, r)
 }
 
 // advance puts the walk, in w.now, where from leads over one symbol: from each state, each step

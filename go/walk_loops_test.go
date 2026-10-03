@@ -18,7 +18,8 @@ import (
 func TestTheWalkNamesEveryLoopItHas(t *testing.T) {
 	files := []string{"pattern_machine.go", "pattern_known.go"}
 	building := []string{"machine.build", "machine.repeated", "buildsNoState"}
-	imports := []string{"math", "sync", "unicode/utf8"}
+	// maphash is asked for one number at random when a table of steps is made, of no bytes.
+	imports := []string{"hash/maphash", "sync/atomic", "unicode/utf8"}
 	fset := token.NewFileSet()
 	var doc string
 	var looping []string

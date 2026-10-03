@@ -64,9 +64,11 @@ impl Pattern {
     /// of a match. A match keeps the sets of states it comes to and where each class of characters
     /// leads from them, so a character read from a set before is one lookup; a character that leads
     /// somewhere not yet worked out may cost as many steps as the machine has states, which for a
-    /// pattern read from text is at most 250,000. What one match keeps is dropped when it ends. A
-    /// caller that matches the pattern again and again keeps it between them with a [`Matcher`],
-    /// which borrows the pattern, or an [`OwnedMatcher`], which holds it.
+    /// pattern read from text is at most 250,000. What one match keeps is dropped when it ends: a
+    /// pattern holds nothing a match changes, so that it is shared between threads as it is, and
+    /// this call works out again each time what an earlier one did. A caller that matches the
+    /// pattern again and again keeps it between them with a [`Matcher`], which borrows the pattern,
+    /// or an [`OwnedMatcher`], which holds it.
     ///
     /// A pattern read from an image of P2 is a deterministic machine held as its classes and rows,
     /// walked one state at a time: a scalar value is a lookup of its class and of where that leads,

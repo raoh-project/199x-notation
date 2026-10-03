@@ -1,7 +1,10 @@
-/// Reads `subject` from byte `*at`, a class at a time, moving `*state` by `next` until the end, or
-/// until `next` leads to a state `stops` says a walk goes no further from. There the state before
-/// it is kept, `*at` is left at the character that led out of it, and the answer is that
-/// character's class; at the end it is `None`.
+/// Reads `subject` from byte `*at`, a class at a time, moving `*state` by `next_ascii` over an ASCII
+/// character and by `next` over any other, until the end, or until a step leads to a state `stops`
+/// says a walk goes no further from. There the state before it is kept, `*at` is left at the
+/// character that led out of it, and the answer is that character's class; at the end it is `None`.
+/// The two steps answer the same for the class of an ASCII character; a walk whose step past ASCII
+/// asks more than one over ASCII does gives that one as `next_ascii`, so no ASCII character pays
+/// for the question.
 ///
 /// This is how every walk reads a subject, whatever it walks: a machine held as its steps
 /// ([`super::walk`]) or as its classes and rows ([`super::class_rows`]). An ASCII character is its
@@ -10,12 +13,16 @@
 /// so it is never sliced out again, and its class is `class_of`'s, which is asked only of
 /// characters past ASCII. The state is handed through by value, so that a walk holds it where a
 /// step needs it rather than where it was last written.
+// Each argument is one thing a walk tells the reader, and the walks are two: bundling any of them
+// would be a type for this one call.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn read_classes(
     subject: &str,
     at: &mut usize,
     ascii: &[usize; 128],
     class_of: impl Fn(char) -> usize,
     state: &mut u32,
+    next_ascii: impl Fn(u32, usize) -> u32,
     next: impl Fn(u32, usize) -> u32,
     stops: impl Fn(u32) -> bool,
 ) -> Option<usize> {
@@ -33,7 +40,7 @@ pub(crate) fn read_classes(
                 }
                 for (i, &byte) in four.iter().enumerate() {
                     let class = ascii[usize::from(byte)];
-                    let there = next(here, class);
+                    let there = next_ascii(here, class);
                     if stops(there) {
                         rest = &rest[read + i..];
                         break 'read Some(class);
@@ -46,7 +53,7 @@ pub(crate) fn read_classes(
                 && byte.is_ascii()
             {
                 let class = ascii[usize::from(byte)];
-                let there = next(here, class);
+                let there = next_ascii(here, class);
                 if stops(there) {
                     rest = &rest[read..];
                     break 'read Some(class);

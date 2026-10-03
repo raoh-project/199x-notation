@@ -202,12 +202,14 @@ text in is whether the string is UTF-8, and a pattern reader refuses one that is
 The limits on a pattern are not lowered by how PHP holds one. Nothing whose number grows with a
 pattern is a PHP array or object of its own: a pattern's tree, its sets of symbols and its machine
 are flat lists of numbers, and the sets of states a match keeps to go faster are held to a budget
-of their own and forgotten past it. So a pattern at the limit of 250,000
-states is read and matched within PHP's default memory limit of 128 MB, whether it repeats one
-character or writes 250,000 different ones, and the PHP tests hold patterns of both kinds to that in
-a process of their own. What a pattern takes besides its states grows with the ranges its classes
-name, about 32 bytes each, which the limits do not bound: a pattern whose classes name millions of
-ranges needs more room than that.
+of their own and forgotten past it. The two sets every match needs, the one it starts in and the
+one it is in when the others are forgotten for it, are kept whatever they take and beside the
+budget, not in it, so what is kept past the budget is at most twice the machine's states. So a
+pattern at the limit of 250,000 states is read and matched within PHP's default memory limit of
+128 MB, whether it repeats one character or writes 250,000 different ones, and the PHP tests hold
+patterns of both kinds to that in a process of their own. What a pattern takes besides its states
+grows with the ranges its classes name, about 32 bytes each, which the limits do not bound: a
+pattern whose classes name millions of ranges needs more room than that.
 
 Rust reads images of P1 and P2 and writes none. Java's tests write the image of each pattern in
 `suite/pattern-match.txt` to `java/target/images/pattern-match.txt`, which is never checked in, and

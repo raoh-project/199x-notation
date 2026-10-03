@@ -1,5 +1,6 @@
 package net.unit8.notation199x.pattern;
 
+import net.unit8.notation199x.Checkpoint;
 import net.unit8.notation199x.Outcome;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
@@ -222,19 +223,62 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
     }
 
     /**
-     * A set a walk would start in that is past what the sets kept may hold is not kept uncounted:
-     * the pattern keeps none and moves each state for every character.
+     * A set a walk starts in that is past what the budget holds is kept whatever it takes, and
+     * counted: every match needs it, so the pattern still keeps sets, and is not left moving each
+     * state for every character for want of room for it. A walk that then fills the room goes into
+     * a new generation once, keeping the set it came to beside the one it starts in, and keeps no
+     * more past that; the answers are the same.
      */
     @Test
-    void aFirstSetPastWhatMayBeKeptKeepsNone() {
+    void aFirstSetPastWhatTheBudgetHoldsIsKeptWhateverItTakes() {
         Automaton shaped = PatternMachine.of(((PatternRead.Read) PatternParser.read("(a?){50}b")).meaning())
                 .shaped();
         StringPattern.Budget given = StringPattern.Budget.DEFAULT;
         StringPattern run = StringPattern.of(shaped, new StringPattern.Budget(given.classWork(),
                 given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(), 10));
-        assertEquals(StringPattern.Way.EVERY_STATE, run.way());
+        assertEquals(StringPattern.Way.SETS_KEPT, run.way());
+        assertEquals(1, run.setsKept(), "the set a walk starts in");
         assertTrue(run.matches("a".repeat(50) + "b"));
+        assertEquals(2, run.setsKept(), "the set a walk starts in and the one it went into a generation for");
         assertFalse(run.matches("a".repeat(51) + "b"));
+        assertTrue(run.matches("b"));
+    }
+
+    /**
+     * The sets every walk needs are counted beside the budget and not in it, so a set the budget has
+     * room for is kept beside two it has none for. Every character from U+0100 to U+03FF leads the
+     * set a walk goes round back to itself, and z leads it to a set of one state: the set a walk
+     * starts in and the one gone round each hold more than the budget, the one z leads to little.
+     * The match after the first goes by kept steps alone, asking once a character and once more
+     * for each character past ASCII, whose step is found at the first place it is looked for in the
+     * table of steps past the rows. Before, the two
+     * were counted in the budget, so the third found no room and the walk went into a generation
+     * for it, losing the one gone round, which every match after worked out again.
+     */
+    @Test
+    void theSetsEveryWalkNeedsAreCountedBesideTheBudget() {
+        Automaton shaped = PatternMachine.of(((PatternRead.Read) PatternParser.read(
+                "(?:[\\x{100}-\\x{3FF}]*){200}z")).meaning()).shaped();
+        StringPattern.Budget given = StringPattern.Budget.DEFAULT;
+        StringPattern run = StringPattern.of(shaped, new StringPattern.Budget(given.classWork(),
+                given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(), 100));
+        assertEquals(StringPattern.Way.SETS_KEPT, run.way());
+        StringBuilder subject = new StringBuilder();
+        for (int round = 0; round < 2; round++) {
+            for (char c = 0x100; c < 0x400; c++) {
+                subject.append(c);
+            }
+        }
+        subject.append('z');
+        String text = subject.toString();
+        assertTrue(run.matches(text));
+        assertEquals(3, run.setsKept(), "the two every walk needs, and the one z leads to");
+        long[] asked = {0};
+        Checkpoint counting = () -> ++asked[0] > 0;
+        assertEquals(new Outcome.Answered<>(true), run.matches(text, counting));
+        assertEquals(2L * (text.length() - 1) + 1, asked[0],
+                "once a character, and once for the place each step past the rows is found in");
+        assertEquals(3, run.setsKept());
     }
 
     /**

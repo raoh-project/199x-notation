@@ -114,8 +114,16 @@ impl Classes {
         &self.ascii
     }
 
+    /// How many classes there are.
     pub(crate) fn count(&self) -> usize {
         self.starts.len()
+    }
+
+    /// How many classes an ASCII character is in. The classes are runs of scalar values in their
+    /// order, so these are the first ones, up to the class of the last ASCII character, and at most
+    /// 128 whatever the machine's other classes are.
+    pub(crate) fn of_ascii(&self) -> usize {
+        self.ascii[127] + 1
     }
 
     /// The class of `c` found by searching where the classes begin, as a character past ASCII is.

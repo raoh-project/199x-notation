@@ -229,6 +229,21 @@ final class SymbolClasses {
         return -1;
     }
 
+    /**
+     * How many classes come first and hold every ASCII character between them. The classes are
+     * numbered in the order their least symbol comes in ({@link SymbolPartition}), so a class that
+     * holds an ASCII character comes before every class that holds none, and each class up to the
+     * last that holds one holds one: its least symbol comes before that class's, which is ASCII. At
+     * most 128.
+     */
+    int asciiWidth() {
+        int most = 0;
+        for (char each : ascii) {
+            most = Math.max(most, each);
+        }
+        return most + 1;
+    }
+
     /** The class of an ASCII character, {@code unit} being below 128. */
     int ascii(char unit) {
         return ascii[unit];

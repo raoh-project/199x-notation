@@ -30,7 +30,6 @@ if ($src !== null) {
 printf("%s\n", dirname((string) (new ReflectionClass(Machine::class))->getFileName(), 3));
 
 $room = Machine::$knownBytes;
-$wait = Machine::$retryWork;
 foreach (Walks::cases() as $name => $setUp) {
     [$run, $why] = $setUp();
     $missed = $why();
@@ -56,5 +55,4 @@ foreach (Walks::cases() as $name => $setUp) {
         printf("%-56s %12.2f us\n", $name, $times[4]);
     }
     Machine::$knownBytes = $room;
-    Machine::$retryWork = $wait;
 }
