@@ -108,3 +108,21 @@ func TestTheCaseTablesAnswerWhereTheMappingHoldsWhatChanges(t *testing.T) {
 		}
 	}
 }
+
+// Every decomposition fits the room made for one: longestDecomposition is the longest there is, in
+// any form.
+func TestTheRoomForADecompositionIsTheLongestThereIs(t *testing.T) {
+	longest := 0
+	var parts []rune
+	for r := rune(0); r <= utf8.MaxRune; r++ {
+		var decomposed bool
+		if parts, decomposed = decomposeInto(parts[:0], r, true); !decomposed {
+			parts = append(parts[:0], r)
+		}
+		longest = max(longest, len(parts))
+	}
+	if longest != longestDecomposition {
+		t.Errorf("the longest decomposition is %d code points, and longestDecomposition is %d", longest,
+			longestDecomposition)
+	}
+}

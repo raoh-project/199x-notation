@@ -47,15 +47,8 @@ final class Composing
      */
     private array $marks = [];
 
-    /**
-     * @param int $limit the form's trivial limit, below which every code point is a stable starter
-     * @param int $bit the form's bit of NormalizationTables::STABLE_PAGES
-     */
     public function __construct(
-        private readonly bool $compatibility,
-        private readonly bool $composes,
-        private readonly int $limit,
-        private readonly int $bit,
+        private readonly FormFacts $form,
         private readonly int $longest,
     ) {
     }
@@ -63,13 +56,13 @@ final class Composing
     /**
      * Runs the algorithm over $s from byte $start, $before scalar values of the answer coming
      * before it, up to the first stable starter after byte $at, or to the end of the text where
-     * $whole or none comes, and holds the run settled as answer(). The characters from $start to
-     * $at are taken, and so is the one there, whatever they are. Answers where it stopped, or -1
-     * where the answer has passed the bound.
+     * none comes, and holds the run settled as answer(). The characters from $start to $at are
+     * taken, and so is the one there, whatever they are; with $at the end of the text, all of it
+     * from $start is. Answers where it stopped, or -1 where the answer has passed the bound.
      *
      * A step of its loop is one character of the text, decomposed and taken.
      */
-    public function run(string $s, int $start, int $at, bool $whole, int $before): int
+    public function run(string $s, int $start, int $at, int $before): int
     {
         $this->out = '';
         $this->written = $before;
@@ -80,11 +73,11 @@ final class Composing
         while ($j < $length) {
             $width = Utf8::width(ord($s[$j]));
             $character = substr($s, $j, $width);
-            if ($j > $at && !$whole && $this->stable($character)) {
+            if ($j > $at && $this->stable($character)) {
                 break;
             }
             $j += $width;
-            $parts = self::decompose($character, $this->compatibility);
+            $parts = self::decompose($character, $this->form->compatibility);
             if ($parts === null) {
                 if (!$this->take($character)) {
                     return -1;
@@ -122,8 +115,8 @@ final class Composing
     private function stable(string $character): bool
     {
         $cp = Utf8::decode($character);
-        return $cp < $this->limit || $cp > 0x10FFFF
-            || (ord(NormalizationTables::STABLE_PAGES[ord(NormalizationTables::STABLE_BLOCKS[$cp >> 8]) << 8 | $cp & 0xFF]) & $this->bit) !== 0;
+        return $cp < $this->form->limit || $cp > 0x10FFFF
+            || (ord(NormalizationTables::STABLE_PAGES[ord(NormalizationTables::STABLE_BLOCKS[$cp >> 8]) << 8 | $cp & 0xFF]) & $this->form->bit) !== 0;
     }
 
     /**
@@ -184,7 +177,7 @@ final class Composing
             return true;
         }
         $kept = $this->settle();
-        if ($this->composes && $this->starter !== null && $kept === 0) {
+        if ($this->form->composes && $this->starter !== null && $kept === 0) {
             $composed = self::compose($this->starter, $character);
             if ($composed !== null) {
                 $this->starter = $composed;
@@ -207,7 +200,7 @@ final class Composing
         if (count($this->marks) > 1) {
             $this->order();
         }
-        if (!$this->composes || $this->starter === null) {
+        if (!$this->form->composes || $this->starter === null) {
             return count($this->marks);
         }
         $kept = [];

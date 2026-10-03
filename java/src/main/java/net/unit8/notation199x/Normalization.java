@@ -147,9 +147,10 @@ public final class Normalization {
         long read = 0;
         Composing composing = null;
         for (int at = 0; at < s.length(); ) {
-            int stable = stableUpTo(form, s, at, checkpoint);
+            long scanned = stableUpTo(form, s, at, checkpoint);
+            int stable = Scan.end(scanned);
             if (stable > at) {
-                read += s.codePointCount(at, stable);
+                read += Scan.codePoints(scanned, at);
                 start = s.offsetByCodePoints(stable, -1);
                 at = stable;
                 if (at == s.length()) {
@@ -162,7 +163,7 @@ public final class Normalization {
             if (composing == null) {
                 composing = new Composing(form, longest, checkpoint);
             }
-            int end = composing.run(s, start, at, false, before + read);
+            int end = composing.run(s, start, at, before + read);
             if (end < 0) {
                 return null;
             }
@@ -203,7 +204,7 @@ public final class Normalization {
      */
     static @Nullable String normalizeFromStart(Form form, String s, long longest) {
         Composing composing = new Composing(form, longest, null);
-        return composing.run(s, 0, 0, true, 0) < 0 ? null : composing.out.toString();
+        return composing.run(s, 0, s.length(), 0) < 0 ? null : composing.out.toString();
     }
 
     /** The largest array this asks for; the JDK's portable bound on one. */
@@ -212,22 +213,6 @@ public final class Normalization {
     /** How many marks a run may hold before they are put in order by counting rather than by
      *  insertion, which is quadratic in the run. */
     private static final int FEW_MARKS = 32;
-
-    /** The most code points one code point decomposes into, in any form, which a decomposition is
-     *  written into room for once. */
-    private static final int LONGEST_DECOMPOSITION = longestDecomposition();
-
-    private static int longestDecomposition() {
-        int longest = 3;
-        for (NormalizationTables.Mapping table : new NormalizationTables.Mapping[] {
-                NormalizationTables.DECOMP, NormalizationTables.COMPAT}) {
-            for (int cp : table.codePoints()) {
-                int[] parts = decomposeOne(cp, true);
-                longest = Math.max(longest, parts == null ? 1 : parts.length);
-            }
-        }
-        return longest;
-    }
 
     /**
      * One pass of canonical ordering and, where the form composes, composition over code points
@@ -244,7 +229,7 @@ public final class Normalization {
         /** What {@link #run} wrote, the run settled. */
         private final StringBuilder out;
         private final @Nullable Checkpoint checkpoint;
-        private final int[] parts = new int[LONGEST_DECOMPOSITION];
+        private final int[] parts = new int[NormalizationTables.LONGEST_DECOMPOSITION];
         /** How many code points of the answer come before what is held: those before the run, and
          *  those it has written. */
         private long written;
@@ -264,13 +249,13 @@ public final class Normalization {
         /**
          * Runs the algorithm over {@code s} from {@code start}, {@code before} code points of the
          * answer coming before it, up to the first stable starter after {@code at}, or to the end
-         * of the text where {@code whole} or none comes, and writes the run settled into
-         * {@link #out}. The code points from {@code start} to {@code at} are taken, and so is the
+         * of the text where none comes, and writes the run settled into {@link #out}. With
+         * {@code at} the end of the text, it runs over all of it from {@code start}. The code points from {@code start} to {@code at} are taken, and so is the
          * one there, whatever they are; the caller has read them, and it is asked about only what
          * comes after. Answers where it stopped, or -1 where the answer has passed
          * {@code longest}.
          */
-        int run(String s, int start, int at, boolean whole, long before) {
+        int run(String s, int start, int at, long before) {
             out.setLength(0);
             written = before;
             int j = start;
@@ -279,7 +264,7 @@ public final class Normalization {
                 // What is before at has been read, and asked about, by the caller; the stable
                 // starter that ends the run is read by the caller next.
                 if (j > at) {
-                    if (!whole && isStable(stableBit, cp)) {
+                    if (isStable(stableBit, cp)) {
                         break;
                     }
                     Checkpoints.ask(checkpoint);
@@ -431,26 +416,32 @@ public final class Normalization {
         }
     }
 
-    /** Where the stable starters of {@code form} that {@code s} has from {@code at} end: the first
-     *  code point from there that is not one, or the end of the text. Asks {@code checkpoint} before
-     *  each code point it reads, the one it ends at too. */
-    private static int stableUpTo(Form form, String s, int at, @Nullable Checkpoint checkpoint) {
+    /** Where the stable starters of {@code form} that {@code s} has from {@code at} end, the first
+     *  code point from there that is not one or the end of the text, and how many of them are past
+     *  the basic plane, as a {@link Scan}. Asks {@code checkpoint} before each code point it reads,
+     *  the one it ends at too. */
+    private static long stableUpTo(Form form, String s, int at, @Nullable Checkpoint checkpoint) {
         int limit = form.trivialLimit;
         int bit = form.stableBit;
+        int pairs = 0;
         while (at < s.length()) {
             Checkpoints.ask(checkpoint);
-            // Every form's trivial limit is below the surrogates, so a unit below it is a code point.
+            // Every form's trivial limit is below the surrogates, which the generator checks, so a
+            // unit below it is a code point.
             if (s.charAt(at) < limit) {
                 at++;
                 continue;
             }
             int cp = s.codePointAt(at);
             if (!isStable(bit, cp)) {
-                return at;
+                break;
+            }
+            if (cp > Character.MAX_VALUE) {
+                pairs++;
             }
             at += Character.charCount(cp);
         }
-        return at;
+        return Scan.of(at, pairs);
     }
 
     /** Whether {@code cp} is a stable starter of {@code form}: a starter whose quick check for the

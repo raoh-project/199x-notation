@@ -24,6 +24,7 @@ class NormalizingRunByRunIsTheAlgorithmOverTheWholeTest {
             'a', 'e', 'A', ' ', '.', 0x00E9, 0x00C7,             // stable in a canonical form
             0x3042, 0x304B, 0x30AB, 0x65E5, 0x672C,              // kana and ideographs
             0xAC00, 0xAC01, 0xD55C,                              // Hangul syllables
+            0x20B9F, 0x1F600,                                    // stable past the basic plane
             0x0300, 0x0301, 0x0323, 0x0327, 0x05B0,              // marks
             0x3099, 0x309A, 0x309B,                              // kana voicing marks
             0x1100, 0x1161, 0x11A8,                              // Hangul L, V and T

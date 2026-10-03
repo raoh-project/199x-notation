@@ -9482,3 +9482,7 @@ const (
 	nfkcTrivialLimit = 0x00A0
 	nfkdTrivialLimit = 0x00A0
 )
+
+// longestDecomposition is the most code points one code point decomposes into fully, in any
+// form: the room a decomposition is written into.
+const longestDecomposition = 18

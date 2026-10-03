@@ -2,9 +2,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::normalization_tables::{
-    CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY, NFC_TRIVIAL_LIMIT,
-    NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT, NFKD_TRIVIAL_LIMIT, SCRIPT_SPECIFIC_EXCLUSIONS,
-    STABLE_BLOCKS, STABLE_PAGES,
+    CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY, LONGEST_DECOMPOSITION,
+    NFC_TRIVIAL_LIMIT, NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT, NFKD_TRIVIAL_LIMIT,
+    SCRIPT_SPECIFIC_EXCLUSIONS, STABLE_BLOCKS, STABLE_PAGES,
 };
 use crate::tables::mapped;
 
@@ -109,7 +109,7 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
             read -= 1;
         }
         let composing = composing.get_or_insert_with(|| Composing::new(form, longest));
-        let end = composing.run(text, start, at, false, before + read)?;
+        let end = composing.run(text, start, at, before + read)?;
         if composing.out != text[start..end] {
             let out = out.get_or_insert_with(|| String::with_capacity(text.len().min(longest)));
             out.push_str(&text[kept..start]);
@@ -174,7 +174,7 @@ fn is_stable(bit: u8, c: char) -> bool {
 #[cfg(test)]
 fn normalize_whole(form: Form, text: &str, longest: usize) -> Option<String> {
     let mut composing = Composing::new(form, longest);
-    composing.run(text, 0, 0, true, 0)?;
+    composing.run(text, 0, text.len(), 0)?;
     Some(composing.out)
 }
 
@@ -297,28 +297,21 @@ impl Composing {
             starter: None,
             marks: Vec::new(),
             ordered: Vec::new(),
-            parts: Vec::new(),
+            parts: Vec::with_capacity(LONGEST_DECOMPOSITION),
         }
     }
 
     /// Runs the algorithm over `text` from byte `start`, `before` scalar values of the answer coming
     /// before it, up to the first stable starter after byte `at`, or to the end of the text where
-    /// `whole` or none comes, and writes the run settled into `out`. The code points from `start` to
-    /// `at`, and the one there, are taken whatever they are. Answers where it stopped, or `None`
-    /// where the answer has passed `longest`.
-    fn run(
-        &mut self,
-        text: &str,
-        start: usize,
-        at: usize,
-        whole: bool,
-        before: usize,
-    ) -> Option<usize> {
+    /// none comes, and writes the run settled into `out`. The code points from `start` to `at`, and
+    /// the one there, are taken whatever they are; with `at` the end of the text, all of it from
+    /// `start` is. Answers where it stopped, or `None` where the answer has passed `longest`.
+    fn run(&mut self, text: &str, start: usize, at: usize, before: usize) -> Option<usize> {
         self.out.clear();
         self.written = before;
         let mut end = text.len();
         for (offset, c) in text[start..].char_indices() {
-            if start + offset > at && !whole && is_stable(self.stable_bit, c) {
+            if start + offset > at && is_stable(self.stable_bit, c) {
                 end = start + offset;
                 break;
             }
@@ -711,6 +704,8 @@ mod tests {
             '\u{AC00}',
             '\u{AC01}',
             '\u{D55C}', // Hangul syllables
+            '\u{20B9F}',
+            '\u{1F600}', // stable past the basic plane
             '\u{0300}',
             '\u{0301}',
             '\u{0323}',
@@ -777,6 +772,19 @@ mod tests {
                 assert!(out_of_reach_by_the_tables(form, c), "{c:?} in {form:?}");
             }
         }
+    }
+
+    /// The room a decomposition is made with is the longest decomposition there is, in any form.
+    #[test]
+    fn the_room_for_a_decomposition_is_the_longest_there_is() {
+        let mut parts = Vec::new();
+        let mut longest = 0;
+        for c in '\0'..=char::MAX {
+            parts.clear();
+            decompose_into(&mut parts, c, true);
+            longest = longest.max(parts.len());
+        }
+        assert_eq!(longest, LONGEST_DECOMPOSITION);
     }
 
     /// Runs of every length from short to long, of marks of several classes: put in order by

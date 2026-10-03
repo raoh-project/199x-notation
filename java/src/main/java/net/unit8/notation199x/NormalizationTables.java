@@ -118,4 +118,7 @@ final class NormalizationTables {
     static final int NFD_TRIVIAL_LIMIT = 0xC0;
     static final int NFKC_TRIVIAL_LIMIT = 0xA0;
     static final int NFKD_TRIVIAL_LIMIT = 0xA0;
+
+    /** The most code points one code point decomposes into fully, in any form: the room a decomposition is written into. */
+    static final int LONGEST_DECOMPOSITION = 18;
 }

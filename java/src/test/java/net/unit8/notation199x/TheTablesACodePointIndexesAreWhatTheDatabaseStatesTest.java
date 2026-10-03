@@ -95,6 +95,17 @@ class TheTablesACodePointIndexesAreWhatTheDatabaseStatesTest {
         assertEquals(List.of(), wrong);
     }
 
+    /** The room a decomposition is written into is the longest one there is, in any form. */
+    @Test
+    void theRoomForADecompositionIsTheLongestThereIs() {
+        int longest = 0;
+        for (int cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
+            int[] parts = Normalization.decomposeOne(cp, true);
+            longest = Math.max(longest, parts == null ? 1 : parts.length);
+        }
+        assertEquals(longest, NormalizationTables.LONGEST_DECOMPOSITION);
+    }
+
     /** The non-zero combining classes {@code UnicodeData.txt} states, by code point. No range it
      *  writes as a first and a last line has one. */
     private static Map<Integer, Integer> combiningClasses() throws IOException {

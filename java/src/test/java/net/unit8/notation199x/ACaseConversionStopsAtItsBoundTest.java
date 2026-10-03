@@ -21,7 +21,8 @@ class ACaseConversionStopsAtItsBoundTest {
 
     /** Texts whose mapping is longer, shorter or as long as they are, in units and in scalar values. */
     private static final List<String> TEXTS = List.of(
-            "", "abc", "straße", "İstanbul", "ΟΣ ΟΣΑ Ο'Σ", "ﬃ", "𐐀𐐨", "ŉ", "ΐ", "Σ");
+            "", "abc", "straße", "İstanbul", "ΟΣ ΟΣΑ Ο'Σ", "ﬃ", "𐐀𐐨", "ŉ", "ΐ", "Σ",
+            "𠮟る😀", "a😀B");
 
     @Test
     void withinTheBoundItIsTheConversionAndPastItNothing() {

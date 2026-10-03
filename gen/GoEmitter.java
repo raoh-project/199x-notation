@@ -98,12 +98,18 @@ final class GoEmitter {
         out.append("// that form.\n");
         out.append("const (\n");
         // gofmt lines the values up one column past the longest name.
-        int widest = decomposition.trivialLimits().keySet().stream().mapToInt(String::length).max().orElse(0);
-        decomposition.trivialLimits().forEach((form, limit) ->
-                out.append('\t').append(form.toLowerCase(Locale.ROOT)).append("TrivialLimit")
-                        .append(" ".repeat(widest - form.length())).append(" = ").append(code(limit))
-                        .append('\n'));
-        out.append(")\n");
+        int widest = UcdModel.FORMS.stream().mapToInt(String::length).max().orElse(0);
+        for (String form : UcdModel.FORMS) {
+            out.append('\t').append(form.toLowerCase(Locale.ROOT)).append("TrivialLimit")
+                    .append(" ".repeat(widest - form.length())).append(" = ")
+                    .append(code(decomposition.trivialLimit(form))).append('\n');
+        }
+        out.append(")\n\n");
+
+        out.append("// longestDecomposition is the most code points one code point decomposes into fully, in any\n");
+        out.append("// form: the room a decomposition is written into.\n");
+        out.append("const longestDecomposition = ").append(model.normalizationDerived().longestDecomposition())
+                .append('\n');
         return out.toString();
     }
 

@@ -29,7 +29,8 @@ type formFacts struct {
 	// composes is whether canonical composition follows the decomposition.
 	composes bool
 	// trivialLimit is the code point below which every code point is a stable starter of the
-	// form, which is known without asking a table. Every form's is past ASCII.
+	// form, which is known without asking a table. Every form's is past ASCII and before the
+	// surrogates, which the generator checks.
 	trivialLimit rune
 	// stableBit is the form's bit of stablePages.
 	stableBit uint8
@@ -150,7 +151,7 @@ func normalize(form Form, s string, longest int) (string, bool) {
 		if c == nil {
 			c = newComposing(facts, longest)
 		}
-		end, ok := c.run(s, start, at, false, before+read)
+		end, ok := c.run(s, start, at, before+read)
 		if !ok {
 			return "", false
 		}
@@ -178,23 +179,6 @@ func normalize(form Form, s string, longest int) (string, bool) {
 	return out.String(), true
 }
 
-// normalizeWhole is the algorithm over the whole of s, from its start, whatever the text.
-//
-// The three steps are taken one combining run at a time, as the text is read: each code point is
-// decomposed as it arrives, the marks after a starter are held until the next starter, and then
-// they are put in canonical order and, in a composing form, composed into it. Canonical ordering
-// never moves a mark past a starter, and composition joins a starter only to the marks after it
-// or, where nothing is between them, to the starter after it, so a run settled when the next
-// starter arrives is settled as the whole text's algorithm would settle it. What is held at once
-// is one run's marks, never the decomposition of the whole text.
-func normalizeWhole(form Form, s string, longest int) (string, bool) {
-	c := newComposing(form.facts(), longest)
-	if _, ok := c.run(s, 0, 0, true, 0); !ok {
-		return "", false
-	}
-	return string(c.out), true
-}
-
 // fewMarks is how many marks a run may hold before they are put in order by counting rather than
 // by insertion, which is quadratic in the run.
 const fewMarks = 32
@@ -216,11 +200,10 @@ type composing struct {
 	// parts is what one code point decomposes into.
 	parts []rune
 	// Room each of out, marks and parts starts in, made with the composing, so that a run that
-	// fits it allocates nothing of its own. The longest decomposition there is, U+FDFA's, is 18
-	// code points.
+	// fits it allocates nothing of its own. Every decomposition fits partsRoom.
 	outRoom   [64]byte
 	marksRoom [8]rune
-	partsRoom [18]rune
+	partsRoom [longestDecomposition]rune
 }
 
 func newComposing(form *formFacts, longest int) *composing {
@@ -232,16 +215,17 @@ func newComposing(form *formFacts, longest int) *composing {
 }
 
 // run runs the algorithm over s from start, before code points of the answer coming before it, up
-// to the first stable starter after at, or to the end of the text where whole or none comes, and
-// writes the run settled into out. The code points from start to at are taken, and so is the one
-// there, whatever they are. It is where it stopped, and false where the answer has passed longest.
-func (c *composing) run(s string, start, at int, whole bool, before int) (int, bool) {
+// to the first stable starter after at, or to the end of the text where none comes, and writes the
+// run settled into out. The code points from start to at are taken, and so is the one there,
+// whatever they are; with at the end of the text, all of it from start is. It is where it stopped,
+// and false where the answer has passed longest.
+func (c *composing) run(s string, start, at int, before int) (int, bool) {
 	c.out = c.out[:0]
 	c.written = before
 	j := start
 	for j < len(s) {
 		r, size := utf8.DecodeRuneInString(s[j:])
-		if j > at && !whole && c.form.stable(r) {
+		if j > at && c.form.stable(r) {
 			break
 		}
 		j += size

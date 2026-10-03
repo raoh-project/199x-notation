@@ -147,9 +147,10 @@ public final class CaseConversion {
         long written = 0;
         byte[] ascii = lower ? LOWER_ASCII : UPPER_ASCII;
         for (int at = 0; at < s.length(); ) {
-            int same = sameUpTo(s, at, ascii, blocks, pages, checkpoint);
+            long scanned = sameUpTo(s, at, ascii, blocks, pages, checkpoint);
+            int same = Scan.end(scanned);
             if (same > at) {
-                written += s.codePointCount(at, same);
+                written += Scan.codePoints(scanned, at);
                 if (written > longest) {
                     return null;
                 }
@@ -215,28 +216,33 @@ public final class CaseConversion {
         return out.toString();
     }
 
-    /** Where the code points {@code s} has from {@code at} that the mapping leaves as they are end:
-     *  the first one from there that it changes, or the end of the text. Asks {@code checkpoint}
-     *  before each code point it reads, the one it ends at too. */
-    private static int sameUpTo(String s, int at, byte[] ascii, byte[] blocks, char[] pages,
+    /** Where the code points {@code s} has from {@code at} that the mapping leaves as they are end,
+     *  the first one from there that it changes or the end of the text, and how many of them are
+     *  past the basic plane, as a {@link Scan}. Asks {@code checkpoint} before each code point it
+     *  reads, the one it ends at too. */
+    private static long sameUpTo(String s, int at, byte[] ascii, byte[] blocks, char[] pages,
                                 @Nullable Checkpoint checkpoint) {
+        int pairs = 0;
         while (at < s.length()) {
             Checkpoints.ask(checkpoint);
             char c = s.charAt(at);
             if (c < 0x80) {
                 if (ascii[c] != c) {
-                    return at;
+                    break;
                 }
                 at++;
                 continue;
             }
             int cp = s.codePointAt(at);
             if (pages[(blocks[cp >>> 8] & 0xFF) << 8 | cp & 0xFF] != 0) {
-                return at;
+                break;
+            }
+            if (cp > Character.MAX_VALUE) {
+                pairs++;
             }
             at += Character.charCount(cp);
         }
-        return at;
+        return Scan.of(at, pairs);
     }
 
     /** For the lowercase mapping, what each ASCII character maps to where the mapping makes it one

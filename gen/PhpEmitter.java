@@ -116,7 +116,8 @@ final class PhpEmitter {
         out.append("    /** The pages STABLE_BLOCKS gives each block. */\n");
         out.append("    public const STABLE_PAGES = ").append(bytes(stable.values())).append(";\n\n");
 
-        decomposition.trivialLimits().forEach((form, limit) -> {
+        for (String form : UcdModel.FORMS) {
+            int limit = decomposition.trivialLimit(form);
             out.append("    /**\n");
             out.append("     * The least code point that is not a starter or whose quick check for ").append(form)
                     .append(" is not Yes.\n");
@@ -124,7 +125,7 @@ final class PhpEmitter {
             out.append("     */\n");
             out.append("    public const ").append(form.toUpperCase(Locale.ROOT)).append("_TRIVIAL_LIMIT = ")
                     .append(code(limit)).append(";\n\n");
-        });
+        }
         return footer(out);
     }
 

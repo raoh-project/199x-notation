@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Raoh\Notation199x\Tests;
 
 use PHPUnit\Framework\TestCase;
+use Raoh\Notation199x\Internal\Composing;
+use Raoh\Notation199x\Internal\FormFacts;
 use Raoh\Notation199x\Internal\NormalizationTables;
 use Raoh\Notation199x\Internal\Utf8;
 use Raoh\Notation199x\Normalization;
@@ -176,9 +178,9 @@ final class NormalizationTest extends TestCase
      * the stable starter before a character that is not one up to the next stable starter. That
      * is right only where the answer is what the algorithm gives over the whole text, so the two
      * are held to each other, in every form and within every bound around the answer's length.
-     * The texts mix stable starters of several scripts with marks, composites that decompose in one
-     * form and not another, compatibility characters, Hangul jamo and the kana voicing marks, so
-     * that a text goes in and out of the algorithm many times.
+     * The texts mix stable starters of several scripts, some past the basic plane, with marks,
+     * composites that decompose in one form and not another, compatibility characters, Hangul jamo
+     * and the kana voicing marks, so that a text goes in and out of the algorithm many times.
      */
     public function testRunByRunIsTheAlgorithmOverTheWholeTextInEveryForm(): void
     {
@@ -186,6 +188,7 @@ final class NormalizationTest extends TestCase
             0x61, 0x65, 0x41, 0x20, 0x2E, 0x00E9, 0x00C7,
             0x3042, 0x304B, 0x30AB, 0x65E5, 0x672C,
             0xAC00, 0xAC01, 0xD55C,
+            0x20B9F, 0x1F600,
             0x0300, 0x0301, 0x0323, 0x0327, 0x05B0,
             0x3099, 0x309A, 0x309B,
             0x1100, 0x1161, 0x11A8,
@@ -202,8 +205,7 @@ final class NormalizationTest extends TestCase
                 $s .= str_repeat($character, mt_rand(0, 3) === 0 ? mt_rand(1, 6) : 1);
             }
             foreach (NormalizationForm::cases() as $form) {
-                $whole = Normalization::normalizeFromStart($form, $s, -1);
-                self::assertIsString($whole);
+                $whole = self::whole($form, $s);
                 if (Normalization::normalize($form, $s) !== $whole && count($failed) < 20) {
                     $failed[] = $form->name . ' ' . Repository::shown($s);
                 }
@@ -243,5 +245,16 @@ final class NormalizationTest extends TestCase
             $out .= Utf8::encode((int) hexdec($token));
         }
         return $out;
+    }
+
+    /**
+     * $s in $form by the algorithm over the whole text, keeping none of it as it is: one run of
+     * Composing from the start to the end.
+     */
+    private static function whole(NormalizationForm $form, string $s): string
+    {
+        $composing = new Composing(FormFacts::of($form), -1);
+        self::assertSame(strlen($s), $composing->run($s, 0, strlen($s), 0));
+        return $composing->answer();
     }
 }

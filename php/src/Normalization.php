@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Raoh\Notation199x;
 
 use Raoh\Notation199x\Internal\Composing;
+use Raoh\Notation199x\Internal\FormFacts;
 use Raoh\Notation199x\Internal\NormalizationTables;
 
 /**
@@ -76,7 +77,7 @@ final class Normalization
      */
     private static function normalizeCore(NormalizationForm $form, string $s, int $longest): ?string
     {
-        [$limit, $bit] = self::facts($form);
+        $facts = FormFacts::of($form);
         $length = strlen($s);
         // The answer up to $kept, where a run has changed what it went over.
         $out = null;
@@ -88,16 +89,15 @@ final class Normalization
         $read = 0;
         $composing = null;
         for ($at = 0; $at < $length;) {
-            $stable = self::stableUpTo($s, $at, $length, $limit, $bit, $read, $start);
+            $stable = self::stableUpTo($s, $at, $length, $facts->limit, $facts->bit, $read, $start);
             if ($stable === $length) {
                 break;
             }
             if ($start < $stable) {
                 $read--;
             }
-            $composing ??= new Composing($form === NormalizationForm::NFKC || $form === NormalizationForm::NFKD,
-                $form === NormalizationForm::NFC || $form === NormalizationForm::NFKC, $limit, $bit, $longest);
-            $end = $composing->run($s, $start, $stable, false, $before + $read);
+            $composing ??= new Composing($facts, $longest);
+            $end = $composing->run($s, $start, $stable, $before + $read);
             if ($end < 0) {
                 return null;
             }
@@ -117,37 +117,6 @@ final class Normalization
             return null;
         }
         return $out === null ? $s : $out . substr($s, $kept);
-    }
-
-    /**
-     * $s in $form by the algorithm over the whole text, whatever the text, and null where that is
-     * longer than $longest: what normalizeCore() answers, worked out without keeping any of the
-     * text as it is. For the tests, which hold the two to each other.
-     *
-     * @internal
-     */
-    public static function normalizeFromStart(NormalizationForm $form, string $s, int $longest): ?string
-    {
-        [$limit, $bit] = self::facts($form);
-        $composing = new Composing($form === NormalizationForm::NFKC || $form === NormalizationForm::NFKD,
-            $form === NormalizationForm::NFC || $form === NormalizationForm::NFKC, $limit, $bit, $longest);
-        return $composing->run($s, 0, 0, true, 0) < 0 ? null : $composing->answer();
-    }
-
-    /**
-     * The form's trivial limit, below which every code point is a stable starter of the form, and
-     * the form's bit of NormalizationTables::STABLE_PAGES.
-     *
-     * @return array{int, int}
-     */
-    private static function facts(NormalizationForm $form): array
-    {
-        return match ($form) {
-            NormalizationForm::NFC => [NormalizationTables::NFC_TRIVIAL_LIMIT, 1],
-            NormalizationForm::NFD => [NormalizationTables::NFD_TRIVIAL_LIMIT, 2],
-            NormalizationForm::NFKC => [NormalizationTables::NFKC_TRIVIAL_LIMIT, 4],
-            NormalizationForm::NFKD => [NormalizationTables::NFKD_TRIVIAL_LIMIT, 8],
-        };
     }
 
     /**

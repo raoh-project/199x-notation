@@ -75,13 +75,10 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      *                       states outright
      * @param quickChecks    for each form, by its name, the code points whose quick check for the
      *                       form is not Yes, and what it is; every other code point's is Yes
-     * @param trivialLimits  for each form, the least code point that is not a starter or whose
-     *                       quick check for the form is not Yes
      */
     record Decomposition(CodePointMapping canonical, CodePointMapping compatibility,
                          CodePointIntMapping combiningClass, CodePoints scriptSpecificExclusions,
-                         SortedMap<String, SortedMap<Integer, QuickCheck>> quickChecks,
-                         SortedMap<String, Integer> trivialLimits) {
+                         SortedMap<String, SortedMap<Integer, QuickCheck>> quickChecks) {
 
         /**
          * Whether {@code cp} is a starter whose quick check for {@code form} is Yes. A text made only
@@ -97,6 +94,24 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
         boolean stableStarter(String form, int cp) {
             return !combiningClass.entries().containsKey(cp) && !quickChecks.get(form).containsKey(cp);
         }
+
+        /**
+         * The least code point that is not a {@linkplain #stableStarter stable starter} of
+         * {@code form}: every code point below it is one, which an implementation knows without
+         * asking a table. {@link UcdModel#read} checks it is past ASCII and before the surrogates,
+         * which the implementations rely on to take a byte or a UTF-16 unit below it as a code
+         * point that is one.
+         *
+         * @param form the form, by its name
+         * @return the form's trivial limit
+         */
+        int trivialLimit(String form) {
+            int cp = 0;
+            while (stableStarter(form, cp)) {
+                cp++;
+            }
+            return cp;
+        }
     }
 
     /**
@@ -108,8 +123,19 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      *                     composed from: every two-member canonical decomposition whose first member
      *                     is a starter and that is not a script-specific exclusion. Hangul's, which
      *                     are arithmetic, are not here.
+     * @param longestDecomposition the most code points one code point decomposes into fully, by the
+     *                     canonical and the compatibility mappings followed as far as they go, or by
+     *                     Hangul's arithmetic: what an implementation makes room for once
      */
-    record NormalizationDerived(CodePointMapping compositions) {}
+    record NormalizationDerived(CodePointMapping compositions, int longestDecomposition) {}
+
+    // Hangul's jamo that compose with a starter before them, by arithmetic rather than by a table
+    // (UAX #15, the Hangul section): the vowels and the trailing consonants. The trailing
+    // consonants begin one past T_BASE, which stands for none.
+    private static final int V_BASE = 0x1161;
+    private static final int V_COUNT = 21;
+    private static final int T_BASE = 0x11A7;
+    private static final int T_COUNT = 28;
 
     /**
      * What the case conversion and normalization ask of each code point as they read text, held as
@@ -178,9 +204,10 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
         List<String> derivedGeneralCategory =
                 in.lines("extracted/DerivedGeneralCategory.txt", "DerivedGeneralCategory");
         Decomposition decomposition = decomposition(unicodeData, compositionExclusions, derivedNormalizationProps);
+        NormalizationDerived normalizationDerived = normalizationDerived(decomposition);
         Casing casing = casing(unicodeData, specialCasing, derivedCoreProperties);
         return new UcdModel(VERSION, Collections.unmodifiableMap(in.sha256), casing,
-                decomposition, normalizationDerived(decomposition), byCodePoint(casing, decomposition),
+                decomposition, normalizationDerived, byCodePoint(casing, decomposition, normalizationDerived),
                 ranges(propList, Set.of("White_Space")),
                 ranges(derivedGeneralCategory, Set.of("Lu", "Ll", "Lt", "Lm", "Lo", "Nd")));
     }
@@ -394,19 +421,27 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
 
         List<PropertyLine> missingLines = PropertyLine.read(derivedNormalizationProps, true);
         SortedMap<String, SortedMap<Integer, QuickCheck>> quickChecks = new TreeMap<>();
-        SortedMap<String, Integer> trivialLimits = new TreeMap<>();
         for (String form : FORMS) {
-            SortedMap<Integer, QuickCheck> notYes = notQuickCheckYes(form + "_QC", lines, missingLines);
-            quickChecks.put(form, Collections.unmodifiableSortedMap(notYes));
-            trivialLimits.put(form, Math.min(ccc.firstKey(), notYes.firstKey()));
+            quickChecks.put(form, Collections.unmodifiableSortedMap(
+                    notQuickCheckYes(form + "_QC", lines, missingLines)));
         }
 
-        return new Decomposition(new CodePointMapping(canonical), new CodePointMapping(compatibility),
-                new CodePointIntMapping(ccc), new CodePoints(scriptSpecific), quickChecks, trivialLimits);
+        Decomposition read = new Decomposition(new CodePointMapping(canonical), new CodePointMapping(compatibility),
+                new CodePointIntMapping(ccc), new CodePoints(scriptSpecific), quickChecks);
+        for (String form : FORMS) {
+            int limit = read.trivialLimit(form);
+            if (limit < 0x80 || limit > 0xD800) {
+                throw new IllegalStateException(form + "'s trivial limit is U+" + hex(limit) + ", not past ASCII and"
+                        + " before the surrogates, where the implementations take a byte or a UTF-16 unit below it"
+                        + " as a stable starter");
+            }
+        }
+        return read;
     }
 
     /** What the case conversion and normalization ask of each code point, as tables it indexes. */
-    private static ByCodePoint byCodePoint(Casing casing, Decomposition decomposition) {
+    private static ByCodePoint byCodePoint(Casing casing, Decomposition decomposition,
+                                           NormalizationDerived derived) {
         PagedTable lower = positions(casing.lower());
         for (int cp : casing.finalSigma().entries().keySet()) {
             if (lower.get(cp) == 0) {
@@ -418,13 +453,13 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
         // before it: the second member of a composition, and Hangul's vowels and trailing consonants,
         // which compose by arithmetic, are no stable starter in a composing form.
         SortedSet<Integer> seconds = new TreeSet<>();
-        for (int[] mapped : normalizationDerived(decomposition).compositions().entries().values()) {
+        for (int[] mapped : derived.compositions().entries().values()) {
             seconds.add(mapped[1]);
         }
-        for (int cp = 0x1161; cp <= 0x1175; cp++) {
+        for (int cp = V_BASE; cp < V_BASE + V_COUNT; cp++) {
             seconds.add(cp);
         }
-        for (int cp = 0x11A8; cp <= 0x11C2; cp++) {
+        for (int cp = T_BASE + 1; cp < T_BASE + T_COUNT; cp++) {
             seconds.add(cp);
         }
         for (String form : List.of("NFC", "NFKC")) {
@@ -482,7 +517,31 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
                 compositions.put(cp, mapped);
             }
         });
-        return new NormalizationDerived(new CodePointMapping(compositions));
+        // A Hangul syllable decomposes into two or three jamo, none of which decomposes.
+        int longest = 3;
+        for (CodePointMapping mapping : List.of(decomposition.canonical(), decomposition.compatibility())) {
+            for (int cp : mapping.entries().keySet()) {
+                longest = Math.max(longest, fullDecomposition(decomposition, cp).size());
+            }
+        }
+        return new NormalizationDerived(new CodePointMapping(compositions), longest);
+    }
+
+    /** {@code cp}'s decomposition by the canonical and the compatibility mappings, followed as far as
+     *  they go: {@code cp} itself where neither names it. */
+    private static List<Integer> fullDecomposition(Decomposition decomposition, int cp) {
+        int[] mapped = decomposition.canonical().entries().get(cp);
+        if (mapped == null) {
+            mapped = decomposition.compatibility().entries().get(cp);
+        }
+        if (mapped == null) {
+            return List.of(cp);
+        }
+        List<Integer> full = new ArrayList<>();
+        for (int part : mapped) {
+            full.addAll(fullDecomposition(decomposition, part));
+        }
+        return full;
     }
 
     /** A quick check's values, by their short and long names in {@code PropertyValueAliases.txt}. */

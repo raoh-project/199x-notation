@@ -95,13 +95,18 @@ final class RustEmitter {
         }
         out.append("];\n\n");
 
-        decomposition.trivialLimits().forEach((form, limit) -> {
+        for (String form : UcdModel.FORMS) {
             out.append("/// The least code point that is not a starter or whose quick check for ").append(form)
                     .append(" is not Yes.\n");
             out.append("/// Text made only of code points below it is its own normalization in that form.\n");
             out.append("pub(crate) const ").append(form.toUpperCase(Locale.ROOT)).append("_TRIVIAL_LIMIT: char = ")
-                    .append(code(limit)).append(";\n\n");
-        });
+                    .append(code(decomposition.trivialLimit(form))).append(";\n\n");
+        }
+
+        out.append("/// The most code points one code point decomposes into fully, in any form: the room a\n");
+        out.append("/// decomposition is written into.\n");
+        out.append("pub(crate) const LONGEST_DECOMPOSITION: usize = ")
+                .append(model.normalizationDerived().longestDecomposition()).append(";\n\n");
         return out.toString();
     }
 

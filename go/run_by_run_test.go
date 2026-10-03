@@ -20,6 +20,7 @@ func TestRunByRunIsTheAlgorithmOverTheWholeText(t *testing.T) {
 		'a', 'e', 'A', ' ', '.', 0x00E9, 0x00C7, // stable in a canonical form
 		0x3042, 0x304B, 0x30AB, 0x65E5, 0x672C, // kana and ideographs
 		0xAC00, 0xAC01, 0xD55C, // Hangul syllables
+		0x20B9F, 0x1F600, // stable past the basic plane
 		0x0300, 0x0301, 0x0323, 0x0327, 0x05B0, // marks
 		0x3099, 0x309A, 0x309B, // kana voicing marks
 		0x1100, 0x1161, 0x11A8, // Hangul L, V and T
@@ -85,4 +86,21 @@ func TestTextNothingChangesIsAnsweredWithItself(t *testing.T) {
 			t.Errorf("Uppercase of %s is not the text itself", shown(s))
 		}
 	}
+}
+
+// normalizeWhole is the algorithm over the whole of s, from its start, whatever the text.
+//
+// The three steps are taken one combining run at a time, as the text is read: each code point is
+// decomposed as it arrives, the marks after a starter are held until the next starter, and then
+// they are put in canonical order and, in a composing form, composed into it. Canonical ordering
+// never moves a mark past a starter, and composition joins a starter only to the marks after it
+// or, where nothing is between them, to the starter after it, so a run settled when the next
+// starter arrives is settled as the whole text's algorithm would settle it. What is held at once
+// is one run's marks, never the decomposition of the whole text.
+func normalizeWhole(form Form, s string, longest int) (string, bool) {
+	c := newComposing(form.facts(), longest)
+	if _, ok := c.run(s, 0, len(s), 0); !ok {
+		return "", false
+	}
+	return string(c.out), true
 }

@@ -263,9 +263,15 @@ final class JavaEmitter {
         out.append("    /** For each form, the least code point that is not a starter or whose quick check for the")
                 .append(" form is not Yes. Text made only of code points below it is its own normalization in")
                 .append(" that form (UAX #15, the Detecting Normalization Forms section). */\n");
-        decomposition.trivialLimits().forEach((form, limit) ->
-                out.append("    static final int ").append(form).append("_TRIVIAL_LIMIT = 0x")
-                        .append(UcdModel.hex(limit)).append(";\n"));
+        for (String form : UcdModel.FORMS) {
+            out.append("    static final int ").append(form).append("_TRIVIAL_LIMIT = 0x")
+                    .append(UcdModel.hex(decomposition.trivialLimit(form))).append(";\n");
+        }
+
+        out.append("\n    /** The most code points one code point decomposes into fully, in any form: the room a")
+                .append(" decomposition is written into. */\n");
+        out.append("    static final int LONGEST_DECOMPOSITION = ")
+                .append(model.normalizationDerived().longestDecomposition()).append(";\n");
 
         out.append("}\n");
         return out.toString();

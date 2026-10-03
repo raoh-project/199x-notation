@@ -9486,3 +9486,7 @@ pub(crate) const NFKC_TRIVIAL_LIMIT: char = '\u{00A0}';
 /// The least code point that is not a starter or whose quick check for NFKD is not Yes.
 /// Text made only of code points below it is its own normalization in that form.
 pub(crate) const NFKD_TRIVIAL_LIMIT: char = '\u{00A0}';
+
+/// The most code points one code point decomposes into fully, in any form: the room a
+/// decomposition is written into.
+pub(crate) const LONGEST_DECOMPOSITION: usize = 18;
