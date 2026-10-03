@@ -12,7 +12,7 @@ use Raoh\Notation199x\Pattern;
  * What a machine keeps changes how fast it walks and no answer. What a walk decides about keeping
  * sets is its own, so no subject leaves a later walk slower: a walk that is frozen goes back to
  * kept steps where it comes to a kept set and keeps nothing more, and the next walk keeps sets
- * again. Only makeRoom forgets the kept sets, a step that finds no room is decided there as a set
+ * again. Only makeRoom starts the kept sets again, a step that finds no room is decided there as a set
  * is, and a set larger than the room is kept beside the one a walk starts in. What is charged is
  * what PHP holds the kept sets in. Sets that share a hash are told apart, and the two loops that
  * move states take the same steps.
@@ -166,7 +166,7 @@ final class MachineTest extends TestCase
             $read = 0;
             $sets = self::kept($m);
             $none = [999_999 => true];
-            $args = [$none, &$mode, &$made, &$read];
+            $args = [$none, &$mode, &$made, &$read, 'a', 1, false];
             self::assertSame([-1, false], $settle->invokeArgs($m, $args));
             self::assertSame($sets, self::kept($m));
             self::assertSame(self::constant('FROZEN'), $mode);
@@ -283,28 +283,48 @@ final class MachineTest extends TestCase
     }
 
     /**
-     * The kept sets are forgotten in one place, where a walk decides what to do with no room
-     * (makeRoom), which counts every forgetting a walk causes. A forget called anywhere else would
-     * be one the walk does not count, and nothing would bound what the walk spends keeping sets.
+     * The kept sets are started again in one place, where a walk decides what to do with no room
+     * (makeRoom), which counts every time a walk causes it, and by the first walk of a machine
+     * (begin); and only starting them again (afresh) keeps anything beside the room. Started again
+     * anywhere else, it would be a time the walk does not count; kept beside the room anywhere
+     * else, what is held past the room would rest on the order of the calls and not on afresh.
+     * Each call that may keep beside the room says so by a last argument of true or false, on its
+     * line, so a flag passed on through a variable fails here.
      */
-    public function testOnlyMakeRoomForgetsTheKeptSets(): void
+    public function testOnlyStartingTheKeptSetsAgainKeepsAnythingBesideTheRoom(): void
     {
-        $forgetting = [];
+        $file = (new \ReflectionClass(Machine::class))->getFileName();
+        self::assertIsString($file);
+        $lines = file($file);
+        self::assertIsArray($lines);
         foreach ((new \ReflectionClass(Machine::class))->getMethods() as $method) {
-            $file = $method->getFileName();
+            $name = $method->getName();
             $start = $method->getStartLine();
             $end = $method->getEndLine();
-            self::assertIsString($file);
             self::assertIsInt($start);
             self::assertIsInt($end);
-            $lines = file($file);
-            self::assertIsArray($lines);
-            $body = implode('', array_slice($lines, $start, $end - $start));
-            if (str_contains($body, '$this->forget()')) {
-                $forgetting[] = $method->getName();
+            foreach (array_slice($lines, $start, $end - $start) as $at => $line) {
+                $place = $name . ', line ' . ($start + $at + 1);
+                if (str_contains($line, '$this->afresh(')) {
+                    self::assertContains($name, ['makeRoom', 'begin'], $place . ' starts the kept sets again');
+                }
+                if (str_contains($line, '$this->need(')) {
+                    self::assertContains($name, ['afresh', 'keep', 'keepStep'], $place . ' counts something beside the room');
+                }
+                foreach (['$this->keep(', '$this->keepStep('] as $call) {
+                    $from = strpos($line, $call);
+                    if ($from === false) {
+                        continue;
+                    }
+                    $close = strpos($line, ')', $from);
+                    self::assertNotFalse($close, $place . ': a call to keep something ends on its line');
+                    $args = explode(',', substr($line, $from, $close - $from));
+                    $last = trim($args[count($args) - 1]);
+                    self::assertContains($last, ['true', 'false'], $place . ' keeps something beside the room by a flag');
+                    self::assertTrue($last === 'false' || $name === 'afresh', $place . ' keeps something beside the room');
+                }
             }
         }
-        self::assertSame(['makeRoom'], $forgetting);
     }
 
     /**

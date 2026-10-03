@@ -254,10 +254,10 @@ final class Machine
 
     /**
      * Puts the walk in the state it starts in, with every state the steps for nothing reach from
-     * it: the kept set it starts in, kept now where it was not. Forgetting the kept sets keeps
-     * this one (forget), so it is kept here only by the first walk of a machine, and is kept
-     * whatever it takes, as one of the sets every walk needs: this is not a walk deciding to
-     * forget anything, and is not counted as one.
+     * it: the kept set it starts in, kept now where it was not. Starting the kept sets again keeps
+     * this one (afresh), so it is kept here only by the first walk of a machine, through afresh,
+     * as one of the sets every walk needs: this is not a walk deciding to forget anything, and is
+     * not counted as one.
      *
      * @param array<int, true> $now
      */
@@ -268,11 +268,7 @@ final class Machine
         }
         $now = [];
         $this->enter($now, 0);
-        $hash = $this->hashOf($now);
-        $this->first = $this->find($now, $hash);
-        if ($this->first < 0) {
-            $this->first = $this->keep($now, $hash, true);
-        }
+        [$this->first] = $this->afresh($now, $this->hashOf($now), '', 0, false);
         return $this->first;
     }
 
@@ -305,7 +301,7 @@ final class Machine
         if ($in < 0) {
             // Only a frozen walk is in no kept set.
             $now = $this->advanceSet($now, $symbol);
-            [$in] = $this->settle($now, $mode, $made, $read);
+            [$in] = $this->settle($now, $mode, $made, $read, $character, $width, false);
             return $in >= 0 ? $this->keptStates[$in] !== [] : $now !== [];
         }
         // What is read by kept steps is counted where it is read (matches); a step worked out here
@@ -313,22 +309,18 @@ final class Machine
         $from = $in;
         $fromStart = $from === $this->first;
         $now = $this->advanceStates($this->keptStates[$from], $symbol);
-        [$next, $forgot] = $this->settle($now, $mode, $made, $read);
+        [$next, $forgot] = $this->settle($now, $mode, $made, $read, $character, $width, $fromStart);
         // A frozen walk adds no step to the kept sets. A step is kept where there is room for it,
-        // and where there is none the walk decides as it does for a set (makeRoom): it forgets the
-        // kept sets, $from with them, and keeps the set it came to again, or it keeps no more.
-        // Where the sets were forgotten, $from is not looked up again, but for the set a walk
-        // starts in, which forgetting keeps: the step from it to the set it came to is kept with
-        // the two, whatever it takes, so the next walk takes it as one lookup.
-        if ($forgot) {
-            if ($fromStart) {
-                $this->keepStep($this->first, $character, $width, $next, true);
-            }
-        } elseif ($next >= 0 && $mode !== self::FROZEN && !$this->keepStep($from, $character, $width, $next, false)
-            && $this->makeRoom($mode, $made, $read)) {
-            $next = $this->keepAgain($now, $this->hashOf($now), $made);
-            if ($fromStart) {
-                $this->keepStep($this->first, $character, $width, $next, true);
+        // and where there is none the walk decides as it does for a set (makeRoom): it starts the
+        // kept sets again with the set it came to, $from forgotten with the others, or it keeps no
+        // more and goes on from the set it came to, which is kept. Where the sets were started
+        // again, $from is not looked up again, but for the set a walk starts in, which starting
+        // them again keeps with the step from it (afresh).
+        if (!$forgot && $next >= 0 && $mode !== self::FROZEN
+            && !$this->keepStep($from, $character, $width, $next, false)) {
+            $again = $this->makeRoom($mode, $made, $read, $now, $this->hashOf($now), $character, $width, $fromStart);
+            if ($again >= 0) {
+                $next = $again;
             }
         }
         $in = $next;
@@ -340,17 +332,16 @@ final class Machine
 
     /**
      * Keeps that $character, of $width bytes, leads from the kept set $from to the kept set $next,
-     * and is true; or is false, keeping nothing, where there is no room for it. With $always, it is
-     * kept whatever it takes, beside the room (need): asked only for the step from the set a walk
-     * starts in to the set it is in when the others were just forgotten for it, which with the two
-     * is what a walk needs to go on by kept steps.
+     * and is true; or is false, keeping nothing, where there is no room for it. With $beside, it is
+     * kept whatever it takes, beside the room (need), which only afresh asks, for the step from the
+     * set a walk starts in to the set it is in when the others were just forgotten for it.
      *
      * What keeping the step makes past the table $from was charged with (TABLE_BYTES): twice the
      * table's places, where it is full; the key, where it is more than a byte; and the loop of
      * $from, where this is the first character found to lead $from back to itself, charged once at
      * the most it grows to.
      */
-    private function keepStep(int $from, string $character, int $width, int $next, bool $always): bool
+    private function keepStep(int $from, string $character, int $width, int $next, bool $beside): bool
     {
         $steps = count($this->keptNext[$from]);
         $cost = 0;
@@ -363,7 +354,7 @@ final class Machine
         } elseif ($loop && $this->keptLoop[$from] === '') {
             $cost += self::LOOP_BYTES;
         }
-        if ($always) {
+        if ($beside) {
             $this->need($cost);
         } elseif ($cost > 0 && !$this->charge($cost)) {
             return false;
@@ -380,12 +371,13 @@ final class Machine
      * it: found among those kept, or kept now, or -1 where the walk is frozen and it is not kept.
      * Where there is no room for it, the walk decides what to do (makeRoom), and keep() only says
      * so. A frozen walk looks each set it comes to up among those kept, so that it takes kept
-     * steps again where it comes to one.
+     * steps again where it comes to one. $character, of $width bytes, is what the walk came to it
+     * over, from the set a walk starts in where $fromStart.
      *
      * @param array<int, true> $now
      * @return array{int, bool}
      */
-    private function settle(array $now, int &$mode, int &$made, int &$read): array
+    private function settle(array $now, int &$mode, int &$made, int &$read, string $character, int $width, bool $fromStart): array
     {
         $hash = $this->hashOf($now);
         $set = $this->find($now, $hash);
@@ -397,18 +389,16 @@ final class Machine
             $made++;
             return [$set, false];
         }
-        if (!$this->makeRoom($mode, $made, $read)) {
-            return [-1, false];
-        }
-        return [$this->keepAgain($now, $hash, $made), true];
+        $set = $this->makeRoom($mode, $made, $read, $now, $hash, $character, $width, $fromStart);
+        return [$set, $set >= 0];
     }
 
     /**
-     * What a walk does where there is no room for a set or a step it comes to: it forgets the
-     * kept sets (forget), and is true, or it keeps no more for the rest of the subject, and is
-     * false. This is the one place the kept sets are forgotten and the one place a walk is frozen,
-     * and every forgetting a walk causes is counted here, so that what a walk spends keeping sets
-     * is bounded whatever it reads.
+     * What a walk does where there is no room for a set or a step it comes to, the set $now holds,
+     * whose hash is $hash: it starts the kept sets again with that set (afresh) and is where it is
+     * kept, or it keeps no more for the rest of the subject, and is -1. This is the one place the
+     * kept sets are forgotten and the one place a walk is frozen, and every forgetting a walk
+     * causes is counted here, so that what a walk spends keeping sets is bounded whatever it reads.
      *
      * The first time in a walk, the sets are forgotten without asking anything: they were kept by
      * walks before this one, and what they cost says nothing about the subject read now. After
@@ -419,33 +409,20 @@ final class Machine
      * set it comes to among those kept. A walk that keeps coming to new sets so spends on keeping
      * them at most what fills the room twice. The next walk starts keeping sets again: nothing of
      * what a walk decided is held by the machine.
-     */
-    private function makeRoom(int &$mode, int &$made, int &$read): bool
-    {
-        if ($mode === self::KEEPING_AGAIN && $read < 10 * $made) {
-            $mode = self::FROZEN;
-            return false;
-        }
-        $this->forget();
-        $mode = self::KEEPING_AGAIN;
-        $made = 0;
-        $read = 0;
-        return true;
-    }
-
-    /**
-     * The set $now holds, whose hash is $hash, just after the kept sets were forgotten for it: the
-     * set a walk starts in, which forgetting keeps, or kept now whatever it takes. It is the set
-     * the walk is in, which with the set a walk starts in is the least a walk needs kept to go on
-     * by kept steps (need), and is counted among those the walk made.
      *
      * @param array<int, true> $now
      */
-    private function keepAgain(array $now, int $hash, int &$made): int
+    private function makeRoom(int &$mode, int &$made, int &$read, array $now, int $hash, string $character, int $width, bool $fromStart): int
     {
-        $set = $this->find($now, $hash);
-        if ($set < 0) {
-            $set = $this->keep($now, $hash, true);
+        if ($mode === self::KEEPING_AGAIN && $read < 10 * $made) {
+            $mode = self::FROZEN;
+            return -1;
+        }
+        $mode = self::KEEPING_AGAIN;
+        $made = 0;
+        $read = 0;
+        [$set, $new] = $this->afresh($now, $hash, $character, $width, $fromStart);
+        if ($new) {
             $made++;
         }
         return $set;
@@ -551,9 +528,9 @@ final class Machine
      * the list of its states, the table of its steps (TABLE_BYTES), a place in each of the lists
      * that hold one for every kept set, as they double, and twice the slots, where they double.
      *
-     * With $always, the set is kept whatever it takes, beside the room (need). It is asked only
-     * for the sets every walk needs: the set a walk starts in, and the set a walk is in just after
-     * the others were forgotten for it. So a set that alone takes more than $knownBytes is kept
+     * With $beside, the set is kept whatever it takes, beside the room (need), which only afresh
+     * asks, for the sets every walk needs: the set a walk starts in, and the set a walk is in just
+     * after the others were forgotten for it. So a set that alone takes more than $knownBytes is kept
      * beside the one a walk starts in, and is not walked a state at a time at every character that
      * comes to it again, as (?:x*){124998} comes to the same set of nearly the whole machine at
      * every x; and since it takes none of the room, the steps from it, over ASCII or past it, are
@@ -561,7 +538,7 @@ final class Machine
      *
      * @param array<int, true> $now
      */
-    private function keep(array $now, int $hash, bool $always): int
+    private function keep(array $now, int $hash, bool $beside): int
     {
         $set = count($this->keptStates);
         $cost = self::listBytes(count($now)) + self::TABLE_BYTES;
@@ -575,7 +552,7 @@ final class Machine
         if ($grow) {
             $cost += self::listBytes(max(16, 2 * count($this->slots))) - self::listBytes(count($this->slots));
         }
-        if ($always) {
+        if ($beside) {
             $this->need($cost);
         } elseif (!$this->charge($cost)) {
             return -1;
@@ -710,21 +687,30 @@ final class Machine
     }
 
     /**
-     * Forgets every set kept but the one a walk starts in, which is kept again as the first, with
-     * no step from it. A number a walk holds names no set afterwards, but for that one, and a walk
-     * that forgot goes on from the set it was making.
+     * Starts the kept sets again from what every walk needs, and is where the set $now holds, whose
+     * hash is $hash, is kept, with whether it was made here. It forgets every set kept but the one
+     * a walk starts in, which is kept again as the first, and every step; keeps the set $now holds
+     * beside it, whatever it takes; and keeps the step over $character, of $width bytes, from the
+     * first to it where $fromStart. A machine that has kept nothing keeps the set $now holds as the
+     * one a walk starts in. A number a walk holds names no set afterwards, but for the first.
+     *
+     * It is the one way anything is kept beside the room (need), so what is beside it is those two
+     * sets and that step, whoever calls it and however often, and not something its callers keep
+     * to by the order they call in. Only makeRoom and begin call it.
      *
      * The set a walk starts in is every walk's, so it is not left for the next walk to work out
      * again, as RE2 keeps its start when it forgets its states. (?:x*){124998} starts in a set of
      * half the machine and goes round one of the whole of it, which is kept by forgetting the
-     * others; with the start kept, the next walk works out the step between the two once and
-     * takes it as one lookup after.
+     * others, with the step from the start to it, so the next walk takes that step as one lookup.
+     *
+     * @param array<int, true> $now
+     * @return array{int, bool}
      */
-    private function forget(): void
+    private function afresh(array $now, int $hash, string $character, int $width, bool $fromStart): array
     {
         $first = $this->first;
         $states = $first >= 0 ? $this->keptStates[$first] : [];
-        $hash = $first >= 0 ? $this->keptHashes[$first] : 0;
+        $firstHash = $first >= 0 ? $this->keptHashes[$first] : 0;
         $accepts = $first >= 0 && $this->keptAccepts[$first];
         $this->slots = [];
         $this->keptStates = [];
@@ -736,17 +722,27 @@ final class Machine
         $this->bytes = 0;
         $this->needed = 0;
         if ($first < 0) {
-            return;
+            $this->first = $this->keep($now, $hash, true);
+            return [$this->first, true];
         }
         $this->keptStates[] = $states;
-        $this->keptHashes[] = $hash;
+        $this->keptHashes[] = $firstHash;
         $this->keptAccepts[] = $accepts;
         $this->keptNext[] = [];
         $this->keptLoop[] = '';
         $this->grow();
-        $this->slots[$this->free($hash)] = 0;
+        $this->slots[$this->free($firstHash)] = 0;
         $this->first = 0;
         $this->need(self::listBytes(count($states)) + self::TABLE_BYTES + self::LISTS * self::listBytes(1) + self::listBytes(count($this->slots)));
+        $set = $this->find($now, $hash);
+        $new = $set < 0;
+        if ($new) {
+            $set = $this->keep($now, $hash, true);
+        }
+        if ($fromStart) {
+            $this->keepStep($this->first, $character, $width, $set, true);
+        }
+        return [$set, $new];
     }
 
     /**

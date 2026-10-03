@@ -67,24 +67,24 @@ final class Walks
     }
 
     /**
-     * The match of $subject with room for every set it comes to, the sets forgotten before each
-     * run, so every run keeps each set anew. It shows it took the path where it kept a new set for
-     * at least half the characters.
+     * The match of $subject with room for every set it comes to, each run on a copy of a machine
+     * that has kept nothing, so every run keeps each set anew. A copy shares the machine's lists
+     * until it writes to one, so making it is not a pass over them. It shows it took the path where
+     * it kept a new set for at least half the characters.
      *
      * @return array{\Closure(): mixed, \Closure(): ?string}
      */
     private static function keeping(string $pattern, string $subject): array
     {
         Machine::$knownBytes = 1 << 30;
-        $m = self::machine($pattern);
-        $forget = (new \ReflectionMethod(Machine::class, 'forget'))->getClosure($m);
+        $none = self::machine($pattern);
         return [
-            static function () use ($m, $forget, $subject): void {
-                $forget();
+            static function () use ($none, $subject): void {
+                $m = clone $none;
                 $m->matches($subject);
             },
-            static function () use ($m, $forget, $subject): ?string {
-                $forget();
+            static function () use ($none, $subject): ?string {
+                $m = clone $none;
                 $m->matches($subject);
                 $made = self::kept($m);
                 if ($made * 2 < strlen($subject)) {
