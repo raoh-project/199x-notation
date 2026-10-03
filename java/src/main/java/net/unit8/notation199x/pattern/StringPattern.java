@@ -52,9 +52,9 @@ import java.lang.invoke.VarHandle;
  * so a walk that comes to it again looks it up as over a table. The sets kept are bounded, and a
  * walk that would need one more goes on moving each state it is in for every character.
  *
- * <p>Which machine is run is {@link PatternMachine}'s choice and changes no answer: a pattern whose
- * deterministic machine is too costly to make is run as the machine its shape builds, which has the
- * states {@link PatternStates} counts and no more.
+ * <p>A pattern read from text is run as the machine its shape builds ({@link PatternMachine}), which
+ * has the states {@link PatternStates} counts and no more, and no deterministic machine is made for
+ * it ahead of a match.
  *
  * <p>A symbol is a scalar value. Text holding half a surrogate pair is no text, and no set or
  * class holds a surrogate, so such text is accepted by nothing.
