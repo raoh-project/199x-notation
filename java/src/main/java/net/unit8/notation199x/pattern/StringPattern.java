@@ -1595,10 +1595,11 @@ public final class StringPattern implements Predicate<String> {
      * set reads all of it, since everything a set holds was given to it as it was made. It leads
      * only to a set of its own {@link Generation}, or to the set with no state in it.
      *
-     * <p>{@link #next} has a place for each class ASCII is in, at most 128, and is counted in the
-     * budget at that length. Where the other classes lead is kept in the generation's table of
-     * them ({@link Cold}), as it is found, so what a set holds does not grow with how many classes
-     * the machine has.
+     * <p>{@link #next} has a place for every class of the machine where the budget's share for one
+     * set holds them, and otherwise for each class ASCII is in, at most 128 ({@link Subsets#width}),
+     * and is counted in the budget at that length. Where the other classes lead is kept in the
+     * generation's table of them ({@link Cold}), as it is found, so what a set holds does not grow
+     * with how many classes the machine has.
      */
     private static final class Subset {
 
@@ -1676,7 +1677,12 @@ public final class StringPattern implements Predicate<String> {
         private final boolean startAccepting;
         private final int startHash;
         private final Budget budget;
-        /** How many classes each set's row holds: those ASCII is in. */
+        /**
+         * How many classes each set's row holds: every class of the machine where they are at most
+         * the budget's share for one set, what it holds over the sets it keeps, so that a step over
+         * any character is one lookup; and otherwise those ASCII is in, which come first, so that
+         * what a set holds is bounded by the budget and not by the machine.
+         */
         final int width;
         private final AtomicReference<Generation> current;
 
@@ -1705,7 +1711,8 @@ public final class StringPattern implements Predicate<String> {
             this.start = start;
             this.startAccepting = startAccepting;
             this.startHash = startHash;
-            this.width = classes.asciiWidth();
+            long share = budget.remembered() / Math.max(1, budget.subsets());
+            this.width = classes.count() <= share ? classes.count() : classes.asciiWidth();
             this.current = new AtomicReference<>();
         }
 

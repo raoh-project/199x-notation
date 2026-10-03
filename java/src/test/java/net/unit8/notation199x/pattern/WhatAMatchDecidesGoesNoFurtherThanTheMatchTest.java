@@ -258,13 +258,38 @@ class WhatAMatchDecidesGoesNoFurtherThanTheMatchTest {
     }
 
     /**
+     * A machine of a few classes holds every one of them in a set's row, so a step over a
+     * character past ASCII is one lookup, as one over ASCII is: matched again, a subject of Greek
+     * and Cyrillic asks once a character. Kept past the rows, each step asked once more, for the
+     * place it was found in.
+     */
+    @Test
+    void aMachineOfFewClassesHoldsEveryClassInARow() {
+        StringPattern pattern = StringPattern.of(shaped("(?:[\\x{3B1}-\\x{3C9}][\\x{430}-\\x{44F}])*"));
+        StringBuilder subject = new StringBuilder();
+        for (int i = 0; i < 200; i++) {
+            subject.appendCodePoint(0x3B1 + i % 25).appendCodePoint(0x430 + i % 32);
+        }
+        String text = subject.toString();
+        assertTrue(pattern.matches(text));
+        long[] asked = {0};
+        assertEquals(new Outcome.Answered<>(true), pattern.matches(text, () -> ++asked[0] > 0));
+        assertEquals(text.length(), asked[0], "once a character");
+    }
+
+    /**
      * Walks on many threads at once keep steps past the rows in one table, which they grow in each
      * other's place, and each answers what a walk that keeps nothing does.
      */
     @Test
     void walksOnManyThreadsKeepingStepsPastTheRowsAnswerTheSame() throws Exception {
         String text = "(?:[\\x{100}-\\x{1FF}]|\\x{300}|\\x{302}|\\x{304}|\\x{306}|b)*a(?:[\\x{100}-\\x{1FF}]|\\x{300}|b){6}";
-        StringPattern pattern = StringPattern.of(shaped(text));
+        // A budget whose share for one set is two places, so that the rows hold the classes ASCII
+        // is in and the steps past them are kept in the table.
+        StringPattern.Budget given = StringPattern.Budget.DEFAULT;
+        StringPattern pattern = StringPattern.of(shaped(text), new StringPattern.Budget(
+                given.classWork(), given.tableEntries(), given.asciiEntries(), given.runs(),
+                given.subsets(), 2L * given.subsets()));
         StringPattern none = StringPattern.of(shaped(text), StringPattern.Budget.DEFAULT.keeping(0));
         assertEquals(StringPattern.Way.EVERY_STATE, none.way());
         int[] symbols = {0x100, 0x150, 0x300, 0x302, 0x304, 0x306, 'a', 'b'};
