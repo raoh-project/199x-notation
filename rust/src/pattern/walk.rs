@@ -29,8 +29,8 @@ const NO_STEP: u64 = u64::MAX;
 ///
 /// Three promises hold what is kept, and each is kept in one place.
 ///
-/// What is kept is held to [`KNOWN_BYTES`], counted as the room the lists hold ([`Cache::held`]):
-/// the room a list has, not what of it is in use, so a list grown by doubling, or a table left a
+/// What is kept is held to [`KNOWN_BYTES`], but for what every match needs, counted as the room the
+/// lists hold ([`Cache::room`]): the room a list has, not what of it is in use, so a list grown by doubling, or a table left a
 /// quarter full by its growing, is counted as large as it is. A list is grown only to the room
 /// [`room_for`] works out, so what is counted before anything is kept is what is held after; how far
 /// the allocator rounds a request up is its own, and is not counted. The room the walk works in
@@ -38,9 +38,13 @@ const NO_STEP: u64 = u64::MAX;
 /// machine's states.
 ///
 /// Two sets are kept whatever they cost: the one a walk starts in, which every match needs, and the
-/// one the walk has come to when the others are forgotten ([`Cache::hold`]). [`Cache::forget`] keeps
-/// the first, so no match forgets the others to keep it, and a set larger than the room is kept
-/// beside it. Anything else, a set or a step, is kept where there is room for it, and where there is
+/// one the walk has come to when the others are forgotten ([`Cache::hold`]), with the step between
+/// them. [`Cache::forget`] keeps the first, so no match forgets the others to keep it, and a set
+/// larger than the room is kept beside it. What they hold is not counted against [`KNOWN_BYTES`]
+/// but apart from it ([`Cache::needed`]): the room bounds everything else, the other sets, the
+/// steps and the lists that hold them. So a step from a set larger than the room is kept in the
+/// room as any is, and what is kept is at most the room and those two sets, at most twice the
+/// machine's states. Anything else, a set or a step, is kept where there is room for it, and where there is
 /// not that is said to the match ([`Kept::Full`], [`Cache::learn`]), which decides
 /// ([`Cache::make_room`]): nothing is refused without the match knowing, so no match goes on working
 /// out one step again and again because there was no room to keep it.
@@ -81,6 +85,9 @@ pub(crate) struct Cache {
     /// lists here: each set's states are a list of their own, so what they hold is counted as each
     /// is kept, and they are not gone over to count it.
     state_room: usize,
+    /// What keeping the sets every match needs, and the step between them, added to
+    /// [`Cache::held`], which is held beside [`KNOWN_BYTES`] and not in it ([`Cache::room`]).
+    needed: usize,
     walk: Walk,
 }
 
@@ -150,6 +157,7 @@ impl Cache {
             cold: Cold::new(),
             start: None,
             state_room: 0,
+            needed: 0,
             walk: Walk {
                 entered: Vec::new(),
                 generation: 0,
@@ -170,6 +178,12 @@ impl Cache {
             + self.slots.capacity() * size_of::<u32>()
             + self.next.capacity() * size_of::<u32>()
             + self.cold.held()
+    }
+
+    /// The room what is kept holds in [`KNOWN_BYTES`]: [`Cache::held`], but for what the sets every
+    /// match needs, and the step between them, hold beside it.
+    fn room(&self) -> usize {
+        self.held() - self.needed
     }
 
     /// The room keeping one more set of `states` states would add to [`Cache::held`]: its states,
@@ -208,8 +222,9 @@ impl Cache {
         self.next = Vec::new();
         self.cold = Cold::new();
         self.state_room = 0;
+        self.needed = 0;
         if let Some((states, hash, accepting)) = start {
-            self.start = Some(self.put(width, states, hash, accepting));
+            self.start = Some(self.put(width, states, hash, accepting, true));
         }
     }
 
@@ -242,17 +257,32 @@ impl Cache {
     /// Keeps that class `class` leads from the kept set whose row begins at `row` to `to`, which
     /// was not known, and answers whether it is kept. A class in the row is kept in it, whose room
     /// was counted when the set was kept. A class past the row is kept where there is room for it;
-    /// where there is not, nothing is kept and the match is told, to decide what to do.
-    fn learn(&mut self, width: usize, row: u32, class: usize, to: u32) -> bool {
+    /// where there is not, nothing is kept and the match is told, to decide what to do. With
+    /// `needed`, it is kept whatever it costs, beside the room: asked only for the step from the set
+    /// a walk starts in to the set it is in when the others were just forgotten for it.
+    fn learn(&mut self, width: usize, row: u32, class: usize, to: u32, needed: bool) -> bool {
         if class < width {
             self.next[row as usize + class] = to;
             return true;
         }
-        if self.held() + self.cold.room_for_one() > KNOWN_BYTES {
+        let more = self.cold.room_for_one();
+        if needed {
+            self.needed += more;
+        } else if self.room() + more > KNOWN_BYTES {
             return false;
         }
         self.cold.insert(row, class, to);
         true
+    }
+
+    /// Keeps that class `class` leads from the set a walk starts in to `to`, the set the walk is in
+    /// once the others were just forgotten for it, whatever it costs, beside the room.
+    fn learn_from_start(&mut self, width: usize, class: usize, to: u32) {
+        if let Some(start) = self.start
+            && start != NONE
+        {
+            self.learn(width, start, class, to, true);
+        }
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins, as
@@ -296,7 +326,7 @@ impl Cache {
             return row;
         }
         keeping.made += 1;
-        self.admit(machine, width, hash)
+        self.admit(machine, width, hash, true)
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins, or
@@ -337,20 +367,21 @@ impl Cache {
         if let Some(row) = self.found(hash, width) {
             return Kept::Found(row);
         }
-        if self.held() + self.room_for(width, self.walk.next.len()) > KNOWN_BYTES {
+        if self.room() + self.room_for(width, self.walk.next.len()) > KNOWN_BYTES {
             return Kept::Full;
         }
-        Kept::Added(self.admit(machine, width, hash))
+        Kept::Added(self.admit(machine, width, hash, false))
     }
 
     /// Keeps the set in `walk.next`, which is not kept, whose hash is `hash`, as a copy of its
     /// states in a list of its own, and answers the place its row begins. It is kept whatever room
-    /// is left: [`Cache::keep`] asks first, and [`Cache::hold`] keeps what every match needs.
+    /// is left: [`Cache::keep`] asks first, and [`Cache::hold`] keeps what every match needs, with
+    /// `needed`, beside the room.
     ///
     /// The set is copied and not moved out of the walk: moved, it would leave `walk.next` with no
     /// room, to be grown again for each set after it, and it would keep the room `walk.next` had
     /// grown to, up to twice its states. The copy asks for room for its states.
-    fn admit(&mut self, machine: &Machine, width: usize, hash: u32) -> u32 {
+    fn admit(&mut self, machine: &Machine, width: usize, hash: u32, needed: bool) -> u32 {
         if self.walk.next.is_empty() {
             return NONE;
         }
@@ -359,13 +390,22 @@ impl Cache {
         for &q in &self.walk.next {
             states.push(q);
         }
-        self.put(width, states, hash, accepting)
+        self.put(width, states, hash, accepting, needed)
     }
 
     /// Keeps `states`, a set not kept whose hash is `hash`, and answers the place its row begins,
     /// every class of the row not known yet. Each list is grown, where it is full, by what
-    /// [`room_for`] says, so what [`Cache::room_for`] works out before is what is held after.
-    fn put(&mut self, width: usize, states: Vec<u32>, hash: u32, accepting: bool) -> u32 {
+    /// [`room_for`] says, so what [`Cache::room_for`] works out before is what is held after. With
+    /// `needed`, what keeping it adds is held beside the room.
+    fn put(
+        &mut self,
+        width: usize,
+        states: Vec<u32>,
+        hash: u32,
+        accepting: bool,
+        needed: bool,
+    ) -> u32 {
+        let before = self.held();
         let kept = self.sets.len();
         if (kept + 1) * 2 > self.slots.len() {
             self.grow();
@@ -390,6 +430,9 @@ impl Cache {
         self.hashes.push(hash);
         make_room_for(&mut self.accepting, 1);
         self.accepting.push(accepting);
+        if needed {
+            self.needed += self.held() - before;
+        }
         row
     }
 
@@ -751,17 +794,30 @@ fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut 
             .advance(machine, &cache.sets[at as usize / width], c);
         i += c.len_utf8();
         let row = at;
+        // Forgetting the kept sets keeps the one a walk starts in, so a step from it is kept after,
+        // with the set it leads to, whatever it costs.
+        let from_start = cache.start == Some(row);
         at = match cache.come_to(machine, width, keeping) {
-            // A frozen match writes no step, and one that forgot has no row to write it in.
-            Some((next, forgot)) if forgot || keeping.frozen => next,
+            // A frozen match writes no step. One that forgot has no row to write it in, but for the
+            // set a walk starts in.
+            Some((next, forgot)) if forgot || keeping.frozen => {
+                if forgot && from_start {
+                    cache.learn_from_start(width, class, next);
+                }
+                next
+            }
             Some((next, _)) => {
-                if cache.learn(width, row, class, next) || !cache.make_room(width, keeping) {
+                if cache.learn(width, row, class, next, false) || !cache.make_room(width, keeping) {
                     // Kept; or not, and the match is frozen, in the set it came to, which is kept.
                     next
                 } else {
                     // The kept sets were forgotten for the step, and the set the walk came to is
                     // kept again, beside the one a walk starts in.
-                    cache.hold(machine, width, keeping)
+                    let next = cache.hold(machine, width, keeping);
+                    if from_start {
+                        cache.learn_from_start(width, class, next);
+                    }
+                    next
                 }
             }
             // The walk goes on a state at a time from the set it came to, in `next`.
@@ -1415,11 +1471,11 @@ mod tests {
         // Every set the subject comes to is kept; the steps between them are forgotten, and the
         // room is filled to a byte short of what it holds, so that no step fits.
         paths::forget_steps(&mut matcher.cache);
-        let spare = KNOWN_BYTES - matcher.cache.held() - 1;
+        let spare = KNOWN_BYTES - matcher.cache.room() - 1;
         let hashes = matcher.cache.hashes.len();
         let room = matcher.cache.hashes.capacity() - hashes;
         matcher.cache.hashes.reserve_exact(room + spare / 4);
-        assert!(matcher.cache.held() + matcher.cache.cold.room_for_one() > KNOWN_BYTES);
+        assert!(matcher.cache.room() + matcher.cache.cold.room_for_one() > KNOWN_BYTES);
         assert_eq!(matcher.cache.hashes.len(), hashes);
         let (answer, keeping) = decided(&mut matcher, &subject);
         assert_eq!(answer, subject.chars().rev().nth(8) == Some('α'));
@@ -1427,18 +1483,45 @@ mod tests {
             keeping.restarted && !keeping.frozen,
             "the match forgot the sets to keep the step"
         );
-        assert!(matcher.cache.held() <= KNOWN_BYTES);
-        // The step from the set a walk starts in was forgotten with the sets it led to, and is
-        // worked out once more; every other step was kept by the match that forgot them.
+        assert!(matcher.cache.room() <= KNOWN_BYTES);
+        // Every step was kept by the match that forgot the sets, the step from the set a walk
+        // starts in with the set it led to.
         let (_, keeping) = decided(&mut matcher, &subject);
         assert_eq!(keeping.made, 0, "no set made once they are kept");
-        assert!(
-            keeping.read + 'α'.len_utf8() >= subject.len(),
-            "{} of {} bytes read by kept steps",
+        assert_eq!(
             keeping.read,
-            subject.len()
+            subject.len(),
+            "every character read by kept steps"
         );
+    }
+
+    /// The set every match needs takes none of the room, so what is kept in the room is the other
+    /// sets and the steps, past the row as in it. Every character from U+0100 to U+03FF leads the
+    /// set the walk goes round back to itself: the set a walk starts in is kept beside the room, the
+    /// one gone round and its 768 steps past the row in it, and the next match reads every
+    /// character by kept steps. A set in Rust is never larger than the room, so this holds what is
+    /// counted where, not a match that would have frozen.
+    #[test]
+    fn the_set_every_match_starts_in_takes_none_of_the_room() {
+        let pattern = pattern("(?:[\u{100}-\u{3FF}]*){20000}");
+        let mut matcher = pattern.matcher();
+        let subject: String = (0x100..0x400u32)
+            .chain(0x100..0x400u32)
+            .map(|c| char::from_u32(c).expect("a scalar value"))
+            .collect();
+        let (answer, _) = decided(&mut matcher, &subject);
+        assert!(answer);
+        assert_eq!(matcher.cache.sets.len(), 2);
+        let start = matcher.cache.sets[0].len() * size_of::<u32>();
+        let gone_round = matcher.cache.sets[1].len() * size_of::<u32>();
+        let beside = matcher.cache.held() - matcher.cache.room();
+        assert!(
+            beside >= start && beside < start + gone_round,
+            "{beside} bytes beside the room, for a set of {start} and not one of {gone_round}"
+        );
+        assert!(matcher.cache.room() >= gone_round);
         let (_, keeping) = decided(&mut matcher, &subject);
+        assert!(!keeping.frozen && keeping.made == 0);
         assert_eq!(
             keeping.read,
             subject.len(),
@@ -1448,7 +1531,8 @@ mod tests {
 
     /// What is kept is held to [`KNOWN_BYTES`], counted as the room the lists hold, whether it is
     /// sets with steps in their rows or steps past them in `cold`, across matches that fill the room
-    /// and forget it; and the two sets kept whatever they cost are the only room past it.
+    /// and forget it; and the two sets kept whatever they cost, with the step between them, are the
+    /// only room past it.
     #[test]
     fn what_is_kept_is_held_to_the_room_it_is_given() {
         let mut numbers = Numbers(5);
@@ -1470,9 +1554,14 @@ mod tests {
             for subject in &subjects {
                 matcher.matches(subject);
                 assert!(
-                    matcher.cache.held() <= KNOWN_BYTES,
-                    "{} bytes held",
-                    matcher.cache.held()
+                    matcher.cache.room() <= KNOWN_BYTES,
+                    "{} bytes held in the room",
+                    matcher.cache.room()
+                );
+                assert!(
+                    matcher.cache.held() - matcher.cache.room() <= 2 * 1024,
+                    "{} bytes held beside it, for sets of a few states",
+                    matcher.cache.held() - matcher.cache.room()
                 );
             }
         }

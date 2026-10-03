@@ -43,8 +43,9 @@ static ALLOCATOR: Counting = Counting;
 /// The room the kept sets of one cache are held to, as the crate's `KNOWN_BYTES`.
 const ROOM: isize = 2 << 20;
 
-/// What the walk a matcher works in holds besides what it keeps: four lists as long as the
-/// machine's states, a few dozen here, and the room a list rounds up to.
+/// What a matcher holds besides the room: the four lists as long as the machine's states its walk
+/// works in, and the two sets every match needs, which are kept beside the room, each a few dozen
+/// states here; and the room a list rounds up to.
 const WALK: isize = 64 << 10;
 
 /// `n` characters, each `a` or `b`, chosen by a small generator so that the text is the same on
@@ -65,7 +66,7 @@ fn either(a: char, b: char, n: usize, seed: &mut u64) -> String {
 }
 
 /// A matcher of a pattern with more sets than the room holds, after subjects that fill the room,
-/// forget it and fill it again, holds no more than the room and what its walk works in, and at
+/// forget it and fill it again, holds no more than the room and what it holds besides, and at
 /// least half the room, so that it was filled. One pattern keeps the steps between its sets in
 /// their rows, which ASCII is in; the other keeps them past the rows, where a step takes a slot of
 /// a table grown by doubling.
