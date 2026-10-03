@@ -10,6 +10,11 @@ namespace Raoh\Notation199x\Internal;
  * settled. A character is held as its UTF-8 bytes throughout, which is what the tables are keyed
  * by; only Hangul, which is arithmetic, is taken to its code point.
  *
+ * With a bound, what is written and the least of the answer what is held can come to are no more
+ * than the bound, which take() holds to before it holds another mark: the starter, and the marks
+ * but those it may compose with, which are no more than NormalizationTables::MOST_MARKS_COMPOSED.
+ * So a run holds no more than the bound and that many marks, whatever the length of the text.
+ *
  * @internal
  */
 final class Composing
@@ -173,6 +178,12 @@ final class Composing
     private function take(string $character): bool
     {
         if (isset(NormalizationTables::COMBINING_CLASSES[$character])) {
+            // The starter and the marks are no more than one more than the marks, so only where
+            // that is past what is left is it asked how few they may come to.
+            if ($this->longest >= 0 && count($this->marks) + 2 > $this->longest - $this->written
+                && $this->leastHeld(count($this->marks) + 1) > $this->longest - $this->written) {
+                return false;
+            }
             $this->marks[] = $character;
             return true;
         }
@@ -189,6 +200,19 @@ final class Composing
         }
         $this->starter = $character;
         return true;
+    }
+
+    /**
+     * The least number of scalar values of the answer the starter held and $marks marks after it
+     * come to, whatever follows: every mark, and the starter, but those of the marks it may compose
+     * with in a composing form.
+     */
+    private function leastHeld(int $marks): int
+    {
+        if ($this->starter === null) {
+            return $marks;
+        }
+        return 1 + ($this->form->composes ? max($marks - NormalizationTables::MOST_MARKS_COMPOSED, 0) : $marks);
     }
 
     /**

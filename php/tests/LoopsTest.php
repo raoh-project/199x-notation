@@ -61,7 +61,7 @@ final class LoopsTest extends TestCase
     private const CALLS = [
         'match' => ['array_fill', 'array_pop', 'count', 'max', 'ord', 'strlen', 'strspn', 'substr'],
         // array_slice and "..." go over the few marks insertion orders, or one decomposition.
-        'normalization' => ['...', 'array_fill', 'array_push', 'array_slice', 'chr', 'count', 'intdiv', 'ord', 'strlen', 'strspn', 'substr'],
+        'normalization' => ['...', 'array_fill', 'array_push', 'array_slice', 'chr', 'count', 'intdiv', 'max', 'ord', 'strlen', 'strspn', 'substr'],
         // strtr maps a run of ASCII strspn has gone past, and is given no more than that run.
         'case conversion' => ['chr', 'intdiv', 'count', 'ord', 'strcspn', 'strlen', 'strspn', 'strtr', 'substr'],
     ];

@@ -59,8 +59,9 @@ final class CaseConversion
 
     /**
      * lowercase($s) where that is no longer than $longest scalar values, and null where it is
-     * longer, which is found out before more than $longest is written. A negative bound is one no
-     * text is within.
+     * longer, which is found out before more than $longest is written. How much of $s it reads
+     * turns on $longest and not on the length of $s: it reads no further once what it has read
+     * shows the answer to be longer. A negative bound is one no text is within.
      */
     public static function lowercaseWithin(string $s, int $longest): ?string
     {
@@ -69,8 +70,9 @@ final class CaseConversion
 
     /**
      * uppercase($s) where that is no longer than $longest scalar values, and null where it is
-     * longer, which is found out before more than $longest is written. A negative bound is one no
-     * text is within.
+     * longer, which is found out before more than $longest is written. How much of $s it reads
+     * turns on $longest and not on the length of $s: it reads no further once what it has read
+     * shows the answer to be longer. A negative bound is one no text is within.
      */
     public static function uppercaseWithin(string $s, int $longest): ?string
     {
@@ -86,7 +88,10 @@ final class CaseConversion
      * Final_Sigma looks either side of a sigma for as many Case_Ignorable code points as there are,
      * and looks at them in the text. What is bounded is what is written: each character's mapping
      * is measured before any of it is, so the answer never holds more than $longest, nor part of a
-     * mapping that would take it past.
+     * mapping that would take it past. Every character maps to at least one, which the generator
+     * checks, so the text is read no further than one character past $longest either: strcspn and
+     * strspn are given no more than that, and Final_Sigma looks past no more Case_Ignorable
+     * characters after a sigma than the answer has room for.
      *
      * Text that maps to itself is answered with itself. Otherwise what maps to itself is copied a
      * run at a time, from $kept, and the answer is made only once a character that changes is met.
@@ -108,9 +113,12 @@ final class CaseConversion
         $kept = 0;
         $written = 0;
         for ($at = 0; $at < $length;) {
+            // As many bytes as the answer has room for and one more, which each is at least one
+            // scalar value of.
+            $most = $longest < 0 || $longest - $written + 1 >= $length - $at ? $length - $at : $longest - $written + 1;
             // A run of ASCII the mapping leaves as it is: one scalar value a byte. A checkpoint
             // added later bounds the run by strcspn's length.
-            $run = strcspn($s, $stops, $at, $length - $at);
+            $run = strcspn($s, $stops, $at, $most);
             if ($run > 0) {
                 if ($longest >= 0 && $run > $longest - $written) {
                     return null;
@@ -121,7 +129,7 @@ final class CaseConversion
             }
             // A run of ASCII the mapping makes other ASCII: one scalar value a byte, mapped in one
             // call. A checkpoint added later bounds the run by strspn's length.
-            $run = strspn($s, $changing, $at, $length - $at);
+            $run = strspn($s, $changing, $at, $most);
             if ($run > 0) {
                 if ($longest >= 0 && $run > $longest - $written) {
                     return null;
@@ -139,8 +147,19 @@ final class CaseConversion
                 $character = substr($s, $at, $width);
                 $after = $at + $width;
                 $to = null;
-                if ($lower && isset(CaseTables::FINAL_SIGMA[$character]) && self::isFinalSigma($s, $at, $after)) {
-                    $to = CaseTables::FINAL_SIGMA[$character];
+                if ($lower && isset(CaseTables::FINAL_SIGMA[$character])) {
+                    // The sigma is at least one scalar value of the answer, as every character is,
+                    // and each Case_Ignorable one after it is another.
+                    if ($longest >= 0 && $written >= $longest) {
+                        return null;
+                    }
+                    $final = self::isFinalSigma($s, $at, $after, $longest < 0 ? -1 : $longest - $written - 1);
+                    if ($final === null) {
+                        return null;
+                    }
+                    if ($final) {
+                        $to = CaseTables::FINAL_SIGMA[$character];
+                    }
                 }
                 $to ??= $table[$character] ?? null;
                 $adding = $to === null ? 1 : Utf8::countShort($to);
@@ -198,9 +217,10 @@ final class CaseConversion
      * Unicode's Final_Sigma condition of the character between $at and $after: preceded, skipping
      * Case_Ignorable code points, by a Cased one, and not followed, skipping the same way, by
      * another Cased one. Scanned as far as the text goes rather than over a window, since what is
-     * skipped is decided by the property and not by a count.
+     * skipped is decided by the property and not by a count. Null where $most is not negative and
+     * more than $most Case_Ignorable characters follow it, which leaves it undecided.
      */
-    private static function isFinalSigma(string $s, int $at, int $after): bool
+    private static function isFinalSigma(string $s, int $at, int $after, int $most): ?bool
     {
         $precededByCased = false;
         for ($j = $at; $j > 0;) {
@@ -219,11 +239,16 @@ final class CaseConversion
             return false;
         }
         $length = strlen($s);
+        $skipped = 0;
         for ($j = $after; $j < $length;) {
             $width = Utf8::width(ord($s[$j]));
             $cp = Utf8::decode(substr($s, $j, $width));
             $j += $width;
             if (Ranges::has(CaseTables::CASE_IGNORABLE, $cp)) {
+                if ($skipped === $most) {
+                    return null;
+                }
+                $skipped++;
                 continue;
             }
             return !Ranges::has(CaseTables::CASED, $cp);

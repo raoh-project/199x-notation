@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Raoh\Notation199x\Tests;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Raoh\Notation199x\Internal\Composing;
 use Raoh\Notation199x\Internal\FormFacts;
@@ -93,6 +95,29 @@ final class NormalizationTest extends TestCase
                 }
                 self::assertNull(Normalization::normalizeWithin($form, $text, -1));
             }
+        }
+    }
+
+    /**
+     * A starter and a combining run of two million marks, held to a bound of ten, is found past the
+     * bound before the run is held: what is made is the room for the bound and the marks that may
+     * compose, not for the run, so it is answered within PHP's default memory limit and makes next
+     * to nothing.
+     */
+    #[RunInSeparateProcess, PreserveGlobalState(false)]
+    public function testABoundedNormalizationHoldsNoMoreThanItsBound(): void
+    {
+        ini_set('memory_limit', '128M');
+        $text = 'a' . str_repeat("\u{0301}", 2_000_000);
+        foreach (NormalizationForm::cases() as $form) {
+            // The tables are loaded the first time they are asked, once for the request.
+            Normalization::normalize($form, "a\u{0301}");
+            $before = memory_get_usage();
+            memory_reset_peak_usage();
+            $within = Normalization::normalizeWithin($form, $text, 10);
+            $made = memory_get_peak_usage() - $before;
+            self::assertNull($within, $form->name);
+            self::assertLessThan(64 << 10, $made, "{$form->name} made $made bytes");
         }
     }
 
