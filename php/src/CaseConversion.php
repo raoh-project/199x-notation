@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Raoh\Notation199x;
 
 use Raoh\Notation199x\Internal\CaseTables;
-use Raoh\Notation199x\Internal\Ranges;
 use Raoh\Notation199x\Internal\Utf8;
 
 /**
@@ -21,6 +20,10 @@ use Raoh\Notation199x\Internal\Utf8;
  */
 final class CaseConversion
 {
+    /** What CaseTables::CONTEXT_PAGES holds of a code point, a bit each. */
+    private const CASED = 1;
+    private const CASE_IGNORABLE = 2;
+
     /**
      * For the lowercase and the uppercase mapping: the bytes the mapping may change the character
      * of, every byte that begins or continues a character past ASCII and the ASCII characters the
@@ -232,10 +235,10 @@ final class CaseConversion
                 $j--;
             } while ($j > 0 && (ord($s[$j]) & 0xC0) === 0x80);
             $cp = Utf8::decodeAt($s, $j);
-            if (Ranges::has(CaseTables::CASE_IGNORABLE, $cp)) {
+            if (self::has($cp, self::CASE_IGNORABLE)) {
                 continue;
             }
-            $precededByCased = Ranges::has(CaseTables::CASED, $cp);
+            $precededByCased = self::has($cp, self::CASED);
             break;
         }
         if (!$precededByCased) {
@@ -247,15 +250,23 @@ final class CaseConversion
             $width = Utf8::width(ord($s[$j]));
             $cp = Utf8::decode(substr($s, $j, $width));
             $j += $width;
-            if (Ranges::has(CaseTables::CASE_IGNORABLE, $cp)) {
+            if (self::has($cp, self::CASE_IGNORABLE)) {
                 if ($skipped === $most) {
                     return null;
                 }
                 $skipped++;
                 continue;
             }
-            return !Ranges::has(CaseTables::CASED, $cp);
+            return !self::has($cp, self::CASED);
         }
         return true;
+    }
+
+    /**
+     * Whether CaseTables::CONTEXT_PAGES holds $bit of $cp.
+     */
+    private static function has(int $cp, int $bit): bool
+    {
+        return (ord(CaseTables::CONTEXT_PAGES[ord(CaseTables::CONTEXT_BLOCKS[$cp >> 8]) << 8 | $cp & 0xFF]) & $bit) !== 0;
     }
 }

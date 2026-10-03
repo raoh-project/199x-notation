@@ -139,10 +139,14 @@ The generator reads the database once into one model, where every fact about Uni
 and checked against the properties Unicode publishes, and writes each language's tables from that
 model with an emitter of its own. An emitter decides which of the model's facts its implementation
 holds as generated and how its language holds them, and derives no fact about Unicode of its own, so
-every implementation answers from the same facts. Which facts are generated follows how long an
-implementation keeps what it works out: Go works out normalization's compositions from the
-decompositions once in a process, and PHP, which keeps nothing from one request to the next, holds
-them as generated. No table is written by hand or read from a resource at run time.
+every implementation answers from the same facts. What a case conversion or a normalization asks of
+each code point it reads, its mapping, its combining class, its decomposition, whether it is a
+stable starter, whether it is Cased or Case_Ignorable, and what it composes into with the code point
+before it, is read from a generated table the code point, or the pair, indexes in a fixed number of
+steps however many entries the table has, rather than worked out from other tables or searched for.
+PHP holds some of them as arrays keyed by the character, which it looks up as directly. A search is
+left only where such a table has said a code point has an entry, as the Final_Sigma mapping of the
+one code point that has one. No table is written by hand or read from a resource at run time.
 
 The vectors in `suite/` are what every implementation is held to, in a format each language reads
 with its standard library; `suite/README.md` states it. The fixtures of a format in `image/` are

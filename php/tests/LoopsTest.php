@@ -47,7 +47,6 @@ final class LoopsTest extends TestCase
         ],
         'case conversion' => [
             'CaseConversion::stops' => 'the 256 byte values, once a request',
-            'Ranges::has' => 'a binary search over one property\'s ranges',
             'Utf8::countShort' => 'one character\'s mapping, as long as the tables make one',
         ],
     ];
@@ -63,7 +62,7 @@ final class LoopsTest extends TestCase
         // array_slice and "..." go over the few marks insertion orders, or one decomposition.
         'normalization' => ['...', 'array_fill', 'array_push', 'array_slice', 'chr', 'count', 'intdiv', 'max', 'ord', 'strlen', 'strspn', 'substr'],
         // strtr maps a run of ASCII strspn has gone past, and is given no more than that run.
-        'case conversion' => ['chr', 'intdiv', 'count', 'ord', 'strcspn', 'strlen', 'strspn', 'strtr', 'substr'],
+        'case conversion' => ['chr', 'ord', 'strcspn', 'strlen', 'strspn', 'strtr', 'substr'],
     ];
 
     /** What goes past a run of the text in one call, and is given the run's length. */
