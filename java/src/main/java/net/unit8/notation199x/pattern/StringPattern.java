@@ -1070,14 +1070,16 @@ public final class StringPattern implements Predicate<String> {
         Map<CodePoints, int[]> sets = new IdentityHashMap<>();
         for (int state = 0; state < states; state++) {
             accepting[state] = machine.stopsAt(state);
-            List<Automaton.Step> steps = machine.stepsFrom(state);
-            over[state] = new int[steps.size()][];
-            target[state] = new int[steps.size()];
-            for (int step = 0; step < steps.size(); step++) {
-                over[state][step] = sets.computeIfAbsent(steps.get(step).over(), StringPattern::pairs);
-                target[state][step] = steps.get(step).to();
+            int first = machine.stepsAt(state);
+            int many = machine.stepsPast(state) - first;
+            over[state] = new int[many][];
+            target[state] = new int[many];
+            for (int step = 0; step < many; step++) {
+                over[state][step] = sets.computeIfAbsent(machine.stepOver(first + step),
+                        StringPattern::pairs);
+                target[state][step] = machine.stepTo(first + step);
             }
-            free[state] = machine.freeFrom(state).clone();
+            free[state] = machine.freeFrom(state);
         }
         return new StringPattern(false, accepting, over, target, free, budget);
     }
