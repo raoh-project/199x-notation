@@ -311,6 +311,27 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
     }
 
     /**
+     * A class written negated leaves a piece or two of what the others cut, and its classes are
+     * worked out from those: a choice of thousands of them is walked as the sets of states it comes
+     * to, where working out what each covers would have been the sets times the pieces, past what
+     * a pattern is allowed, and every character would have moved every state.
+     */
+    @Test
+    void aChoiceOfThousandsOfClassesWrittenNegatedIsWalkedAsTheSetsItComesTo() {
+        StringBuilder regex = new StringBuilder("(?:");
+        for (int each = 0; each < 5_000; each++) {
+            regex.append(each == 0 ? "" : "|").append(String.format("[^\\x{%X}]", 0x100 + each));
+        }
+        regex.append(")*");
+        StringPattern run = PatternMachine.of(((PatternRead.Read) PatternParser.read(regex.toString()))
+                .meaning()).pattern();
+        assertEquals(StringPattern.Way.SETS_KEPT, run.way());
+        assertTrue(run.matches("a".repeat(5_000) + "\u0100"));
+        assertTrue(run.matches(""));
+        assertFalse(run.matches("a\uD800"));
+    }
+
+    /**
      * What a pattern keeps for a faster walk, its sets and the characters each set or state stays
      * on, is found by whichever thread gets to it first and read by all of
      * them, and every thread answers what the machine accepts.

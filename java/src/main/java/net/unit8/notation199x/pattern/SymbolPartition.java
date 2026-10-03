@@ -22,9 +22,13 @@ import java.util.List;
  * up in a string is not this, and neither is any limit on how many there may be: those are
  * {@link SymbolClasses}.
  *
- * <p>Working the classes out looks at each piece of the symbols each set covers, which for sets
- * nested in one another is as many as the sets times the pieces. So it is counted on a
- * {@link Meter.Making}, and given up where that runs out.
+ * <p>Working the classes out looks, for each set, at the pieces of the symbols it covers or at
+ * those it leaves, whichever are fewer: a set and what it leaves cut the symbols the same way. So
+ * a class written negated, which leaves a piece or two, costs those, and only sets nested in one
+ * another, each covering about half of what the others cut, come to as many as the sets times the
+ * pieces. It is counted on a {@link Meter.Making}, a set at a time before the set is looked at, and
+ * given up where that runs out. Saying which classes each set holds ({@link #classesOf}) is the
+ * pieces each covers again, and is worked out only where it is asked for.
  */
 final class SymbolPartition {
 
@@ -40,10 +44,11 @@ final class SymbolPartition {
     private final int count;
     /** For each class, its least symbol. */
     private final int[] least;
-    /** For each set, in the order they were given, the classes it holds, ascending and each once. */
-    private final int[][] classesOf;
+    /** For each set, in the order they were given, the classes it holds, ascending and each once;
+     *  null where they were not asked for ({@link #cutBy}). */
+    private final int @Nullable [][] classesOf;
 
-    private SymbolPartition(int[] cuts, int[] classOf, int count, int[] least, int[][] classesOf) {
+    private SymbolPartition(int[] cuts, int[] classOf, int count, int[] least, int @Nullable [][] classesOf) {
         this.cuts = cuts;
         this.classOf = classOf;
         this.count = count;
@@ -52,13 +57,29 @@ final class SymbolPartition {
     }
 
     /**
-     * The classes {@code sets} cut the symbols into, or null where working them out is more than
-     * {@code making} allows.
+     * The classes {@code sets} cut the symbols into, with the classes each set holds, or null where
+     * working them out is more than {@code making} allows.
      *
      * @param sets   each set, as ascending {@code from, to} pairs of scalar values
      * @param making what working them out may look at, counted before it is looked at
      */
     static @Nullable SymbolPartition of(List<int[]> sets, Meter.Making making) {
+        return of(sets, making, true);
+    }
+
+    /**
+     * The classes {@code sets} cut the symbols into, without the classes each set holds, or null
+     * where working them out is more than {@code making} allows: for a walk that looks a character
+     * up as its class and asks no set which classes it holds.
+     *
+     * @param sets   each set, as ascending {@code from, to} pairs of scalar values
+     * @param making what working them out may look at, counted before it is looked at
+     */
+    static @Nullable SymbolPartition cutBy(List<int[]> sets, Meter.Making making) {
+        return of(sets, making, false);
+    }
+
+    private static @Nullable SymbolPartition of(List<int[]> sets, Meter.Making making, boolean withSets) {
         long bounds = 4;
         for (int[] ranges : sets) {
             bounds += ranges.length;
@@ -72,39 +93,44 @@ final class SymbolPartition {
         // pieces it holds out of the class they were in, into a class made for what it took from
         // that one.
         int[] classOf = new int[pieces];
-        int classes = 1;
-        int[] splitInto = new int[pieces + 1];
-        int[] splitBy = new int[pieces + 1];
-        Arrays.fill(splitBy, -1);
+        Splitting splitting = new Splitting(pieces + 1);
         long covered = 0;
         int set = 0;
         for (int[] ranges : sets) {
+            // Where each of the set's ranges begins and ends among the pieces, which every set's
+            // ends are among, so that how many pieces it covers is known before any is moved.
+            int[] ends = new int[ranges.length];
+            int many = 0;
             for (int at = 0; at < ranges.length; at += 2) {
-                int piece = Arrays.binarySearch(cuts, ranges[at]);
-                for (; cuts[piece] <= ranges[at + 1]; piece++) {
-                    if (!making.work(1)) {
-                        return null;
-                    }
-                    covered++;
-                    int was = classOf[piece];
-                    if (splitBy[was] != set) {
-                        splitBy[was] = set;
-                        if (classes == splitInto.length) {
-                            splitInto = Arrays.copyOf(splitInto, classes * 2);
-                            int grown = splitBy.length;
-                            splitBy = Arrays.copyOf(splitBy, classes * 2);
-                            Arrays.fill(splitBy, grown, splitBy.length, -1);
-                        }
-                        splitInto[was] = classes++;
-                    }
-                    classOf[piece] = splitInto[was];
+                ends[at] = Arrays.binarySearch(cuts, ranges[at]);
+                ends[at + 1] = Arrays.binarySearch(cuts, ranges[at + 1] + 1);
+                many += ends[at + 1] - ends[at];
+            }
+            covered += many;
+            // What the set covers and what it leaves are moved apart the same either way, so the
+            // fewer of them are moved.
+            boolean leaving = 2L * many > pieces;
+            if (!making.work(1L + (leaving ? pieces - many : many))) {
+                return null;
+            }
+            int left = 0;
+            for (int at = 0; at <= ranges.length; at += 2) {
+                if (leaving) {
+                    // What is left before this range, and after the last.
+                    splitting.move(classOf, left, at < ranges.length ? ends[at] : pieces, set);
+                } else if (at < ranges.length) {
+                    splitting.move(classOf, ends[at], ends[at + 1], set);
+                }
+                if (at < ranges.length) {
+                    left = ends[at + 1];
                 }
             }
             set++;
         }
+        int classes = splitting.classes;
         // Numbering the classes again looks at each piece and each class a few times, and saying
         // which classes each set holds is the pieces it covers again.
-        if (!making.work(2L * pieces + 2L * classes + covered)) {
+        if (!making.work(2L * pieces + 2L * classes + (withSets ? covered : 0))) {
             return null;
         }
         // A class every piece was moved out of holds nothing, and the surrogates are no symbol, so
@@ -123,6 +149,9 @@ final class SymbolPartition {
                 renumbered[classOf[piece]] = count++;
             }
             classOf[piece] = renumbered[classOf[piece]];
+        }
+        if (!withSets) {
+            return new SymbolPartition(cuts, classOf, count, Arrays.copyOf(least, count), null);
         }
         // A set that holds a class holds its least symbol, which is where a walk over the set's
         // pieces in order first meets the class; and the classes are numbered in the order of their
@@ -148,6 +177,43 @@ final class SymbolPartition {
             classesOf[set++] = Arrays.copyOf(held, many);
         }
         return new SymbolPartition(cuts, classOf, count, Arrays.copyOf(least, count), classesOf);
+    }
+
+    /**
+     * The classes made as the sets move pieces apart: for each class, the class made for what the
+     * set moving pieces now takes from it, and which set that was.
+     */
+    private static final class Splitting {
+
+        int classes = 1;
+        int[] into;
+        int[] by;
+
+        Splitting(int room) {
+            into = new int[room];
+            by = new int[room];
+            Arrays.fill(by, -1);
+        }
+
+        /** Moves each piece from {@code from} to before {@code past} out of the class it is in,
+         *  into the class made for what set {@code set} takes from that one, made the first time
+         *  the set takes from it. */
+        void move(int[] classOf, int from, int past, int set) {
+            for (int piece = from; piece < past; piece++) {
+                int was = classOf[piece];
+                if (by[was] != set) {
+                    by[was] = set;
+                    if (classes == into.length) {
+                        into = Arrays.copyOf(into, classes * 2);
+                        int grown = by.length;
+                        by = Arrays.copyOf(by, classes * 2);
+                        Arrays.fill(by, grown, by.length, -1);
+                    }
+                    into[was] = classes++;
+                }
+                classOf[piece] = into[was];
+            }
+        }
     }
 
     /**
@@ -235,8 +301,11 @@ final class SymbolPartition {
     }
 
     /** The classes set {@code set} holds, ascending and each once: the set, as this sees it. Not to
-     *  be written to. */
+     *  be written to. Asked only of classes made with them ({@link #of}). */
     int[] classesOf(int set) {
+        if (classesOf == null) {
+            throw new IllegalStateException("which classes a set holds is asked of classes made without it");
+        }
         return classesOf[set];
     }
 

@@ -320,7 +320,9 @@ public final class StringPattern implements Predicate<String> {
         SymbolClasses classes = null;
         if (budget.classWork() > 0) {
             Meter.Making making = new Meter(1, 1, budget.classWork()).making();
-            partition = SymbolPartition.of(sets, making);
+            // Which classes each set holds is what a deterministic machine's table is filled from,
+            // and nothing else here asks it.
+            partition = deterministic ? SymbolPartition.of(sets, making) : SymbolPartition.cutBy(sets, making);
             classes = partition == null ? null : SymbolClasses.of(partition, making);
         }
         // Held to what it says it is before anything is made of it, and whatever the budget: the
