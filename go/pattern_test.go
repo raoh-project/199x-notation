@@ -413,9 +413,9 @@ func TestASetPutInInAnotherOrderIsTheSetKept(t *testing.T) {
 		}
 	}
 	put(1, 2, 3)
-	first, _ := w.known.keep(m, w.now, hashOf(w.now))
+	first, _ := w.known.keep(m, w.now, hashOf(w.now), false)
 	put(3, 1, 2)
-	again, made := w.known.keep(m, w.now, hashOf(w.now))
+	again, made := w.known.keep(m, w.now, hashOf(w.now), false)
 	if again != first || made || w.known.kept != 1 {
 		t.Fatalf("{3, 1, 2} was kept apart from {1, 2, 3}: %d sets kept", w.known.kept)
 	}
@@ -429,7 +429,7 @@ func TestSetsWithTheSameHashAreToldApart(t *testing.T) {
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(3)
-	held, _ := w.known.keep(m, w.now, hashOf(w.now))
+	held, _ := w.known.keep(m, w.now, hashOf(w.now), false)
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(2)
@@ -465,6 +465,16 @@ func tenthOf17() (*machine, func(string) bool) {
 	}
 }
 
+// slotsHold is whether set is among the sets w keeps.
+func slotsHold(w *walk, set *knownSet) bool {
+	for _, held := range w.known.slots {
+		if held == set {
+			return true
+		}
+	}
+	return false
+}
+
 // randomAB is n characters of a and b at random, the same for the same seed.
 func randomAB(n int, seed uint32) string {
 	var b strings.Builder
@@ -489,6 +499,11 @@ func TestAMatchThatComesToNewSetsSlowsNoMatchAfterIt(t *testing.T) {
 	}
 	if !w.forgot || !w.frozen {
 		t.Fatalf("a match of new sets forgot %v and kept no more %v", w.forgot, w.frozen)
+	}
+	// Forgetting the kept sets kept the one a walk starts in, so the next match starts in a kept
+	// set and does not forget the others to keep it.
+	if first := w.known.first; first == nil || !slotsHold(w, first) {
+		t.Fatal("the set a walk starts in was forgotten")
 	}
 	friendly := strings.Repeat("ab", 400)
 	if got := m.matchesIn(w, friendly); got != want(friendly) {
@@ -558,10 +573,10 @@ func TestAMatchThatKeepsNoMoreSetsComesBackToThoseItKeeps(t *testing.T) {
 	t.Fatal("no step between kept sets was found")
 }
 
-// A set that alone takes more room than the kept sets are given is kept, as the only one: a match
-// that keeps coming back to it reads by its steps, and does not walk the whole machine at every
-// character.
-func TestASetLargerThanTheRoomIsKeptAlone(t *testing.T) {
+// A set that alone takes more room than the kept sets are given is kept, beside the set a walk
+// starts in and no other: a match that keeps coming back to it reads by its steps, and does not
+// walk the whole machine at every character, and the next match finds both kept.
+func TestASetLargerThanTheRoomIsKeptBesideTheStart(t *testing.T) {
 	defer func(was int) { knownBytes = was }(knownBytes)
 	knownBytes = 1
 	m := pathMachine("(?:x*){500}")
@@ -570,13 +585,13 @@ func TestASetLargerThanTheRoomIsKeptAlone(t *testing.T) {
 	if !m.matchesIn(w, subject) {
 		t.Fatal("x* repeated does not accept x")
 	}
-	if w.frozen || w.in == nil || w.known.kept != 1 {
-		t.Fatalf("the set was not kept alone: %d kept, keeping no more %v", w.known.kept, w.frozen)
+	if w.frozen || w.in == nil || w.known.kept != 2 || w.in == w.known.first {
+		t.Fatalf("the set was not kept beside the start: %d kept, keeping no more %v", w.known.kept, w.frozen)
 	}
-	// The set it starts in and the one x leads to are not kept together, so the next match keeps
-	// each again, and reads the rest by the step from the second back to itself.
+	// The next match finds both kept, works out the step between them once, and reads the rest by
+	// the step from the second back to itself, keeping no new set.
 	m.matchesIn(w, subject)
-	if w.frozen || w.read < len(subject)-2 {
+	if w.frozen || w.made != 0 || w.read < len(subject)-1 {
 		t.Fatalf("the next match read %d of %d by kept steps", w.read, len(subject))
 	}
 }

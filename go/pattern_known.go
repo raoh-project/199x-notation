@@ -48,25 +48,41 @@ type knownSets struct {
 	kept, bytes int
 }
 
-// forget forgets every set kept. A set held across it is still the set it was, and is no longer
-// looked up.
+// forget forgets every set kept but the one a walk starts in, and where each character leads from
+// that one. Every match needs that set, whatever it reads, so a match never forgets the others to
+// make room for it, and a set larger than the room is kept beside it. A set held across it is still
+// the set it was, and is no longer looked up.
 func (k *knownSets) forget() {
+	first := k.first
 	k.slots = nil
 	k.first = nil
 	k.kept, k.bytes = 0, 0
+	if first == nil {
+		return
+	}
+	first.ascii = [utf8RuneSelf]*knownSet{}
+	first.other = nil
+	k.grow()
+	k.slots[k.free(first.hash)] = first
+	k.first = first
+	k.kept, k.bytes = 1, setCost(len(first.states))
+}
+
+// setCost is about what a kept set of n states takes: its states, where it leads for each ASCII
+// character, and its part of the slots and of what holds it.
+func setCost(n int) int {
+	return 4*n + 8*utf8RuneSelf + 64
 }
 
 // keep is the set now holds, whose hash is hash: found where it is kept, and otherwise kept, made
-// reporting so. It is nil where there is no room for it beside the sets kept. A set is kept where
-// none is, whatever it takes.
-func (k *knownSets) keep(m *machine, now *stateSet, hash uint32) (set *knownSet, made bool) {
+// reporting so. It is nil where there is no room for it beside the sets kept, unless always, which
+// keeps it whatever it takes.
+func (k *knownSets) keep(m *machine, now *stateSet, hash uint32, always bool) (set *knownSet, made bool) {
 	if set := k.find(now, hash); set != nil {
 		return set, false
 	}
-	// The set's states, where it leads for each ASCII character, and its part of the slots and of
-	// what holds it.
-	cost := 4*len(now.states()) + 8*utf8RuneSelf + 64
-	if k.kept > 0 && k.bytes+cost > knownBytes {
+	cost := setCost(len(now.states()))
+	if !always && k.bytes+cost > knownBytes {
 		return nil, false
 	}
 	if (k.kept+1)*2 > len(k.slots) {

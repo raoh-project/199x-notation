@@ -267,14 +267,11 @@ func (m *machine) begin(w *walk) {
 	if w.in = w.known.first; w.in != nil {
 		return
 	}
+	// Only a walk that has kept nothing comes here: forgetting the kept sets keeps this one.
 	w.now.clear()
 	m.enter(w, w.now, 0)
-	// The set a match starts in is always kept, the others forgotten to make room if they must be.
-	// That is not counted as this match forgetting them: every match needs this set, whatever it
-	// reads, and a set larger than the room is kept alone and then forgotten for the next.
-	w.in, _ = m.hold(w)
+	w.in, _ = w.known.keep(m, w.now, hashOf(w.now), true)
 	w.known.first = w.in
-	w.forgot = false
 }
 
 // take moves the walk over one symbol, and is false where it is in no state after it. Where the
@@ -326,7 +323,7 @@ func (m *machine) hold(w *walk) (set *knownSet, forgot bool) {
 	if w.frozen {
 		return w.known.find(w.now, hash), false
 	}
-	set, made := w.known.keep(m, w.now, hash)
+	set, made := w.known.keep(m, w.now, hash, false)
 	if set == nil {
 		if w.forgot && w.read < 10*w.made {
 			w.frozen = true
@@ -335,8 +332,9 @@ func (m *machine) hold(w *walk) (set *knownSet, forgot bool) {
 		w.known.forget()
 		w.forgot, forgot = true, true
 		w.made, w.read = 0, 0
-		// Nothing is kept now, so this set is, whatever it takes.
-		set, made = w.known.keep(m, w.now, hash)
+		// Only the set a walk starts in is kept now, so this set is kept beside it, whatever it
+		// takes.
+		set, made = w.known.keep(m, w.now, hash, true)
 	}
 	if made {
 		w.made++

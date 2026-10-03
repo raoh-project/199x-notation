@@ -140,17 +140,32 @@ impl Cache {
         }
     }
 
-    /// Forgets every kept set. What is dropped is at most what [`KNOWN_BYTES`] holds, or one set
-    /// larger than that.
-    fn forget(&mut self) {
+    /// Forgets every kept set but the one a walk starts in, and where each class leads from that
+    /// one. Every match needs that set, whatever it reads, so a match never forgets the others to
+    /// make room for it, and the set a match forgot them for is kept beside it. What is dropped is
+    /// at most what [`KNOWN_BYTES`] holds, or one set larger than that.
+    fn forget(&mut self, width: usize) {
+        let start = match self.start {
+            Some(row) if row != NONE => {
+                let at = row as usize / width;
+                Some((
+                    core::mem::take(&mut self.sets[at]),
+                    self.hashes[at],
+                    self.accepting[at],
+                ))
+            }
+            _ => None,
+        };
         self.sets.clear();
         self.hashes.clear();
         self.accepting.clear();
         self.slots.clear();
         self.next.clear();
         self.cold.clear();
-        self.start = None;
         self.bytes = 0;
+        if let Some((states, hash, accepting)) = start {
+            self.start = Some(self.put(width, states, hash, accepting));
+        }
     }
 
     /// Where class `class` leads from the kept set whose row begins at `row`: the place the row of
@@ -199,7 +214,7 @@ impl Cache {
                     keeping.frozen = true;
                     return None;
                 }
-                self.forget();
+                self.forget(width);
                 keeping.restarted = true;
                 keeping.made = 1;
                 keeping.read = 0;
@@ -265,6 +280,17 @@ impl Cache {
         if self.walk.next.is_empty() {
             return NONE;
         }
+        let accepting = accepts(machine, &self.walk.next);
+        let mut states = Vec::with_capacity(self.walk.next.len());
+        for &q in &self.walk.next {
+            states.push(q);
+        }
+        self.put(width, states, hash, accepting)
+    }
+
+    /// Keeps `states`, a set not kept whose hash is `hash`, and answers the place its row begins,
+    /// every class of the row not known yet.
+    fn put(&mut self, width: usize, states: Vec<u32>, hash: u32, accepting: bool) -> u32 {
         let kept = self.sets.len();
         if (kept + 1) * 2 > self.slots.len() {
             self.grow();
@@ -275,16 +301,11 @@ impl Cache {
             at = (at + 1) & mask;
         }
         self.slots[at] = kept as u32;
-        let accepting = accepts(machine, &self.walk.next);
         // A kept set is named by where its row of `next` begins, so a step is one lookup and no
         // product.
         let row = self.next.len() as u32;
         for _ in 0..width {
             self.next.push(UNKNOWN);
-        }
-        let mut states = Vec::with_capacity(self.walk.next.len());
-        for &q in &self.walk.next {
-            states.push(q);
         }
         self.bytes += cost(width, states.len());
         self.sets.push(states);
@@ -577,7 +598,8 @@ impl Walk {
 /// `run_known` reads through, and [`Cache::walk_alone`] over the subject; [`Walk::advance`] and
 /// [`Walk::enter`] over the steps and free steps of the states they move; [`hash_of`] and
 /// [`accepts`] over a set; [`Cache::found`] over the slots it looks in, [`Cache::admit`] over the
-/// slots it looks in, the set it copies and the row it makes, [`Cache::same`] over a kept set, and
+/// set it copies, [`Cache::put`] over the slots it looks in and the row it makes, [`Cache::same`]
+/// over a kept set, and
 /// [`Cache::grow`] over the kept sets; [`Cold::get`] and [`Cold::insert`] over the slots they look
 /// in, and [`Cold::grow`] over the steps kept; and [`Walk::next_set`], over every state, once in four
 /// billion sets. Making room is not a loop here: `vec!` makes `entered` once, and a list grows in
@@ -1088,7 +1110,7 @@ mod tests {
         let sets = cache.sets.clone();
         assert!(sets.len() > 10, "{} sets kept", sets.len());
         for (at, set) in sets.into_iter().enumerate() {
-            cache.forget();
+            *cache = Cache::new();
             cache.walk.next_set(machine);
             for &q in &set {
                 cache.walk.enter(machine, q);
@@ -1132,19 +1154,34 @@ mod tests {
         let pattern = pattern("(?:a|b)*a(?:a|b){16}");
         let mut matcher = pattern.matcher();
         let (_, keeping) = decided(&mut matcher, &Numbers(7).ab(200_000));
-        assert!(keeping.frozen);
+        assert!(keeping.restarted && keeping.frozen);
+        // Forgetting the kept sets kept the one a walk starts in, so the next match starts in a kept
+        // set and does not forget the others to keep it.
+        let start = matcher
+            .cache
+            .start
+            .expect("the set a walk starts in is kept");
+        let width = machine(&pattern).classes.of_ascii();
+        assert!(
+            (start as usize) < matcher.cache.sets.len() * width,
+            "the set a walk starts in is one of those kept"
+        );
         let friendly = "ab".repeat(400);
         let (answer, keeping) = decided(&mut matcher, &friendly);
         assert_eq!(answer, seventeenth(&friendly));
         assert!(!keeping.frozen, "the next match kept sets");
-        // The set the walk starts in may have been forgotten as the match before went, and is kept
-        // by the second.
-        for _ in 0..2 {
-            assert_eq!(decided(&mut matcher, &friendly).0, seventeenth(&friendly));
-        }
+        // The step from the set a walk starts in was forgotten with the others when the match before
+        // forgot them, and is worked out once; the set it leads to is found kept.
         let (answer, keeping) = decided(&mut matcher, &friendly);
         assert_eq!(answer, seventeenth(&friendly));
         assert_eq!(keeping.made, 0, "no set made once they are kept");
+        assert!(
+            keeping.read + 1 >= friendly.len(),
+            "{} of {} characters read by kept steps",
+            keeping.read,
+            friendly.len()
+        );
+        let (_, keeping) = decided(&mut matcher, &friendly);
         assert_eq!(
             keeping.read,
             friendly.len(),
