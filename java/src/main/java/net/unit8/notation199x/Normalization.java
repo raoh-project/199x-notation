@@ -37,23 +37,27 @@ public final class Normalization {
     /** The four normalization forms. */
     public enum Form {
         /** Canonical decomposition, then canonical composition. */
-        NFC(false, true, NormalizationTables.NFC_TRIVIAL_LIMIT),
+        NFC(false, true, NormalizationTables.NFC_TRIVIAL_LIMIT, 1),
         /** Canonical decomposition. */
-        NFD(false, false, NormalizationTables.NFD_TRIVIAL_LIMIT),
+        NFD(false, false, NormalizationTables.NFD_TRIVIAL_LIMIT, 2),
         /** Compatibility decomposition, then canonical composition. */
-        NFKC(true, true, NormalizationTables.NFKC_TRIVIAL_LIMIT),
+        NFKC(true, true, NormalizationTables.NFKC_TRIVIAL_LIMIT, 4),
         /** Compatibility decomposition. */
-        NFKD(true, false, NormalizationTables.NFKD_TRIVIAL_LIMIT);
+        NFKD(true, false, NormalizationTables.NFKD_TRIVIAL_LIMIT, 8);
 
         private final boolean compatibility;
         private final boolean composes;
-        /** Text made only of code points below this is its own normalization in the form. */
+        /** Every code point below this is a stable starter of the form, which is known without
+         *  asking a table. */
         private final int trivialLimit;
+        /** The form's bit of {@link NormalizationTables#STABLE_PAGES}. */
+        private final int stableBit;
 
-        Form(boolean compatibility, boolean composes, int trivialLimit) {
+        Form(boolean compatibility, boolean composes, int trivialLimit, int stableBit) {
             this.compatibility = compatibility;
             this.composes = composes;
             this.trivialLimit = trivialLimit;
+            this.stableBit = stableBit;
         }
     }
 
@@ -88,13 +92,13 @@ public final class Normalization {
      * is found out before that much is built, so a caller that has a bound on a text's length can ask
      * for the answer without asking for more than the bound.
      *
-     * <p>Text made only of code points below the form's trivial limit is its own normalization, so it
-     * is answered with itself, as long as it is. Other text is normalized from the last code point
-     * below the limit before the first one that is not, and what comes before that is kept as it is.
-     * It is its own normalization, and nothing from there on reaches back into it: the code point
-     * there is a starter that composes with nothing before it, and a starter blocks every mark after
-     * it from composing with a starter before it. That code point itself is normalized with the rest,
-     * since what follows it may compose with it.
+     * <p>Text that is its own normalization is answered with itself. The text is read a code point at
+     * a time and is kept as it is up to the first code point that is not a stable starter of the form:
+     * a starter whose quick check for the form is Yes ({@link NormalizationTables#STABLE_PAGES}). From
+     * the stable starter before that one, which what follows it may compose with, the algorithm is run
+     * up to the next stable starter, and the text is kept as it is again from there. A stable starter
+     * composes with nothing before it and blocks every mark after it from reaching a starter before
+     * it, so what comes before it is settled when it is read.
      *
      * @param form    the normalization form
      * @param s       the text, a sequence of scalar values
@@ -126,25 +130,63 @@ public final class Normalization {
      * {@link #normalizeWithin}, asking {@code checkpoint}, where there is one, before each code point
      * it reads.
      *
-     * <p>The code points below the form's trivial limit are counted as they are read, so that the
-     * text before the one settled from is not read again to count it, and is copied into the answer
-     * only once it has been read.
+     * <p>Two things are kept as the text is read: where the next run the algorithm goes over would
+     * begin, the last stable starter read or, where none has been read since the last such run,
+     * where the text is read to; and how many code points of the answer come before that. A run is
+     * written into the answer only where it changed what it went over, and the answer is made only
+     * once one has: up to there it is the text.
      */
     private static @Nullable String within(Form form, String s, long longest, @Nullable Checkpoint checkpoint) {
-        int last = 0;
-        long beforeLast = 0;
+        // The answer up to kept, where a run has changed what it went over.
+        StringBuilder out = null;
+        int kept = 0;
+        int start = 0;
+        // The code points of the answer before the last run the algorithm went over, and the stable
+        // starters read since, the last of them at start where start is before at.
+        long before = 0;
         long read = 0;
+        Composing composing = null;
         for (int at = 0; at < s.length(); ) {
-            Checkpoints.ask(checkpoint);
-            int cp = s.codePointAt(at);
-            if (cp >= form.trivialLimit) {
-                return normalizeFrom(form, s, last, beforeLast, longest, checkpoint);
+            int stable = stableUpTo(form, s, at, checkpoint);
+            if (stable > at) {
+                read += s.codePointCount(at, stable);
+                start = s.offsetByCodePoints(stable, -1);
+                at = stable;
+                if (at == s.length()) {
+                    break;
+                }
             }
-            last = at;
-            beforeLast = read++;
-            at += Character.charCount(cp);
+            if (start < at) {
+                read--;
+            }
+            if (composing == null) {
+                composing = new Composing(form, longest, checkpoint);
+            }
+            int end = composing.run(s, start, at, false, before + read);
+            if (end < 0) {
+                return null;
+            }
+            if (!composing.wrote(s, start, end)) {
+                if (out == null) {
+                    out = new StringBuilder(Checkpoints.room(checkpoint, Math.min(s.length(), longest)));
+                }
+                out.append(s, kept, start).append(composing.out);
+                kept = end;
+            }
+            before = composing.written;
+            read = 0;
+            start = end;
+            at = end;
         }
-        return read <= longest ? s : null;
+        if (before + read > longest) {
+            return null;
+        }
+        if (out == null) {
+            return s;
+        }
+        out.append(s, kept, s.length());
+        Checkpoints.ask(checkpoint);
+        return out.toString();
     }
 
     /**
@@ -160,45 +202,8 @@ public final class Normalization {
      * text and, in a composing form, longer than the answer.
      */
     static @Nullable String normalizeFromStart(Form form, String s, long longest) {
-        return normalizeFrom(form, s, 0, 0, longest, null);
-    }
-
-    /** {@link #normalizeFromStart}, taking the text before {@code from}, {@code kept} code points
-     *  long, as it is: the caller knows it is its own normalization and that nothing from
-     *  {@code from} on composes into it. */
-    private static @Nullable String normalizeFrom(Form form, String s, int from, long kept, long longest,
-                                                  @Nullable Checkpoint checkpoint) {
-        if (kept > longest) {
-            return null;
-        }
-        long[] inert = form.compatibility ? INERT_IN_COMPATIBILITY : INERT;
-        Composing composing = new Composing(form.composes, longest,
-                Checkpoints.room(checkpoint, Math.min(s.length(), longest)), checkpoint);
-        composing.keep(s, from, kept);
-        for (int at = from; at < s.length(); ) {
-            Checkpoints.ask(checkpoint);
-            int cp = s.codePointAt(at);
-            at += Character.charCount(cp);
-            if (isInert(inert, cp)) {
-                if (!composing.takeInert(cp)) {
-                    return null;
-                }
-                continue;
-            }
-            int[] decomposed = decomposeOne(cp, form.compatibility);
-            if (decomposed == null) {
-                if (!composing.take(cp)) {
-                    return null;
-                }
-            } else {
-                for (int part : decomposed) {
-                    if (!composing.take(part)) {
-                        return null;
-                    }
-                }
-            }
-        }
-        return composing.finish();
+        Composing composing = new Composing(form, longest, null);
+        return composing.run(s, 0, 0, true, 0) < 0 ? null : composing.out.toString();
     }
 
     /** The largest array this asks for; the JDK's portable bound on one. */
@@ -208,48 +213,119 @@ public final class Normalization {
      *  insertion, which is quadratic in the run. */
     private static final int FEW_MARKS = 32;
 
+    /** The most code points one code point decomposes into, in any form, which a decomposition is
+     *  written into room for once. */
+    private static final int LONGEST_DECOMPOSITION = longestDecomposition();
+
+    private static int longestDecomposition() {
+        int longest = 3;
+        for (NormalizationTables.Mapping table : new NormalizationTables.Mapping[] {
+                NormalizationTables.DECOMP, NormalizationTables.COMPAT}) {
+            for (int cp : table.codePoints()) {
+                int[] parts = decomposeOne(cp, true);
+                longest = Math.max(longest, parts == null ? 1 : parts.length);
+            }
+        }
+        return longest;
+    }
+
     /**
      * One pass of canonical ordering and, where the form composes, composition over code points
      * already decomposed, holding the starter of the run it is in and the marks after it, and writing
-     * what is settled. Asks its checkpoint, where it has one, before each held mark it looks at and
-     * before the answer is made a string.
+     * what is settled. Asks its checkpoint, where it has one, before each code point it reads past
+     * where the caller has, and before each held mark it looks at.
      */
     private static final class Composing {
 
+        private final boolean compatibility;
         private final boolean composes;
+        private final int stableBit;
         private final long longest;
+        /** What {@link #run} wrote, the run settled. */
         private final StringBuilder out;
         private final @Nullable Checkpoint checkpoint;
+        private final int[] parts = new int[LONGEST_DECOMPOSITION];
+        /** How many code points of the answer come before what is held: those before the run, and
+         *  those it has written. */
         private long written;
         private int starter = -1;
         private int[] marks = new int[8];
         private int markCount;
 
-        Composing(boolean composes, long longest, int expected, @Nullable Checkpoint checkpoint) {
-            this.composes = composes;
+        Composing(Form form, long longest, @Nullable Checkpoint checkpoint) {
+            this.compatibility = form.compatibility;
+            this.composes = form.composes;
+            this.stableBit = form.stableBit;
             this.longest = longest;
-            this.out = new StringBuilder(expected);
+            this.out = new StringBuilder(Checkpoints.room(checkpoint, 16));
             this.checkpoint = checkpoint;
         }
 
-        /** Writes the text before {@code end}, {@code codePoints} long, as it is: asked before
-         *  anything is taken, of text no longer than {@code longest}. */
-        void keep(String s, int end, long codePoints) {
-            out.append(s, 0, end);
-            written = codePoints;
+        /**
+         * Runs the algorithm over {@code s} from {@code start}, {@code before} code points of the
+         * answer coming before it, up to the first stable starter after {@code at}, or to the end
+         * of the text where {@code whole} or none comes, and writes the run settled into
+         * {@link #out}. The code points from {@code start} to {@code at} are taken, and so is the
+         * one there, whatever they are; the caller has read them, and it is asked about only what
+         * comes after. Answers where it stopped, or -1 where the answer has passed
+         * {@code longest}.
+         */
+        int run(String s, int start, int at, boolean whole, long before) {
+            out.setLength(0);
+            written = before;
+            int j = start;
+            while (j < s.length()) {
+                int cp = s.codePointAt(j);
+                // What is before at has been read, and asked about, by the caller; the stable
+                // starter that ends the run is read by the caller next.
+                if (j > at) {
+                    if (!whole && isStable(stableBit, cp)) {
+                        break;
+                    }
+                    Checkpoints.ask(checkpoint);
+                }
+                j += Character.charCount(cp);
+                int length = decomposeInto(parts, cp, compatibility);
+                if (length == 0) {
+                    if (!take(cp)) {
+                        return -1;
+                    }
+                    continue;
+                }
+                for (int i = 0; i < length; i++) {
+                    if (!take(parts[i])) {
+                        return -1;
+                    }
+                }
+            }
+            return write(settle()) ? j : -1;
+        }
+
+        /** Whether what {@link #run} wrote is what it went over, from {@code start} to {@code end}
+         *  of {@code s}. */
+        boolean wrote(String s, int start, int end) {
+            if (out.length() != end - start) {
+                return false;
+            }
+            for (int i = 0; i < out.length(); i++) {
+                if (out.charAt(i) != s.charAt(start + i)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         /** Takes the next decomposed code point; false where what is written has passed
          *  {@code longest}. */
-        boolean take(int cp) {
+        private boolean take(int cp) {
             if (combiningClass(cp) != 0) {
                 holdMark(cp);
                 return true;
             }
             int kept = settle();
             if (composes && starter >= 0 && kept == 0) {
-                Integer composed = compose(starter, cp);
-                if (composed != null) {
+                int composed = compose(starter, cp);
+                if (composed >= 0) {
                     starter = composed;
                     return true;
                 }
@@ -259,25 +335,6 @@ public final class Normalization {
             }
             starter = cp;
             return true;
-        }
-
-        /** {@link #take} of a code point that is {@link #isInert}: it composes with nothing before it
-         *  and decomposes into nothing, so it ends the run and starts the next, and no table is asked. */
-        boolean takeInert(int cp) {
-            if (!write(settle())) {
-                return false;
-            }
-            starter = cp;
-            return true;
-        }
-
-        /** What is left, once the text has been read; null where it passes {@code longest}. */
-        @Nullable String finish() {
-            if (!write(settle())) {
-                return null;
-            }
-            Checkpoints.ask(checkpoint);
-            return out.toString();
         }
 
         private void holdMark(int cp) {
@@ -305,8 +362,8 @@ public final class Normalization {
                 Checkpoints.ask(checkpoint);
                 int mark = marks[i];
                 int markClass = combiningClass(mark);
-                Integer composed = lastClass < markClass ? compose(starter, mark) : null;
-                if (composed != null) {
+                int composed = lastClass < markClass ? compose(starter, mark) : -1;
+                if (composed >= 0) {
                     starter = composed;
                 } else {
                     marks[kept++] = mark;
@@ -374,6 +431,41 @@ public final class Normalization {
         }
     }
 
+    /** Where the stable starters of {@code form} that {@code s} has from {@code at} end: the first
+     *  code point from there that is not one, or the end of the text. Asks {@code checkpoint} before
+     *  each code point it reads, the one it ends at too. */
+    private static int stableUpTo(Form form, String s, int at, @Nullable Checkpoint checkpoint) {
+        int limit = form.trivialLimit;
+        int bit = form.stableBit;
+        while (at < s.length()) {
+            Checkpoints.ask(checkpoint);
+            // Every form's trivial limit is below the surrogates, so a unit below it is a code point.
+            if (s.charAt(at) < limit) {
+                at++;
+                continue;
+            }
+            int cp = s.codePointAt(at);
+            if (!isStable(bit, cp)) {
+                return at;
+            }
+            at += Character.charCount(cp);
+        }
+        return at;
+    }
+
+    /** Whether {@code cp} is a stable starter of {@code form}: a starter whose quick check for the
+     *  form is Yes. */
+    static boolean isStableStarter(Form form, int cp) {
+        return isStable(form.stableBit, cp);
+    }
+
+    /** Whether {@code cp} is a stable starter of the form whose bit of
+     *  {@link NormalizationTables#STABLE_PAGES} is {@code bit}. */
+    private static boolean isStable(int bit, int cp) {
+        return (NormalizationTables.STABLE_PAGES[(NormalizationTables.STABLE_BLOCKS[cp >>> 8] & 0xFF) << 8
+                | cp & 0xFF] & bit) != 0;
+    }
+
     // ---- Hangul algorithmic decomposition/composition (UAX #15, the Hangul section) ----
 
     private static final int S_BASE = 0xAC00;
@@ -436,6 +528,46 @@ public final class Normalization {
         return full.build().toArray();
     }
 
+    /** Writes {@code cp}'s full decomposition into {@code parts}, which has room for the longest,
+     *  and answers how many code points it is, or 0 where {@code cp} is its own. */
+    private static int decomposeInto(int[] parts, int cp, boolean compatibility) {
+        if (isHangulSyllable(cp)) {
+            int sIndex = cp - S_BASE;
+            parts[0] = L_BASE + sIndex / N_COUNT;
+            parts[1] = V_BASE + (sIndex % N_COUNT) / T_COUNT;
+            int t = T_BASE + sIndex % T_COUNT;
+            if (t == T_BASE) {
+                return 2;
+            }
+            parts[2] = t;
+            return 3;
+        }
+        return decomposeTables(parts, 0, cp, compatibility);
+    }
+
+    /** Writes {@code cp}'s decomposition by the tables, followed as far as they go, into
+     *  {@code parts} from {@code at}, and answers how many code points it is, or 0 where the tables
+     *  name no decomposition of {@code cp}. */
+    private static int decomposeTables(int[] parts, int at, int cp, boolean compatibility) {
+        int[] mapped = lookup(NormalizationTables.DECOMP, cp);
+        if (mapped == null && compatibility) {
+            mapped = lookup(NormalizationTables.COMPAT, cp);
+        }
+        if (mapped == null) {
+            return 0;
+        }
+        int length = 0;
+        for (int part : mapped) {
+            int further = decomposeTables(parts, at + length, part, compatibility);
+            if (further == 0) {
+                parts[at + length] = part;
+                further = 1;
+            }
+            length += further;
+        }
+        return length;
+    }
+
     private static int @Nullable [] lookup(NormalizationTables.Mapping table, int cp) {
         int index = Arrays.binarySearch(table.codePoints(), cp);
         return index >= 0 ? table.mapped()[index] : null;
@@ -445,16 +577,15 @@ public final class Normalization {
      * Unicode's canonical combining class of {@code cp}: 0 for a starter, and for a mark the class
      * canonical ordering sorts it by (UAX #15's Canonical Ordering Behavior section: stable, a mark
      * moving earlier only past marks of a strictly higher class and never past a starter).
-     * {@code CCC_KEYS} holds only non-zero entries (spec of the generator that wrote it), and no
-     * Hangul jamo or syllable is one of them — every one of them is 0 in {@code UnicodeData.txt}
-     * — so a plain table lookup already answers 0 for them without a special case.
+     * No Hangul jamo or syllable has a class other than 0 in {@code UnicodeData.txt}, so the table
+     * answers them without a special case.
      *
      * @param cp a code point
      * @return its canonical combining class, from 0 to 254
      */
     public static int combiningClass(int cp) {
-        int index = Arrays.binarySearch(NormalizationTables.CCC_KEYS, cp);
-        return index >= 0 ? NormalizationTables.CCC_VALUES[index] : 0;
+        return NormalizationTables.CCC_PAGES[(NormalizationTables.CCC_BLOCKS[cp >>> 8] & 0xFF) << 8 | cp & 0xFF]
+                & 0xFF;
     }
 
     // ---- Canonical composition ----
@@ -488,79 +619,22 @@ public final class Normalization {
         COMPOSE_VALUES = pairs.values().stream().mapToInt(Integer::intValue).toArray();
     }
 
-    /** One bit per code point, set for those that are inert in a canonical form: every code point but
-     *  those read off the tables below as having a part in composition or decomposition. */
-    private static final long[] INERT = inertStarters();
-
-    /** {@link #INERT} for a compatibility form: without the code points a compatibility mapping
-     *  decomposes. */
-    private static final long[] INERT_IN_COMPATIBILITY = inertInCompatibility();
-
-    private static long[] inertInCompatibility() {
-        long[] bits = INERT.clone();
-        for (int cp : NormalizationTables.COMPAT.codePoints()) {
-            clear(bits, cp);
-        }
-        return bits;
-    }
-
-    private static long[] inertStarters() {
-        long[] bits = new long[(Character.MAX_CODE_POINT + 1) / Long.SIZE];
-        Arrays.fill(bits, -1L);
-        for (int cp : NormalizationTables.DECOMP.codePoints()) {
-            clear(bits, cp);
-        }
-        // What follows a starter in a composition is the second member of a pair.
-        for (int[] mapped : NormalizationTables.DECOMP.mapped()) {
-            if (mapped.length == 2) {
-                clear(bits, mapped[1]);
-            }
-        }
-        for (int cp : NormalizationTables.CCC_KEYS) {
-            clear(bits, cp);
-        }
-        for (int cp = S_BASE; cp < S_BASE + S_COUNT; cp++) {
-            clear(bits, cp);
-        }
-        for (int cp = V_BASE; cp < V_BASE + V_COUNT; cp++) {
-            clear(bits, cp);
-        }
-        for (int cp = T_BASE; cp < T_BASE + T_COUNT; cp++) {
-            clear(bits, cp);
-        }
-        return bits;
-    }
-
-    private static void clear(long[] bits, int cp) {
-        bits[cp >>> 6] &= ~(1L << cp);
-    }
-
-    /**
-     * Whether {@code cp} is a starter that has no decomposition and is the second member of no
-     * composition, Hangul's included: it composes with nothing before it, and nothing is asked of a
-     * table to know that. Most text in a script written without combining marks is made of them.
-     * {@code inert} is the set for the form, since a compatibility form decomposes more.
-     */
-    private static boolean isInert(long[] inert, int cp) {
-        return (inert[cp >>> 6] & (1L << cp)) != 0;
-    }
-
     private static long pairKey(int starter, int cp) {
         return ((long) starter << 32) | (cp & 0xFFFFFFFFL);
     }
 
-    /** The primary composite of {@code starter} followed by {@code cp}, or {@code null} if the pair
-     *  does not compose — Hangul's algorithmic L+V and LV+T composition, or {@link #COMPOSE_KEYS}. */
-    static @Nullable Integer compose(int starter, int cp) {
-        Integer hangul = composeHangul(starter, cp);
-        if (hangul != null) {
+    /** The primary composite of {@code starter} followed by {@code cp}, or -1 if the pair does not
+     *  compose — Hangul's algorithmic L+V and LV+T composition, or {@link #COMPOSE_KEYS}. */
+    static int compose(int starter, int cp) {
+        int hangul = composeHangul(starter, cp);
+        if (hangul >= 0) {
             return hangul;
         }
         int index = Arrays.binarySearch(COMPOSE_KEYS, pairKey(starter, cp));
-        return index >= 0 ? COMPOSE_VALUES[index] : null;
+        return index >= 0 ? COMPOSE_VALUES[index] : -1;
     }
 
-    private static @Nullable Integer composeHangul(int starter, int cp) {
+    private static int composeHangul(int starter, int cp) {
         if (starter >= L_BASE && starter < L_BASE + L_COUNT && cp >= V_BASE && cp < V_BASE + V_COUNT) {
             int lIndex = starter - L_BASE;
             int vIndex = cp - V_BASE;
@@ -570,6 +644,6 @@ public final class Normalization {
                 && cp > T_BASE && cp < T_BASE + T_COUNT) {
             return starter + (cp - T_BASE);
         }
-        return null;
+        return -1;
     }
 }

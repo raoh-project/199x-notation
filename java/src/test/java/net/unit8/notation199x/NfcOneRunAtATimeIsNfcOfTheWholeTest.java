@@ -89,9 +89,9 @@ class NfcOneRunAtATimeIsNfcOfTheWholeTest {
         int lastClass = -1;
         for (int cp : decomposed) {
             int cpClass = Normalization.combiningClass(cp);
-            Integer composed = starterAt >= 0 && (lastClass < 0 || lastClass < cpClass)
-                    ? Normalization.compose(result[starterAt], cp) : null;
-            if (composed != null) {
+            int composed = starterAt >= 0 && (lastClass < 0 || lastClass < cpClass)
+                    ? Normalization.compose(result[starterAt], cp) : -1;
+            if (composed >= 0) {
                 result[starterAt] = composed;
                 continue;
             }

@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,16 +47,14 @@ class ACaseConversionStopsAtItsBoundTest {
         assertNull(CaseConversion.uppercaseWithin("", Long.MIN_VALUE));
     }
 
+    /** Ten thousand of a ligature that uppercases to three letters, held to ten: what is made is
+     *  room for the bound, and nothing as long as the text or its mapping. */
     @Test
     void nothingPastTheBoundIsWritten() {
-        // Ten thousand of a ligature that uppercases to three letters, held to ten.
         String text = "ﬃ".repeat(10_000);
-        int[] handed = {0};
-        assertFalse(CaseConversion.mapCase(text, false, 10, cp -> handed[0]++));
-        assertEquals(9, handed[0], "three whole mappings, and not a part of the fourth");
-
-        handed[0] = 0;
-        assertTrue(CaseConversion.mapCase("ﬃﬃﬃ", false, 9, cp -> handed[0]++));
-        assertEquals(9, handed[0]);
+        long made = ARuleIsStoppedWhereItIsAskedTest.allocatedBy(
+                () -> assertNull(CaseConversion.uppercaseWithin(text, 10)));
+        assertTrue(made < 10_000, "made " + made + " bytes");
+        assertEquals("FFIFFIFFI", CaseConversion.uppercaseWithin("ﬃﬃﬃ", 9));
     }
 }
