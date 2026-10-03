@@ -43,7 +43,7 @@ func readPattern(text string) (read PatternRead) {
 	w := r.pattern()
 	// Every anchor has to come to something, and what it comes to is settled by where it stands,
 	// which is known now that the whole of the pattern is.
-	m := placeAnchors(w)
+	m := placeAnchors(&w)
 	if m == nil {
 		return PatternRefused{Why: AnAnchorThisCannotPlace, From: 0, Construct: text}
 	}
@@ -53,7 +53,7 @@ func readPattern(text string) (read PatternRead) {
 	}
 	// Counted on what was written, where an anchor is one state whatever it came to, so the count
 	// is never below the states of the machine the meaning builds.
-	if writtenStates(w) > int64(MachineStates.Most()) {
+	if writtenStates(&w) > int64(MachineStates.Most()) {
 		return PatternBeyond{Limit: MachineStates, From: 0, Construct: text}
 	}
 	return &Pattern{compiled: &compiled{meaning: m}}
@@ -62,11 +62,11 @@ func readPattern(text string) (read PatternRead) {
 // open is a choice being read, in a group or at the top: the arms read so far, and the parts of
 // the one being read.
 type open struct {
-	arms, parts []*written
+	arms, parts []written
 }
 
 // arm is the arm being read: an arm of one part is that part, and an arm of none is nothing.
-func (o *open) arm() *written {
+func (o *open) arm() written {
 	switch len(o.parts) {
 	case 0:
 		return meant(nothing)
@@ -78,8 +78,8 @@ func (o *open) arm() *written {
 }
 
 // choice is the choice: a choice of one arm is that arm.
-func (o *open) choice() *written {
-	o.arms = append(o.arms, o.arm())
+func (o *open) choice() written {
+	o.arms = appended(o.arms, o.arm())
 	if len(o.arms) == 1 {
 		return o.arms[0]
 	}
@@ -89,7 +89,7 @@ func (o *open) choice() *written {
 // pattern is the whole text, as what it is written as. A choice is read with a stack of the
 // choices open around it, so a group is a push and its closing bracket a pop, and nothing here
 // recurses.
-func (r *patternReader) pattern() *written {
+func (r *patternReader) pattern() written {
 	var around []*open
 	reading := &open{}
 	for {
@@ -106,7 +106,7 @@ func (r *patternReader) pattern() *written {
 		}
 		if r.peek() == '|' {
 			r.take()
-			reading.arms = append(reading.arms, reading.arm())
+			reading.arms = appended(reading.arms, reading.arm())
 			reading.parts = nil
 			continue
 		}
@@ -133,11 +133,23 @@ func (r *patternReader) pattern() *written {
 // part puts w at the end of the arm being read. A group of nothing is nothing, and is left out so
 // that one written pattern has one tree. An anchor is not one of those: where it stands decides
 // what it comes to.
-func (o *open) part(w *written) {
+func (o *open) part(w written) {
 	if w.kind == meantWritten && w.meaning.kind == nothingMeaning {
 		return
 	}
-	o.parts = append(o.parts, w)
+	o.parts = appended(o.parts, w)
+}
+
+// appended is ws with w after them. A slice of them is made twice as large each time it fills, so
+// that a sequence or a choice as long as the text is copied about once over as it grows: append
+// doubles a short slice too, and grows a long one by a quarter.
+func appended(ws []written, w written) []written {
+	if len(ws) == cap(ws) && cap(ws) >= 256 {
+		grown := make([]written, len(ws), 2*cap(ws))
+		copy(grown, ws)
+		ws = grown
+	}
+	return append(ws, w)
 }
 
 // opened reads a group's opening, plain or (?:, which are the two the grammar has.
@@ -161,7 +173,7 @@ func (r *patternReader) opened() {
 }
 
 // quantified is one with the count written after it, if any.
-func (r *patternReader) quantified(one *written) *written {
+func (r *patternReader) quantified(one written) written {
 	var least, most int
 	r.construct = r.at
 	switch r.peek() {
@@ -212,7 +224,7 @@ func (r *patternReader) quantified(one *written) *written {
 }
 
 // atom is one thing written, other than a group.
-func (r *patternReader) atom() *written {
+func (r *patternReader) atom() written {
 	switch r.peek() {
 	case '[':
 		r.take()
@@ -241,10 +253,10 @@ func (r *patternReader) atom() *written {
 	case endOfText:
 		r.refuse(SomethingUnclosed)
 	}
-	return symbolsWritten(one(r.literal()))
+	return meant(literalMeaning(r.literal()))
 }
 
-func symbolsWritten(held symbols) *written {
+func symbolsWritten(held symbols) written {
 	return meant(&meaning{kind: symbolsMeaning, held: held})
 }
 

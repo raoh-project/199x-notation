@@ -73,22 +73,22 @@ func placeAnchors(w *written) *meaning {
 			// Every arm of a choice begins where the choice begins and ends where it ends.
 			tasks = append(tasks, placement{w: w, atStart: task.atStart, atEnd: task.atEnd, together: true})
 			for at := len(w.parts) - 1; at >= 0; at-- {
-				tasks = append(tasks, placement{w: w.parts[at], atStart: task.atStart, atEnd: task.atEnd})
+				tasks = append(tasks, placement{w: &w.parts[at], atStart: task.atStart, atEnd: task.atEnd})
 			}
 		case inTurnWritten:
 			tasks = append(tasks, placement{w: w, atStart: task.atStart, atEnd: task.atEnd, together: true})
 			sides := sidesOf(w, task.atStart, task.atEnd)
 			for at := len(w.parts) - 1; at >= 0; at-- {
-				tasks = append(tasks, placement{w: w.parts[at], atStart: sides[at][0], atEnd: sides[at][1]})
+				tasks = append(tasks, placement{w: &w.parts[at], atStart: sides[at][0], atEnd: sides[at][1]})
 			}
 		case repeatedWritten:
 			switch {
 			case !w.parts[0].facts.holds:
 				tasks = append(tasks, placement{w: w, atStart: task.atStart, atEnd: task.atEnd, together: true})
-				tasks = append(tasks, placement{w: w.parts[0], atStart: task.atStart, atEnd: task.atEnd})
+				tasks = append(tasks, placement{w: &w.parts[0], atStart: task.atStart, atEnd: task.atEnd})
 			case w.least == 1 && w.most == 1:
 				// One copy is the thing itself and stands where the repetition stands.
-				tasks = append(tasks, placement{w: w.parts[0], atStart: task.atStart, atEnd: task.atEnd})
+				tasks = append(tasks, placement{w: &w.parts[0], atStart: task.atStart, atEnd: task.atEnd})
 			default:
 				// Any other count leaves how many copies come before the anchor to the string.
 				return nil

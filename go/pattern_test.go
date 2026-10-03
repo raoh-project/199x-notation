@@ -828,7 +828,7 @@ func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
 		if w.kind != meantWritten {
 			t.Fatalf("a pattern with no anchor was read as a written of kind %d", w.kind)
 		}
-		if made := testing.AllocsPerRun(10, func() { placeAnchors(w) }); made != 0 {
+		if made := testing.AllocsPerRun(10, func() { placeAnchors(&w) }); made != 0 {
 			t.Fatalf("placing no anchor made %v allocations", made)
 		}
 	}
@@ -840,5 +840,16 @@ func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
 		if part.kind != meantWritten {
 			t.Fatalf("a part holding no anchor beside one was read as a written of kind %d", part.kind)
 		}
+	}
+}
+
+// Reading a character makes nothing of its own: it is a place in the slice of the sequence it is
+// in, and an ASCII character written as itself means what every one of it means. So reading a
+// literal ten times as long makes no more than a few more slices.
+func TestReadingALiteralMakesNothingForEachCharacter(t *testing.T) {
+	short := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat("abcdefghij", 1_000)) })
+	long := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat("abcdefghij", 10_000)) })
+	if long > short+10 {
+		t.Fatalf("a literal of 10,000 characters made %v allocations and one of 100,000 made %v", short, long)
 	}
 }
