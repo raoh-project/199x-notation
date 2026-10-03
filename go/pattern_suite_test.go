@@ -71,3 +71,26 @@ func TestPatternStatesAreCountedAsEveryLineOfTheSuiteSays(t *testing.T) {
 		return ""
 	})
 }
+
+// What building a pattern's machine is made room for before it is built is what it makes: the
+// states, steps and steps for nothing of every pattern of the suite, so that no slice is grown
+// and none is made larger than it is filled.
+func TestAMachineIsBuiltInTheRoomCountedForIt(t *testing.T) {
+	eachLine(t, "pattern-match.txt", 3, func(l *line) string {
+		pattern := l.text(0)
+		// The subject and the answer are what TestPatternsAcceptWhatEveryLineOfTheSuiteSays asks.
+		l.text(1)
+		l.yesOrNo(2)
+		read, ok := ReadPattern(pattern).(*Pattern)
+		if !ok {
+			return ""
+		}
+		size := laidSize{states: 1}.plus(sizeOf(read.compiled.meaning))
+		m := build(read.compiled.meaning)
+		made := laidSize{states: m.size(), steps: len(m.stepTo), frees: len(m.freeTo)}
+		if made != size {
+			return fmt.Sprintf("%s was counted at %+v and made %+v", shown(pattern), size, made)
+		}
+		return ""
+	})
+}

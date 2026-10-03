@@ -458,7 +458,7 @@ func machineOf(t *testing.T, pattern string) *machine {
 	t.Helper()
 	read := ReadPattern(pattern).(*Pattern)
 	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
-	if len(read.compiled.machine.states) < 4 {
+	if read.compiled.machine.size() < 4 {
 		t.Fatalf("%q has too few states", pattern)
 	}
 	return read.compiled.machine
