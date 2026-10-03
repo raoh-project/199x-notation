@@ -120,7 +120,7 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 		after := at + size
 		to := table[pages[int(blocks[r>>8])<<8|int(r&0xFF)]-1].to
 		if lower {
-			if final := finalSigmaMapping.of(r); final != nil {
+			if hasContext(r, contextFinalSigma) {
 				// The sigma is at least one code point of the answer, as every code point is, and
 				// each Case_Ignorable one after it is another.
 				most := -1
@@ -135,7 +135,7 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 					return "", false
 				}
 				if isFinal {
-					to = final
+					to = finalSigmaMapping.of(r)
 				}
 			}
 		}
@@ -216,10 +216,10 @@ func isFinalSigma(s string, at, after, most int) (final, decided bool) {
 	for j := at; j > 0; {
 		r, size := utf8.DecodeLastRuneInString(s[:j])
 		j -= size
-		if caseIgnorableRanges.has(r) {
+		if hasContext(r, contextCaseIgnorable) {
 			continue
 		}
-		precededByCased = casedRanges.has(r)
+		precededByCased = hasContext(r, contextCased)
 		break
 	}
 	if !precededByCased {
@@ -229,14 +229,26 @@ func isFinalSigma(s string, at, after, most int) (final, decided bool) {
 	for j := after; j < len(s); {
 		r, size := utf8.DecodeRuneInString(s[j:])
 		j += size
-		if caseIgnorableRanges.has(r) {
+		if hasContext(r, contextCaseIgnorable) {
 			if skipped == most {
 				return false, false
 			}
 			skipped++
 			continue
 		}
-		return !casedRanges.has(r), true
+		return !hasContext(r, contextCased), true
 	}
 	return true, true
+}
+
+// What caseContextPages holds of a code point, a bit each.
+const (
+	contextCased = 1 << iota
+	contextCaseIgnorable
+	contextFinalSigma
+)
+
+// hasContext is whether caseContextPages holds bit of r.
+func hasContext(r rune, bit uint8) bool {
+	return caseContextPages[int(caseContextBlocks[r>>8])<<8|int(r&0xFF)]&bit != 0
 }

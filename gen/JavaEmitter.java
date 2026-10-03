@@ -83,8 +83,9 @@ final class JavaEmitter {
         out.append("    static final Mapping FINAL_SIGMA = decodeMapping(\"").append(mapping(casing.finalSigma()))
                 .append("\");\n\n");
 
-        caseRanges(out, "CASED", "Cased", casing.cased());
-        caseRanges(out, "CASE_IGNORABLE", "Case_Ignorable", casing.caseIgnorable());
+        paged(out, "CONTEXT", "For each code point, a bit each for what {@code Final_Sigma} asks of it: 1 where"
+                + " it is {@code Cased}, 2 where it is {@code Case_Ignorable}, and 4 where {@link #FINAL_SIGMA}"
+                + " names it.", model.byCodePoint().caseContext(), false);
 
         paged(out, "LOWER", "For each code point, 0 where {@link #LOWER} maps it to itself, and otherwise one more"
                 + " than where it is among {@link #LOWER}'s code points. No code point {@link #FINAL_SIGMA}"
@@ -141,14 +142,6 @@ final class JavaEmitter {
 
             """.stripIndent();
 
-    private static void caseRanges(StringBuilder out, String name, String property, UcdModel.RangeSet ranges) {
-        out.append("    /** {@code ").append(property).append("} (the property Unicode's {@code Final_Sigma}\n");
-        out.append("     *  condition is stated over), as sorted non-overlapping inclusive ranges: index 0 is\n");
-        out.append("     *  starts, index 1 is ends. */\n");
-        out.append("    static final int[][] ").append(name).append(" = decodeRanges(\"")
-                .append(ranges(ranges)).append("\");\n\n");
-    }
-
     private static final String CASE_DECODERS = """
                 /** A code point and the code point(s) it maps to — more than one for a Unicode
                  *  expansion such as {@code ß} → {@code SS}. */
@@ -172,20 +165,6 @@ final class JavaEmitter {
                         mapped[i] = m;
                     }
                     return new Mapping(codePoints, mapped);
-                }
-
-                /** Decodes a "{@code <start>-<end> ...}" string of sorted, non-overlapping inclusive
-                 *  hex ranges into the parallel {@code [starts, ends]} arrays a lookup binary searches. */
-                private static int[][] decodeRanges(String data) {
-                    String[] tokens = data.split(" ");
-                    int[] starts = new int[tokens.length];
-                    int[] ends = new int[tokens.length];
-                    for (int i = 0; i < tokens.length; i++) {
-                        int dash = tokens[i].indexOf('-');
-                        starts[i] = Integer.parseInt(tokens[i].substring(0, dash), 16);
-                        ends[i] = Integer.parseInt(tokens[i].substring(dash + 1), 16);
-                    }
-                    return new int[][] {starts, ends};
                 }
 
             """.stripIndent();
@@ -254,15 +233,28 @@ final class JavaEmitter {
                 + " it: no mark after it is put in order before it or composes with a starter before it, and it"
                 + " composes with nothing before it, since what does is Maybe, which the generator checks.", model.byCodePoint().stableStarters(), false);
 
-        UcdModel.CodePoints exclusions = decomposition.scriptSpecificExclusions();
-        out.append("    /** {@code CompositionExclusions.txt}'s script-specific exclusions (")
-                .append(exclusions.members().size()).append(" code points) — the composition")
-                .append(" eligibility {@code UnicodeData.txt} alone does not decide.")
-                .append(" {@link Normalization#compose} folds the other two")
-                .append(" {@code Full_Composition_Exclusion} categories (singleton and non-starter")
-                .append(" decompositions) in from {@link #DECOMP}/{@link #CCC_PAGES} directly. */\n");
-        out.append("    static final int[] SCRIPT_SPECIFIC_EXCLUSIONS = decodeSortedInts(\"")
-                .append(hexList(exclusions.members())).append("\");\n\n");
+        UcdModel.Composing composing = model.byCodePoint().composing();
+        paged(out, "COMPOSITION_FIRST", "For each code point, 0 where it is the first member of no primary"
+                + " composite, and otherwise one more than its row of {@link #COMPOSITION_CELLS}.",
+                composing.firsts(), true);
+        paged(out, "COMPOSITION_SECOND", "For each code point, 0 where it is the second member of no primary"
+                + " composite, and otherwise one more than its column of {@link #COMPOSITION_CELLS}. A starter"
+                + " before a code point may compose with it by the table where and only where this is not 0.",
+                composing.seconds(), false);
+        docComment(out, "How many second members there are, the length of a row of {@link #COMPOSITION_CELLS}.");
+        out.append("    static final int COMPOSITION_COLUMNS = ").append(composing.columns()).append(";\n\n");
+        if (composing.composites().length > 0xFFFF) {
+            throw new IllegalStateException("COMPOSITION_CELLS does not fit the chars it is written as");
+        }
+        docComment(out, "At {@code row * COMPOSITION_COLUMNS + column}, 0 where the pair does not compose, and"
+                + " otherwise one more than where the composite is in {@link #COMPOSITES}. Hangul's, which are"
+                + " arithmetic, are not here.");
+        out.append("    static final char[] COMPOSITION_CELLS = decodeChars(")
+                .append(literal(packed(composing.cells(), 4), "")).append(");\n\n");
+        docComment(out, "The primary composites, in order of code point (" + composing.composites().length + ").");
+        out.append("    static final int[] COMPOSITES = decodeIntValues(")
+                .append(literal(hexValues(composing.composites())))
+                .append(");\n\n");
 
         out.append("    /** For each form, the least code point that is not a starter or whose quick check for the")
                 .append(" form is not Yes. Text made only of code points below it is its own normalization in")
@@ -310,14 +302,7 @@ final class JavaEmitter {
                     return new Mapping(codePoints, mapped);
                 }
 
-                /** Decodes a space-separated hex-code-point list, sorted, into the keys half of a
-                 *  parallel-array lookup. */
-                private static int[] decodeIntKeys(String data) {
-                    return decodeSortedInts(data);
-                }
-
-                /** Decodes a space-separated hex-value list, in the same order as the keys it is
-                 *  paired with — not sorted itself, since the sort is by key. */
+                /** Decodes a space-separated hex-value list. */
                 private static int[] decodeIntValues(String data) {
                     String[] tokens = data.isEmpty() ? new String[0] : data.split(" ");
                     int[] values = new int[tokens.length];
@@ -325,12 +310,6 @@ final class JavaEmitter {
                         values[i] = Integer.parseInt(tokens[i], 16);
                     }
                     return values;
-                }
-
-                /** Decodes a space-separated, ascending hex-code-point list into a sorted array a
-                 *  lookup can binary search. */
-                private static int[] decodeSortedInts(String data) {
-                    return decodeIntValues(data);
                 }
 
             """.stripIndent();
@@ -456,6 +435,18 @@ final class JavaEmitter {
         out.append(line).append(" */\n");
     }
 
+    /** {@code values} as hex, space separated. */
+    private static String hexValues(int[] values) {
+        StringBuilder sb = new StringBuilder();
+        for (int value : values) {
+            if (!sb.isEmpty()) {
+                sb.append(' ');
+            }
+            sb.append(UcdModel.hex(value));
+        }
+        return sb.toString();
+    }
+
     /** {@code values} as hex, {@code digits} digits each, one after another. */
     private static String packed(int[] values, int digits) {
         StringBuilder sb = new StringBuilder(values.length * digits);
@@ -496,16 +487,5 @@ final class JavaEmitter {
     /** {@code count} code points, in words. */
     private static String codePoints(int count) {
         return count + (count == 1 ? " code point" : " code points");
-    }
-
-    private static String hexList(Iterable<Integer> values) {
-        StringBuilder sb = new StringBuilder();
-        for (Integer value : values) {
-            if (!sb.isEmpty()) {
-                sb.append(' ');
-            }
-            sb.append(UcdModel.hex(value));
-        }
-        return sb.toString();
     }
 }

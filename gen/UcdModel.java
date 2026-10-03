@@ -157,6 +157,9 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      * @param stableStarters for each code point, the forms it is a
      *                       {@linkplain Decomposition#stableStarter stable starter} in, a bit each, in
      *                       the order of {@link #FORMS}: bit 0 NFC, bit 1 NFD, bit 2 NFKC, bit 3 NFKD
+     * @param caseContext    for each code point, a bit each for what the case conversion asks of it
+     *                       besides its mapping: 1 where it is {@link Casing#cased}, 2 where it is
+     *                       {@link Casing#caseIgnorable}, and 4 where {@link Casing#finalSigma} names it
      * @param decomposition  for each code point, 0 where it has no decomposition; where
      *                       {@link Decomposition#canonical} names it, one more than where it is among
      *                       the code points that mapping names, in order of code point; and where
@@ -164,8 +167,26 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      *                       one more than where it is among those compatibility names. No code point
      *                       is named by both
      */
-    record ByCodePoint(PagedTable lower, PagedTable upper, PagedTable combiningClass,
-                       PagedTable stableStarters, PagedTable decomposition) {}
+    record ByCodePoint(PagedTable lower, PagedTable upper, PagedTable caseContext, PagedTable combiningClass,
+                       PagedTable stableStarters, PagedTable decomposition, Composing composing) {}
+
+    /**
+     * The primary composites, as a table a pair of code points indexes in three steps: the row of
+     * the first, the column of the second, and the cell there. Hangul's, which are arithmetic, are
+     * not here.
+     *
+     * @param firsts     for each code point, 0 where it is the first member of no composition, and
+     *                   otherwise one more than its row: where it is among the first members, in order
+     *                   of code point
+     * @param seconds    the same of the second members, by column. A code point is not 0 here where
+     *                   and only where a starter before it may compose with it by the table
+     * @param columns    how many second members there are, the length of a row
+     * @param cells      for each row and column, at {@code row * columns + column}, 0 where the pair
+     *                   does not compose, and otherwise one more than where the composite is among
+     *                   {@code composites}
+     * @param composites the primary composites, in order of code point
+     */
+    record Composing(PagedTable firsts, PagedTable seconds, int columns, int[] cells, int[] composites) {}
 
     /** The four normalization forms, by name, in the order each is a bit of
      *  {@link ByCodePoint#stableStarters}. */
@@ -187,6 +208,21 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      * @param ranges each a {@code [start, end]} pair
      */
     record RangeSet(List<int[]> ranges) {
+
+        /** Whether one of the ranges holds {@code cp}. */
+        boolean contains(int cp) {
+            int low = 0;
+            int high = ranges.size();
+            while (low < high) {
+                int mid = (low + high) >>> 1;
+                if (ranges.get(mid)[1] < cp) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            return low < ranges.size() && ranges.get(low)[0] <= cp;
+        }
 
         RangeSet {
             for (int i = 1; i < ranges.size(); i++) {
@@ -493,7 +529,11 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
             }
         }
         SortedMap<Integer, Integer> ccc = decomposition.combiningClass().entries();
+        SortedSet<Integer> finalSigma = new TreeSet<>(casing.finalSigma().entries().keySet());
         return new ByCodePoint(lower, positions(casing.upper()),
+                PagedTable.of(cp -> (casing.cased().contains(cp) ? 1 : 0)
+                        | (casing.caseIgnorable().contains(cp) ? 2 : 0)
+                        | (finalSigma.contains(cp) ? 4 : 0)),
                 PagedTable.of(cp -> ccc.getOrDefault(cp, 0)),
                 PagedTable.of(cp -> {
                     int forms = 0;
@@ -504,7 +544,38 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
                     }
                     return forms;
                 }),
-                decompositionPositions(decomposition));
+                decompositionPositions(decomposition), composing(derived.compositions()));
+    }
+
+    /** Each of {@code codePoints} by where it is among them, from 0. */
+    private static Map<Integer, Integer> numbered(SortedSet<Integer> codePoints) {
+        Map<Integer, Integer> numbered = new TreeMap<>();
+        for (int cp : codePoints) {
+            numbered.put(cp, numbered.size());
+        }
+        return numbered;
+    }
+
+    /** {@link ByCodePoint#composing}: the first and the second members numbered in order of code
+     *  point, and each pair's cell the composite's place among the composites. */
+    private static Composing composing(CodePointMapping compositions) {
+        SortedSet<Integer> firsts = new TreeSet<>();
+        SortedSet<Integer> seconds = new TreeSet<>();
+        for (int[] pair : compositions.entries().values()) {
+            firsts.add(pair[0]);
+            seconds.add(pair[1]);
+        }
+        Map<Integer, Integer> rows = numbered(firsts);
+        Map<Integer, Integer> columns = numbered(seconds);
+        int[] composites = compositions.entries().keySet().stream().mapToInt(Integer::intValue).toArray();
+        int[] cells = new int[rows.size() * columns.size()];
+        for (int i = 0; i < composites.length; i++) {
+            int[] pair = compositions.entries().get(composites[i]);
+            cells[rows.get(pair[0]) * columns.size() + columns.get(pair[1])] = i + 1;
+        }
+        return new Composing(PagedTable.of(cp -> rows.containsKey(cp) ? rows.get(cp) + 1 : 0),
+                PagedTable.of(cp -> columns.containsKey(cp) ? columns.get(cp) + 1 : 0),
+                columns.size(), cells, composites);
     }
 
     /** {@link ByCodePoint#decomposition}: the canonical decompositions numbered from 1, and the

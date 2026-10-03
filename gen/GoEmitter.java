@@ -49,8 +49,9 @@ final class GoEmitter {
         mapping(out, "finalSigmaMapping",
                 "the lowercase mapping that replaces lowerMapping's at the end of a cased run (Final_Sigma)",
                 casing.finalSigma());
-        ranges(out, "casedRanges", "Cased", casing.cased());
-        ranges(out, "caseIgnorableRanges", "Case_Ignorable", casing.caseIgnorable());
+        paged(out, "caseContext", "for each code point, a bit each for what Final_Sigma asks of it: 1 where it is"
+                + " Cased, 2 where it is Case_Ignorable, and 4 where finalSigmaMapping names it.",
+                model.byCodePoint().caseContext(), "uint8");
         paged(out, "lowerPosition", "for each code point, 0 where lowerMapping maps it to itself, and otherwise one"
                 + " more than where it is in lowerMapping. No code point finalSigmaMapping names is 0.",
                 model.byCodePoint().lower(), "uint16");
@@ -89,12 +90,29 @@ final class GoEmitter {
                 + " and it composes with nothing before it, since what does is Maybe, which the generator"
                 + " checks.", model.byCodePoint().stableStarters(), "uint8");
 
-        out.append("// scriptSpecificExclusions is CompositionExclusions.txt's script-specific exclusions, the\n");
-        out.append("// composition eligibility UnicodeData.txt alone does not decide.\n");
-        out.append("var scriptSpecificExclusions = []rune{\n");
-        for (int cp : decomposition.scriptSpecificExclusions().members()) {
-            out.append('\t').append(code(cp)).append(",\n");
+        UcdModel.Composing composing = model.byCodePoint().composing();
+        paged(out, "compositionFirst", "for each code point, 0 where it is the first member of no primary"
+                + " composite, and otherwise one more than its row of compositionCells.", composing.firsts(), "uint16");
+        paged(out, "compositionSecond", "for each code point, 0 where it is the second member of no primary"
+                + " composite, and otherwise one more than its column of compositionCells. A starter before a"
+                + " code point may compose with it by the table where and only where this is not 0.",
+                composing.seconds(), "uint8");
+        comment(out, "compositionColumns is how many second members there are, the length of a row of"
+                + " compositionCells.");
+        out.append("const compositionColumns = ").append(composing.columns()).append("\n\n");
+        comment(out, "compositionCells is, at row*compositionColumns+column, 0 where the pair does not compose, and"
+                + " otherwise one more than where the composite is in composites. Hangul's, which are"
+                + " arithmetic, are not here.");
+        if (composing.composites().length > 0xFFFF) {
+            throw new IllegalStateException("compositionCells does not fit the array it is written as");
         }
+        out.append("var compositionCells = [").append(composing.cells().length).append("]uint16{\n");
+        values(out, composing.cells(), 4);
+        out.append("}\n\n");
+        comment(out, "composites is the primary composites, in order of code point (" + composing.composites().length
+                + ").");
+        out.append("var composites = [").append(composing.composites().length).append("]rune{\n");
+        values(out, composing.composites(), 5);
         out.append("}\n\n");
 
         out.append("// For each form, the least code point that is not a starter or whose quick check for the\n");

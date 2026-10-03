@@ -52,8 +52,9 @@ final class RustEmitter {
         mapping(out, "FINAL_SIGMA",
                 "The lowercase mapping that replaces `LOWER`'s at the end of a cased run (`Final_Sigma`)",
                 casing.finalSigma());
-        ranges(out, "CASED", "`Cased`", casing.cased());
-        ranges(out, "CASE_IGNORABLE", "`Case_Ignorable`", casing.caseIgnorable());
+        paged(out, "CASE_CONTEXT", "For each code point, a bit each for what `Final_Sigma` asks of it: 1 where it"
+                + " is `Cased`, 2 where it is `Case_Ignorable`, and 4 where `FINAL_SIGMA` names it.",
+                model.byCodePoint().caseContext(), "u8");
         paged(out, "LOWER_POSITION", "For each code point, 0 where `LOWER` maps it to itself, and otherwise one"
                 + " more than where it is in `LOWER`. No code point `FINAL_SIGMA` names is 0.",
                 model.byCodePoint().lower(), "u16");
@@ -90,10 +91,27 @@ final class RustEmitter {
                 + " and it composes with nothing before it, since what does is Maybe, which the generator"
                 + " checks.", model.byCodePoint().stableStarters(), "u8");
 
-        out.append("/// `CompositionExclusions.txt`'s script-specific exclusions, the composition eligibility\n");
-        out.append("/// `UnicodeData.txt` alone does not decide.\n");
-        out.append("pub(crate) static SCRIPT_SPECIFIC_EXCLUSIONS: &[char] = &[\n");
-        for (int cp : decomposition.scriptSpecificExclusions().members()) {
+        UcdModel.Composing composing = model.byCodePoint().composing();
+        paged(out, "COMPOSITION_FIRST", "For each code point, 0 where it is the first member of no primary"
+                + " composite, and otherwise one more than its row of `COMPOSITION_CELLS`.", composing.firsts(), "u16");
+        paged(out, "COMPOSITION_SECOND", "For each code point, 0 where it is the second member of no primary"
+                + " composite, and otherwise one more than its column of `COMPOSITION_CELLS`. A starter before a"
+                + " code point may compose with it by the table where and only where this is not 0.",
+                composing.seconds(), "u8");
+        docComment(out, "How many second members there are, the length of a row of `COMPOSITION_CELLS`.");
+        out.append("pub(crate) const COMPOSITION_COLUMNS: usize = ").append(composing.columns()).append(";\n\n");
+        if (composing.composites().length > 0xFFFF) {
+            throw new IllegalStateException("COMPOSITION_CELLS does not fit the static it is written as");
+        }
+        docComment(out, "At `row * COMPOSITION_COLUMNS + column`, 0 where the pair does not compose, and otherwise"
+                + " one more than where the composite is in `COMPOSITES`. Hangul's, which are arithmetic, are not"
+                + " here.");
+        out.append("pub(crate) static COMPOSITION_CELLS: [u16; ").append(composing.cells().length).append("] = [\n");
+        values(out, composing.cells(), 4);
+        out.append("];\n\n");
+        docComment(out, "The primary composites, in order of code point.");
+        out.append("pub(crate) static COMPOSITES: [char; ").append(composing.composites().length).append("] = [\n");
+        for (int cp : composing.composites()) {
             out.append("    ").append(code(cp)).append(",\n");
         }
         out.append("];\n\n");

@@ -1,9 +1,7 @@
 package notation199x
 
 import (
-	"slices"
 	"strings"
-	"sync"
 	"unicode/utf8"
 )
 
@@ -219,9 +217,8 @@ const fewMarks = 32
 // those it may compose with, which are no more than mostMarksComposed. So a run holds no more than
 // longest and mostMarksComposed marks, whatever the length of the text.
 type composing struct {
-	form         *formFacts
-	compositions map[[2]rune]rune
-	longest      int
+	form    *formFacts
+	longest int
 	// out is what run wrote, the run settled.
 	out []byte
 	// written is how many code points of the answer come before what is held: those before the
@@ -239,7 +236,7 @@ type composing struct {
 }
 
 func newComposing(form *formFacts, longest int) *composing {
-	c := &composing{form: form, compositions: compositionPairs(), longest: longest, starter: -1}
+	c := &composing{form: form, longest: longest, starter: -1}
 	c.out = c.outRoom[:0]
 	c.marks = c.marksRoom[:0]
 	c.parts = c.partsRoom[:0]
@@ -292,7 +289,7 @@ func (c *composing) take(r rune) bool {
 	}
 	kept := c.settle()
 	if c.form.composes && c.starter >= 0 && kept == 0 {
-		if composed, ok := c.compose(c.starter, r); ok {
+		if composed, ok := compose(c.starter, r); ok {
 			c.starter = composed
 			return true
 		}
@@ -331,7 +328,7 @@ func (c *composing) settle() int {
 	for _, mark := range c.marks {
 		class := int(combiningClass(mark))
 		if lastClass < class {
-			if composed, ok := c.compose(c.starter, mark); ok {
+			if composed, ok := compose(c.starter, mark); ok {
 				c.starter = composed
 				continue
 			}
@@ -464,31 +461,9 @@ func combiningClass(r rune) uint8 {
 	return combiningClassPages[int(combiningClassBlocks[r>>8])<<8|int(r&0xFF)]
 }
 
-// compositionPairs is the pair-composition table, worked out the first time the algorithm runs, so
-// that a program that never runs it pays nothing for it.
-var compositionPairs = sync.OnceValue(compositions)
-
-// compositions is the pair-composition table, inverted from canonicalDecomposition rather than
-// kept as a generated table of its own: every two-member canonical decomposition whose first
-// member is a starter and whose result is not a script-specific exclusion. The other two
-// Full_Composition_Exclusion categories, singleton and non-starter decompositions, are read off
-// the decomposition and the combining classes themselves, so decomposition and composition cannot
-// disagree.
-func compositions() map[[2]rune]rune {
-	pairs := make(map[[2]rune]rune)
-	for _, each := range canonicalDecomposition {
-		if len(each.to) == 2 && combiningClass(each.to[0]) == 0 {
-			if _, excluded := slices.BinarySearch(scriptSpecificExclusions, each.from); !excluded {
-				pairs[[2]rune{each.to[0], each.to[1]}] = each.from
-			}
-		}
-	}
-	return pairs
-}
-
 // compose is the primary composite of starter followed by r, and false where the pair does not
-// compose: Hangul's L+V and LV+T, or the table.
-func (c *composing) compose(starter, r rune) (rune, bool) {
+// compose: Hangul's L+V and LV+T, or compositionCells at the row of starter and the column of r.
+func compose(starter, r rune) (rune, bool) {
 	if starter >= hangulLBase && starter < hangulLBase+hangulLCount &&
 		r >= hangulVBase && r < hangulVBase+hangulVCount {
 		return hangulSBase + ((starter-hangulLBase)*hangulVCount+(r-hangulVBase))*hangulTCount, true
@@ -497,6 +472,13 @@ func (c *composing) compose(starter, r rune) (rune, bool) {
 		r > hangulTBase && r < hangulTBase+hangulTCount {
 		return starter + (r - hangulTBase), true
 	}
-	composed, ok := c.compositions[[2]rune{starter, r}]
-	return composed, ok
+	row := int(compositionFirstPages[int(compositionFirstBlocks[starter>>8])<<8|int(starter&0xFF)])
+	column := int(compositionSecondPages[int(compositionSecondBlocks[r>>8])<<8|int(r&0xFF)])
+	if row == 0 || column == 0 {
+		return 0, false
+	}
+	if at := compositionCells[(row-1)*compositionColumns+column-1]; at != 0 {
+		return composites[at-1], true
+	}
+	return 0, false
 }
