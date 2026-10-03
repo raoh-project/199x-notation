@@ -106,7 +106,7 @@ final class MachineTest extends TestCase
             }
         }
         sort($names);
-        $kept = ['bytes', 'first', 'floor', 'keptAccepts', 'keptHashes', 'keptLoop', 'keptNext', 'keptStates', 'slots'];
+        $kept = ['bytes', 'first', 'keptAccepts', 'keptHashes', 'keptLoop', 'keptNext', 'keptStates', 'needed', 'slots'];
         $machine = ['accept', 'freeStart', 'freeTo', 'setRanges', 'setStart', 'sets', 'stepOver', 'stepStart', 'stepTo'];
         $all = array_merge($kept, $machine);
         sort($all);
@@ -227,7 +227,9 @@ final class MachineTest extends TestCase
         self::assertTrue($m->matches('x'));
         self::assertSame(2, self::kept($m));
         self::assertSame(0, self::get($m, 'first'));
-        self::assertGreaterThan(Machine::$knownBytes, self::get($m, 'bytes'));
+        // The two are kept beside the room and take none of it; the steps between them are in it.
+        self::assertGreaterThan(Machine::$knownBytes, self::get($m, 'needed'));
+        self::assertLessThanOrEqual(Machine::$knownBytes, self::get($m, 'bytes'));
         $next = self::get($m, 'keptNext');
         $loops = self::get($m, 'keptLoop');
         self::assertSame([['x' => 1], ['x' => 1]], $next);
@@ -239,6 +241,45 @@ final class MachineTest extends TestCase
         self::assertFalse($m->matches(str_repeat('x', 1000) . 'y'));
         self::assertSame(0, self::get($m, 'first'));
         self::assertTrue($m->matches(str_repeat('x', 1000)));
+    }
+
+    /**
+     * The sets every walk needs take none of the room, so the steps from a set larger than the room
+     * are kept in it as any are, past ASCII as over it: a walk that goes round such a set over a
+     * character of two bytes goes round it by its kept step, and the next walk reads every
+     * character by kept steps and is not frozen. Before, those sets were charged in the room, and
+     * a step from them found room only in a fixed allowance added for them.
+     */
+    public function testStepsFromASetLargerThanTheRoomAreKeptInTheRoom(): void
+    {
+        $was = Machine::$knownBytes;
+        try {
+            // Every character from U+0100 to U+03FF leads the set the walk is in back to itself.
+            // The set a walk starts in and the one it goes round are each larger than the room;
+            // the 768 steps take more than a fixed allowance of 64 KiB and less than the room, and
+            // the subject twice over takes each of them from the set gone round.
+            $distinct = '';
+            for ($c = 0x100; $c < 0x400; $c++) {
+                $distinct .= chr(0xC0 | ($c >> 6)) . chr(0x80 | ($c & 0x3F));
+            }
+            Machine::$knownBytes = 96 << 10;
+            $m = self::machineOf("(?:[\u{100}-\u{3FF}]*){4000}");
+            self::assertTrue($m->matches($distinct . $distinct));
+            self::assertSame(2, self::kept($m));
+            self::assertGreaterThan(Machine::$knownBytes, self::get($m, 'needed'));
+            self::assertLessThanOrEqual(Machine::$knownBytes, self::get($m, 'bytes'));
+            $next = self::get($m, 'keptNext');
+            self::assertIsArray($next);
+            self::assertIsArray($next[1]);
+            self::assertCount(768, $next[1], 'a step from the set larger than the room was not kept');
+            // The next walk reads every character by kept steps, and keeps nothing more.
+            $steps = self::steps($m);
+            self::assertTrue($m->matches($distinct . $distinct));
+            self::assertSame($steps, self::steps($m));
+            self::assertSame(2, self::kept($m));
+        } finally {
+            Machine::$knownBytes = $was;
+        }
     }
 
     /**
@@ -334,8 +375,11 @@ final class MachineTest extends TestCase
             foreach ($cases as $pattern => $subject) {
                 $m = self::machineOf($pattern);
                 $m->matches($subject);
-                $charged = self::get($m, 'bytes');
-                self::assertIsInt($charged);
+                $room = self::get($m, 'bytes');
+                $needed = self::get($m, 'needed');
+                self::assertIsInt($room);
+                self::assertIsInt($needed);
+                $charged = $room + $needed;
                 gc_collect_cycles();
                 $before = memory_get_usage();
                 foreach (['slots', 'keptStates', 'keptHashes', 'keptAccepts', 'keptNext', 'keptLoop'] as $name) {

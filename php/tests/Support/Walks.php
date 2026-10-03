@@ -143,8 +143,8 @@ final class Walks
      * The match of $subject with room for a few of the sets it comes to, $room, which it comes to
      * a new one at most characters of: each run fills the room, forgets the sets, fills it again
      * and is frozen, and walks every character after a state at a time, looking each set up among
-     * those kept. It shows it took the path where the room was filled by two sets or more, which a
-     * run that comes to a new set at most characters leaves so only frozen.
+     * those kept. It shows it took the path where the room was filled, beside the two sets every
+     * walk needs, which a run that comes to a new set at most characters leaves so only frozen.
      *
      * @return array{\Closure(): mixed, \Closure(): ?string}
      */
@@ -157,14 +157,23 @@ final class Walks
             static fn (): bool => $m->matches($subject),
             static function () use ($m, $subject, $room): ?string {
                 $m->matches($subject);
+                // The room holds the sets but those every walk needs, which are kept beside it, so
+                // it is filled where a set as large as the largest kept, its list at most 32 bytes
+                // a state as a list that has doubled, would not fit in what is left.
                 $kept = self::kept($m);
                 $bytes = self::get($m, 'bytes');
                 $states = self::get($m, 'keptStates');
-                $each = is_int($bytes) && $kept > 0 ? intdiv($bytes, $kept) : 0;
-                if ($kept < 2 || !is_int($bytes) || $bytes + 2 * $each <= $room) {
+                if (!is_array($states)) {
+                    return 'no sets';
+                }
+                $largest = 0;
+                foreach ($states as $set) {
+                    $largest = max($largest, is_array($set) ? count($set) : 0);
+                }
+                if ($kept < 3 || !is_int($bytes) || $bytes + 32 * $largest <= $room) {
                     return "it kept $kept sets in " . var_export($bytes, true) . " bytes of $room";
                 }
-                return is_array($states) ? null : 'no sets';
+                return null;
             },
         ];
     }
