@@ -28,13 +28,17 @@ pub fn uppercase(text: &str) -> String {
 }
 
 /// [`lowercase`] where that is no longer than `longest` scalar values, and `None` where it is
-/// longer, which is found out before more than `longest` is written.
+/// longer, which is found out before more than `longest` is written. How much of `text` it reads
+/// turns on `longest` and not on the length of `text`: it reads no further once what it has read
+/// shows the answer to be longer.
 pub fn lowercase_within(text: &str, longest: usize) -> Option<String> {
     map_case(text, true, longest)
 }
 
 /// [`uppercase`] where that is no longer than `longest` scalar values, and `None` where it is
-/// longer, which is found out before more than `longest` is written.
+/// longer, which is found out before more than `longest` is written. How much of `text` it reads
+/// turns on `longest` and not on the length of `text`: it reads no further once what it has read
+/// shows the answer to be longer.
 pub fn uppercase_within(text: &str, longest: usize) -> Option<String> {
     map_case(text, false, longest)
 }
@@ -56,7 +60,10 @@ pub fn uppercase_within(text: &str, longest: usize) -> Option<String> {
 ///
 /// What is bounded is what is written: each code point's mapping is counted before any of it is
 /// written, so the answer never holds more than `longest`, nor part of a mapping that would take it
-/// past.
+/// past. Every code point maps to at least one, which the generator checks, so the text is read no
+/// further than one code point past `longest` either: what maps to itself is gone past up to there,
+/// and [`is_final_sigma`] looks past no more `Case_Ignorable` code points after a sigma than the
+/// answer has room for.
 fn map_case(text: &str, lower: bool, longest: usize) -> Option<String> {
     let (blocks, pages, mappings, ascii) = if lower {
         (
@@ -80,7 +87,8 @@ fn map_case(text: &str, lower: bool, longest: usize) -> Option<String> {
     let mut written: usize = 0;
     let mut at = 0;
     while at < bytes.len() {
-        let (same, count) = same_up_to(text, at, ascii, blocks, pages);
+        let most = (longest - written).saturating_add(1);
+        let (same, count) = same_up_to(text, at, most, ascii, blocks, pages);
         written += count;
         if written > longest {
             return None;
@@ -117,11 +125,15 @@ fn map_case(text: &str, lower: bool, longest: usize) -> Option<String> {
             .expect("same_up_to stops where a character begins");
         let after = at + c.len_utf8();
         let mut mapping = mappings[usize::from(position(blocks, pages, c)) - 1].1;
-        if lower
-            && let Some(final_mapping) = mapped(FINAL_SIGMA, c)
-            && is_final_sigma(text, at, after)
-        {
-            mapping = final_mapping;
+        if lower && let Some(final_mapping) = mapped(FINAL_SIGMA, c) {
+            // The sigma is at least one scalar value of the answer, as every code point is, and
+            // each `Case_Ignorable` one after it is another.
+            if written == longest {
+                return None;
+            }
+            if is_final_sigma(text, at, after, longest - written - 1)? {
+                mapping = final_mapping;
+            }
         }
         if mapping.len() > longest - written {
             return None;
@@ -141,35 +153,42 @@ fn map_case(text: &str, lower: bool, longest: usize) -> Option<String> {
 }
 
 /// Where the code points `text` has from byte `at` that the mapping leaves as they are end: the
-/// first one from there that it changes, or the end of the text; and how many they are.
+/// first one from there that it changes, or the end of the text, or where it has gone past `most`
+/// of them; and how many it went past.
 fn same_up_to(
     text: &str,
     mut at: usize,
+    most: usize,
     ascii: &[i16; 128],
     blocks: &[u8; 4352],
     pages: &[u16],
 ) -> (usize, usize) {
-    let bytes = text.as_bytes();
     let mut count = 0;
-    while at < bytes.len() {
-        let byte = bytes[at];
-        if byte < 0x80 {
-            if ascii[usize::from(byte)] != i16::from(byte) {
-                break;
+    while at < text.len() && count < most {
+        // A code point is a byte or more, so going up to the end of `bytes` goes past no more than
+        // `most` of them, with no count kept against `most` at each; a code point past ASCII can
+        // leave it short, and it goes on from there.
+        let bytes = &text.as_bytes()[..at + (text.len() - at).min(most - count)];
+        while at < bytes.len() {
+            let byte = bytes[at];
+            if byte < 0x80 {
+                if ascii[usize::from(byte)] != i16::from(byte) {
+                    return (at, count);
+                }
+                at += 1;
+                count += 1;
+                continue;
             }
-            at += 1;
+            let c = text[at..]
+                .chars()
+                .next()
+                .expect("a byte that is not ASCII begins a character here");
+            if position(blocks, pages, c) != 0 {
+                return (at, count);
+            }
+            at += c.len_utf8();
             count += 1;
-            continue;
         }
-        let c = text[at..]
-            .chars()
-            .next()
-            .expect("a byte that is not ASCII begins a character here");
-        if position(blocks, pages, c) != 0 {
-            break;
-        }
-        at += c.len_utf8();
-        count += 1;
     }
     (at, count)
 }
@@ -227,17 +246,26 @@ const fn ascii_of(
 /// Unicode's `Final_Sigma` condition of the code point between bytes `at` and `after`: preceded,
 /// skipping `Case_Ignorable` code points, by a `Cased` one, and not followed, skipping the same way,
 /// by another `Cased` one. Looked for as far as the text goes rather than over a window, since what
-/// is skipped is decided by the property and not by a count.
-fn is_final_sigma(text: &str, at: usize, after: usize) -> bool {
+/// is skipped is decided by the property and not by a count. `None` where more than `most`
+/// `Case_Ignorable` code points follow it, which leaves it undecided.
+fn is_final_sigma(text: &str, at: usize, after: usize, most: usize) -> Option<bool> {
     let before = text[..at]
         .chars()
         .rev()
         .find(|c| !within(CASE_IGNORABLE, *c));
     if !before.is_some_and(|c| within(CASED, c)) {
-        return false;
+        return Some(false);
     }
-    let next = text[after..].chars().find(|c| !within(CASE_IGNORABLE, *c));
-    !next.is_some_and(|c| within(CASED, c))
+    // Every code point before the one that decides it is skipped, so `skipped` counts those.
+    for (skipped, c) in text[after..].chars().enumerate() {
+        if !within(CASE_IGNORABLE, c) {
+            return Some(!within(CASED, c));
+        }
+        if skipped == most {
+            return None;
+        }
+    }
+    Some(true)
 }
 
 #[cfg(test)]

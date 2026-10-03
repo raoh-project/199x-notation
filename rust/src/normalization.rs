@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 
 use crate::normalization_tables::{
     CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY, LONGEST_DECOMPOSITION,
-    NFC_TRIVIAL_LIMIT, NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT, NFKD_TRIVIAL_LIMIT,
-    SCRIPT_SPECIFIC_EXCLUSIONS, STABLE_BLOCKS, STABLE_PAGES,
+    MOST_MARKS_COMPOSED, NFC_TRIVIAL_LIMIT, NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT,
+    NFKD_TRIVIAL_LIMIT, SCRIPT_SPECIFIC_EXCLUSIONS, STABLE_BLOCKS, STABLE_PAGES,
 };
 use crate::tables::mapped;
 
@@ -59,12 +59,14 @@ impl Form {
 /// canonically wherever nothing blocks it. The compatibility forms decompose by the compatibility
 /// mappings as well as the canonical ones; composition is canonical in every form.
 pub fn normalize(form: Form, text: &str) -> String {
-    normalize_within(form, text, usize::MAX)
+    normalized::<false>(form, text, usize::MAX)
         .expect("no text is longer than usize::MAX scalar values")
 }
 
 /// [`normalize`] where the answer is no longer than `longest` scalar values, and `None` where it is
-/// longer, which is found out before more than `longest` is written.
+/// longer, which is found out before more than `longest` is written. What it holds and how much of
+/// `text` it reads turn on `longest` and not on the length of `text`: it reads no further once what
+/// it has read shows the answer to be longer.
 ///
 /// Text that is its own normalization is answered as it is. The text is read a code point at a time
 /// and kept as it is up to the first code point that is not a stable starter of the form: a starter
@@ -80,11 +82,22 @@ pub fn normalize(form: Form, text: &str) -> String {
 /// answer only where it changed what it went over, and the answer is made only once one has: up to
 /// there it is the text.
 ///
+/// Each stable starter read is at least one scalar value of the answer, as the starter it is or
+/// composed with what follows it, so the text is read no further once those read and those before
+/// them are more than `longest`.
+///
 /// The text is gone over a code point at a time in [`stable_up_to`] and in [`Composing::run`], each
 /// code point once by each at most, and the marks of a run, which may be as many as the text has, in
 /// [`Composing::order`], [`Composing::settle`] and [`Composing::write`], a mark at a time; no other
-/// loop turns on the text. This loop goes once round for each run the algorithm goes over.
+/// loop turns on the text. The loop of [`normalized`] goes once round for each run the algorithm
+/// goes over.
 pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String> {
+    normalized::<true>(form, text, longest)
+}
+
+/// [`normalize_within`], which asks nothing of `longest` before it holds a mark where `BOUNDED` is
+/// false: [`normalize`] does not pay for what only a bound needs.
+fn normalized<const BOUNDED: bool>(form: Form, text: &str, longest: usize) -> Option<String> {
     // The answer up to `kept`, where a run has changed what it went over.
     let mut out: Option<String> = None;
     let mut kept = 0;
@@ -93,12 +106,16 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
     // starters read since, the last of them at `start` where `start` is before `at`.
     let mut before = 0;
     let mut read = 0;
-    let mut composing: Option<Composing> = None;
+    let mut composing: Option<Composing<BOUNDED>> = None;
     let mut at = 0;
     while at < text.len() {
-        let (stable, count, last) = stable_up_to(form, text, at);
+        let most = (longest - before - read).saturating_add(1);
+        let (stable, count, last) = stable_up_to(form, text, at, most);
         if stable > at {
             read += count;
+            if before + read > longest {
+                return None;
+            }
             start = last;
             at = stable;
             if at == text.len() {
@@ -121,9 +138,6 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
         start = end;
         at = end;
     }
-    if before + read > longest {
-        return None;
-    }
     Some(match out {
         None => text.to_string(),
         Some(mut out) => {
@@ -134,32 +148,37 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
 }
 
 /// Where the stable starters of `form` that `text` has from byte `at` end: the first code point from
-/// there that is not one, or the end of the text; how many they are; and where the last of them
-/// begins, which is `at` where there are none.
-fn stable_up_to(form: Form, text: &str, mut at: usize) -> (usize, usize, usize) {
-    let bytes = text.as_bytes();
+/// there that is not one, or the end of the text, or where it has gone past `most` of them; how many
+/// it went past; and where the last of them begins, which is `at` where there are none.
+fn stable_up_to(form: Form, text: &str, mut at: usize, most: usize) -> (usize, usize, usize) {
     let limit = form.trivial_limit();
     let bit = form.stable_bit();
     let mut count = 0;
     let mut last = at;
-    while at < bytes.len() {
-        // Every form's trivial limit is past ASCII, so a byte below 0x80 is a stable starter.
-        if bytes[at] < 0x80 {
+    while at < text.len() && count < most {
+        // A code point is a byte or more, so going up to the end of `bytes` goes past no more than
+        // `most` of them, with no count kept against `most` at each; a code point past ASCII can
+        // leave it short, and it goes on from there.
+        let bytes = &text.as_bytes()[..at + (text.len() - at).min(most - count)];
+        while at < bytes.len() {
+            // Every form's trivial limit is past ASCII, so a byte below 0x80 is a stable starter.
+            if bytes[at] < 0x80 {
+                last = at;
+                at += 1;
+                count += 1;
+                continue;
+            }
+            let c = text[at..]
+                .chars()
+                .next()
+                .expect("a byte that is not ASCII begins a character here");
+            if c >= limit && !is_stable(bit, c) {
+                return (at, count, last);
+            }
             last = at;
-            at += 1;
+            at += c.len_utf8();
             count += 1;
-            continue;
         }
-        let c = text[at..]
-            .chars()
-            .next()
-            .expect("a byte that is not ASCII begins a character here");
-        if c >= limit && !is_stable(bit, c) {
-            break;
-        }
-        last = at;
-        at += c.len_utf8();
-        count += 1;
     }
     (at, count, last)
 }
@@ -173,7 +192,7 @@ fn is_stable(bit: u8, c: char) -> bool {
 /// [`normalize_within`] worked out by the algorithm over the whole of `text`, whatever it is.
 #[cfg(test)]
 fn normalize_whole(form: Form, text: &str, longest: usize) -> Option<String> {
-    let mut composing = Composing::new(form, longest);
+    let mut composing = Composing::<true>::new(form, longest);
     composing.run(text, 0, text.len(), 0)?;
     Some(composing.out)
 }
@@ -267,7 +286,13 @@ fn composes_back_into(c: char) -> bool {
 /// or, where nothing is between them, to the starter after it, so a run settled when the next
 /// starter arrives is settled as the whole text's algorithm would settle it. What is held at once
 /// is one run's marks, never the decomposition of the whole text.
-struct Composing {
+///
+/// What is written and the least of the answer what is held can come to are no more than
+/// `longest`, which [`Composing::take`] holds to before it holds another mark: the starter, and the
+/// marks but those it may compose with, which are no more than [`MOST_MARKS_COMPOSED`]. So a run
+/// holds no more than `longest` and [`MOST_MARKS_COMPOSED`] marks, whatever the length of the text.
+/// Where `BOUNDED` is false, `longest` is `usize::MAX`, which no text reaches, and it is not asked.
+struct Composing<const BOUNDED: bool> {
     compatibility: bool,
     composes: bool,
     stable_bit: u8,
@@ -285,8 +310,8 @@ struct Composing {
     parts: Vec<char>,
 }
 
-impl Composing {
-    fn new(form: Form, longest: usize) -> Composing {
+impl<const BOUNDED: bool> Composing<BOUNDED> {
+    fn new(form: Form, longest: usize) -> Composing<BOUNDED> {
         Composing {
             compatibility: form.compatibility(),
             composes: form.composes(),
@@ -329,6 +354,9 @@ impl Composing {
     /// Takes the next decomposed code point; `None` where what is written has passed `longest`.
     fn take(&mut self, c: char) -> Option<()> {
         if combining_class(c) != 0 {
+            if BOUNDED && self.least_held(self.marks.len() + 1) > self.longest - self.written {
+                return None;
+            }
             self.marks.push(c);
             return Some(());
         }
@@ -343,6 +371,19 @@ impl Composing {
         self.write()?;
         self.starter = Some(c);
         Some(())
+    }
+
+    /// The least number of scalar values of the answer the starter held and `marks` marks after it
+    /// come to, whatever follows: every mark, and the starter, but those of the marks it may compose
+    /// with in a composing form.
+    fn least_held(&self, marks: usize) -> usize {
+        if self.starter.is_none() {
+            return marks;
+        }
+        if self.composes {
+            return 1 + marks.saturating_sub(MOST_MARKS_COMPOSED);
+        }
+        1 + marks
     }
 
     /// Puts the held marks in canonical order and, where the form composes, composes into the
@@ -802,7 +843,7 @@ mod tests {
         ];
         let mut seed = 1u64;
         for length in 2..200 {
-            let mut composing = Composing::new(Form::Nfd, usize::MAX);
+            let mut composing = Composing::<false>::new(Form::Nfd, usize::MAX);
             for _ in 0..length {
                 seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
                 composing
