@@ -90,7 +90,9 @@ public final class Normalization {
     /**
      * {@link #normalize}, or null where the answer is longer than {@code longest} code points — which
      * is found out before that much is built, so a caller that has a bound on a text's length can ask
-     * for the answer without asking for more than the bound.
+     * for the answer without asking for more than the bound. What it holds and how much of {@code s}
+     * it reads turn on {@code longest} and not on the length of {@code s}: it reads no further once
+     * what it has read shows the answer to be longer.
      *
      * <p>Text that is its own normalization is answered with itself. The text is read a code point at
      * a time and is kept as it is up to the first code point that is not a stable starter of the form:
@@ -135,6 +137,10 @@ public final class Normalization {
      * where the text is read to; and how many code points of the answer come before that. A run is
      * written into the answer only where it changed what it went over, and the answer is made only
      * once one has: up to there it is the text.
+     *
+     * <p>Each stable starter read is at least one code point of the answer, as the starter it is or
+     * composed with what follows it, so the text is read no further once those read and those before
+     * them are more than {@code longest}.
      */
     private static @Nullable String within(Form form, String s, long longest, @Nullable Checkpoint checkpoint) {
         // The answer up to kept, where a run has changed what it went over.
@@ -147,10 +153,13 @@ public final class Normalization {
         long read = 0;
         Composing composing = null;
         for (int at = 0; at < s.length(); ) {
-            long scanned = stableUpTo(form, s, at, checkpoint);
+            long scanned = stableUpTo(form, s, at, longest - before - read, checkpoint);
             int stable = Scan.end(scanned);
             if (stable > at) {
                 read += Scan.codePoints(scanned, at);
+                if (before + read > longest) {
+                    return null;
+                }
                 start = s.offsetByCodePoints(stable, -1);
                 at = stable;
                 if (at == s.length()) {
@@ -178,9 +187,6 @@ public final class Normalization {
             read = 0;
             start = end;
             at = end;
-        }
-        if (before + read > longest) {
-            return null;
         }
         if (out == null) {
             return s;
@@ -219,6 +225,12 @@ public final class Normalization {
      * already decomposed, holding the starter of the run it is in and the marks after it, and writing
      * what is settled. Asks its checkpoint, where it has one, before each code point it reads past
      * where the caller has, and before each held mark it looks at.
+     *
+     * <p>What is written and the least of the answer what is held can come to are no more than
+     * {@code longest}, which {@link #take} holds to before it holds another mark: the starter, and the
+     * marks but those it may compose with, which are no more than
+     * {@link NormalizationTables#MOST_MARKS_COMPOSED}. So a run holds no more than {@code longest} and
+     * that many marks, whatever the length of the text.
      */
     private static final class Composing {
 
@@ -304,6 +316,9 @@ public final class Normalization {
          *  {@code longest}. */
         private boolean take(int cp) {
             if (combiningClass(cp) != 0) {
+                if (leastHeld(markCount + 1) > longest - written) {
+                    return false;
+                }
                 holdMark(cp);
                 return true;
             }
@@ -320,6 +335,16 @@ public final class Normalization {
             }
             starter = cp;
             return true;
+        }
+
+        /** The least number of code points of the answer the starter held and {@code marks} marks
+         *  after it come to, whatever follows: every mark, and the starter, but those of the marks it
+         *  may compose with in a composing form. */
+        private long leastHeld(long marks) {
+            if (starter < 0) {
+                return marks;
+            }
+            return 1 + (composes ? Math.max(marks - NormalizationTables.MOST_MARKS_COMPOSED, 0) : marks);
         }
 
         private void holdMark(int cp) {
@@ -417,31 +442,43 @@ public final class Normalization {
     }
 
     /** Where the stable starters of {@code form} that {@code s} has from {@code at} end, the first
-     *  code point from there that is not one or the end of the text, and how many of them are past
-     *  the basic plane, as a {@link Scan}. Asks {@code checkpoint} before each code point it reads,
-     *  the one it ends at too. */
-    private static long stableUpTo(Form form, String s, int at, @Nullable Checkpoint checkpoint) {
+     *  code point from there that is not one or the end of the text, or where it has gone past more
+     *  than {@code room} of them, and how many of them are past the basic plane, as a {@link Scan}.
+     *  Asks {@code checkpoint} before each code point it reads, the one it ends at too. */
+    private static long stableUpTo(Form form, String s, int at, long room, @Nullable Checkpoint checkpoint) {
         int limit = form.trivialLimit;
         int bit = form.stableBit;
+        int from = at;
         int pairs = 0;
-        while (at < s.length()) {
-            Checkpoints.ask(checkpoint);
-            // Every form's trivial limit is below the surrogates, which the generator checks, so a
-            // unit below it is a code point.
-            if (s.charAt(at) < limit) {
-                at++;
-                continue;
+        while (at < s.length() && at - from - pairs <= room) {
+            int stop = stop(s, at, room - (at - from - pairs));
+            while (at < stop) {
+                Checkpoints.ask(checkpoint);
+                // Every form's trivial limit is below the surrogates, which the generator checks, so
+                // a unit below it is a code point.
+                if (s.charAt(at) < limit) {
+                    at++;
+                    continue;
+                }
+                int cp = s.codePointAt(at);
+                if (!isStable(bit, cp)) {
+                    return Scan.of(at, pairs);
+                }
+                if (cp > Character.MAX_VALUE) {
+                    pairs++;
+                }
+                at += Character.charCount(cp);
             }
-            int cp = s.codePointAt(at);
-            if (!isStable(bit, cp)) {
-                break;
-            }
-            if (cp > Character.MAX_VALUE) {
-                pairs++;
-            }
-            at += Character.charCount(cp);
         }
         return Scan.of(at, pairs);
+    }
+
+    /** How far a scan of {@code s} from {@code at}, which is to go past no more than {@code room}
+     *  code points and one more, can go without counting them: a code point is a unit or two, so up
+     *  to there it goes past no more than that. A code point past the basic plane can leave it
+     *  short, and the scan counts what it went past and goes on. */
+    static int stop(String s, int at, long room) {
+        return room < s.length() - at ? at + (int) room + 1 : s.length();
     }
 
     /** Whether {@code cp} is a stable starter of {@code form}: a starter whose quick check for the
