@@ -18,54 +18,14 @@ package notation199x
 // machine. Counted up to one past the limit and no further, so a count as large as the reader
 // reads is multiplied without overflowing.
 //
-// Asked only of a pattern within the nesting depth, so the walk recurses.
+// Counted as each part is read, from its parts' counts (written.states), so nothing walks the tree.
 
 // pastStates is one past the limit: every count above the limit is this.
 var pastStates = int64(MachineStates.Most()) + 1
 
 // writtenStates is the states w comes to as a whole pattern, or pastStates.
 func writtenStates(w *written) int64 {
-	return plusStates(1, statesIn(w))
-}
-
-func statesIn(w *written) int64 {
-	switch w.kind {
-	case meantWritten:
-		return meaningStatesIn(w.meaning)
-	case anchorWritten:
-		return 1
-	case inTurnWritten:
-		var sum int64
-		for _, part := range w.parts {
-			sum = plusStates(sum, statesIn(part))
-		}
-		return sum
-	case eitherOfWritten:
-		sum := int64(1)
-		for _, arm := range w.parts {
-			sum = plusStates(sum, plusStates(1, statesIn(arm)))
-		}
-		return sum
-	case repeatedWritten:
-		return repeatedStates(statesIn(w.parts[0]), w.least, w.most)
-	default:
-		unreachable("written", uint8(w.kind))
-		return 0
-	}
-}
-
-// meaningStatesIn is the states of a meaning the reader holds before the anchors are placed,
-// which is a set of symbols or nothing.
-func meaningStatesIn(m *meaning) int64 {
-	switch m.kind {
-	case nothingMeaning:
-		return 0
-	case symbolsMeaning:
-		return 1
-	default:
-		unreachable("meaning the reader writes", uint8(m.kind))
-		return 0
-	}
+	return plusStates(1, w.states)
 }
 
 // repeatedStates is a repetition of a body of body states: its copies, and the state it ends in.

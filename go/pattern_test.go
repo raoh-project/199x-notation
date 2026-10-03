@@ -817,3 +817,28 @@ func TestOnlyTheMatchsDecisionForgetsTheKeptSets(t *testing.T) {
 		}
 	}
 }
+
+// A pattern with no anchor is its meaning once it is read, and placing its anchors makes nothing:
+// every part was read as what it means. Around an anchor, only the parts that hold it are left to
+// place, and a part beside it that holds none is its meaning already.
+func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
+	for _, text := range []string{strings.Repeat("ab|[c-e]x?", 100) + "(?:f|g)*h{2,3}",
+		strings.Repeat("abc", 100) + "(?:d|e)*"} {
+		w := (&patternReader{text: text}).pattern()
+		if w.kind != meantWritten {
+			t.Fatalf("a pattern with no anchor was read as a written of kind %d", w.kind)
+		}
+		if made := testing.AllocsPerRun(10, func() { placeAnchors(w) }); made != 0 {
+			t.Fatalf("placing no anchor made %v allocations", made)
+		}
+	}
+	anchored := (&patternReader{text: "^(?:ab|c)*d$"}).pattern()
+	if anchored.kind != inTurnWritten || len(anchored.parts) != 4 {
+		t.Fatalf("^(?:ab|c)*d$ was read as %+v", anchored)
+	}
+	for _, part := range anchored.parts[1:3] {
+		if part.kind != meantWritten {
+			t.Fatalf("a part holding no anchor beside one was read as a written of kind %d", part.kind)
+		}
+	}
+}

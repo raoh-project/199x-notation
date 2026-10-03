@@ -73,7 +73,7 @@ func (o *open) arm() *written {
 	case 1:
 		return o.parts[0]
 	default:
-		return &written{kind: inTurnWritten, parts: o.parts}
+		return inTurnOf(o.parts)
 	}
 }
 
@@ -83,7 +83,7 @@ func (o *open) choice() *written {
 	if len(o.arms) == 1 {
 		return o.arms[0]
 	}
-	return &written{kind: eitherOfWritten, parts: o.arms}
+	return eitherOfOf(o.arms)
 }
 
 // pattern is the whole text, as what it is written as. A choice is read with a stack of the
@@ -208,7 +208,7 @@ func (r *patternReader) quantified(one *written) *written {
 		r.take()
 		r.refuse(APossessiveRepetition)
 	}
-	return &written{kind: repeatedWritten, parts: []*written{one}, least: least, most: most}
+	return repeatedOf(one, least, most)
 }
 
 // atom is one thing written, other than a group.
@@ -229,7 +229,7 @@ func (r *patternReader) atom() *written {
 	case '^', '$':
 		end := r.peek() == '$'
 		r.take()
-		return &written{kind: anchorWritten, end: end}
+		return anchorOf(end)
 	case '{':
 		// A brace that begins no count. Read as an ordinary character it would be a pattern
 		// meaning one thing here and a count wherever a digit followed it.
