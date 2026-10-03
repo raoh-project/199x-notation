@@ -2,11 +2,11 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::normalization_tables::{
-    CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY, LONGEST_DECOMPOSITION,
+    CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY,
+    DECOMPOSITION_POSITION_BLOCKS, DECOMPOSITION_POSITION_PAGES, LONGEST_DECOMPOSITION,
     MOST_MARKS_COMPOSED, NFC_TRIVIAL_LIMIT, NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT,
     NFKD_TRIVIAL_LIMIT, SCRIPT_SPECIFIC_EXCLUSIONS, STABLE_BLOCKS, STABLE_PAGES,
 };
-use crate::tables::mapped;
 
 /// The four normalization forms of UAX #15.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -260,7 +260,7 @@ fn canonical_head(c: char) -> char {
     if let Some([Some(leading), ..]) = decompose_hangul(c) {
         return leading;
     }
-    match mapped(CANONICAL, c) {
+    match decomposition_of(c, false) {
         Some(mapping) => canonical_head(mapping[0]),
         None => c,
     }
@@ -487,6 +487,22 @@ const fn combining_class(c: char) -> u8 {
     COMBINING_CLASS_PAGES[(COMBINING_CLASS_BLOCKS[c >> 8] as usize) << 8 | c & 0xFF]
 }
 
+/// `c`'s one-step decomposition by [`CANONICAL`], or where `compatibility` by [`COMPATIBILITY`] as
+/// well, read where [`DECOMPOSITION_POSITION_PAGES`] says it is; `None` where it has none.
+fn decomposition_of(c: char, compatibility: bool) -> Option<&'static [char]> {
+    let cp = c as usize;
+    let at = usize::from(
+        DECOMPOSITION_POSITION_PAGES
+            [usize::from(DECOMPOSITION_POSITION_BLOCKS[cp >> 8]) << 8 | cp & 0xFF],
+    );
+    match at {
+        0 => None,
+        at if at <= CANONICAL.len() => Some(CANONICAL[at - 1].1),
+        at if compatibility => Some(COMPATIBILITY[at - CANONICAL.len() - 1].1),
+        _ => None,
+    }
+}
+
 /// Pushes `c`'s full decomposition onto `parts`: Hangul's arithmetic, or the tables followed until
 /// nothing decomposes further, the compatibility mappings as well as the canonical ones where
 /// `compatibility`. A code point with none is its own.
@@ -495,14 +511,7 @@ fn decompose_into(parts: &mut Vec<char>, c: char, compatibility: bool) {
         parts.extend(jamo.into_iter().flatten());
         return;
     }
-    let mapping = mapped(CANONICAL, c).or_else(|| {
-        if compatibility {
-            mapped(COMPATIBILITY, c)
-        } else {
-            None
-        }
-    });
-    match mapping {
+    match decomposition_of(c, compatibility) {
         Some(mapping) => {
             for &part in mapping {
                 decompose_into(parts, part, compatibility);
@@ -645,6 +654,7 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::tables::mapped;
     use std::format;
     use std::vec;
 
@@ -720,6 +730,14 @@ mod tests {
                 let stated = classes[cp] == 0 && not_yes[cp] & form.stable_bit() == 0;
                 assert_eq!(is_stable(form.stable_bit(), c), stated, "{c:?} in {form:?}");
             }
+            // The table of where each decomposition is answers what the searched mappings do.
+            let canonical = mapped(CANONICAL, c);
+            assert_eq!(decomposition_of(c, false), canonical, "{c:?}");
+            assert_eq!(
+                decomposition_of(c, true),
+                canonical.or_else(|| mapped(COMPATIBILITY, c)),
+                "{c:?} with compatibility"
+            );
         }
     }
 
