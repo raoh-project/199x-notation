@@ -291,17 +291,16 @@ final class Machine
      *
      * The first time in a walk, the sets kept before are forgotten, but the one a walk starts in
      * (forget), and the set is kept anew: they were kept by walks before this one, and what they
-     * cost says nothing about the subject read now. After that, where the walk read by kept steps at least ten characters for each set it
-     * made since it last forgot them, the sets were worth keeping and are forgotten again. So are
-     * they where the walk made one set since, which with the set it starts in filled the room:
-     * frozen, it would have little to look up, and keeping the next set costs about what walking
-     * it a state at a time does. (?:x*){124998} so keeps the set every x leads to, which is larger
-     * than the room alone (keep), and goes round it. Otherwise keeping them saves nothing, and the
-     * walk is frozen for the rest of the subject: it keeps no more sets and no more steps, so what
-     * it holds grows no further, and it goes a state at a time, looking up each set it comes to
-     * among those kept, so that it takes kept steps again where it comes to one. A walk that keeps
-     * coming to new sets is so walked a state at a time, but for the sets it made before it was
-     * frozen, at most twice the room. The next walk starts keeping sets again.
+     * cost says nothing about the subject read now. A set larger than the room is kept so beside the
+     * set a walk starts in (keep), and (?:x*){124998} goes round the set every x leads to by its
+     * kept step. After that, where the walk read by kept steps at least ten characters for each set
+     * it made since it last forgot them, the sets were worth keeping and are forgotten again.
+     * Otherwise keeping them saves nothing, and the walk is frozen for the rest of the subject: it
+     * keeps no more sets and no more steps, so what it holds grows no further, and it goes a state
+     * at a time, looking up each set it comes to among those kept, so that it takes kept steps
+     * again where it comes to one. A walk that keeps coming to new sets is so walked a state at a
+     * time, but for the sets it made before it was frozen, at most twice the room. The next walk
+     * starts keeping sets again.
      *
      * @param array<int, true> $now
      * @return array{int, bool}
@@ -318,7 +317,7 @@ final class Machine
             $made++;
             return [$set, false];
         }
-        if ($mode === self::KEEPING_AGAIN && $made > 1 && $read < 10 * $made) {
+        if ($mode === self::KEEPING_AGAIN && $read < 10 * $made) {
             $mode = self::FROZEN;
             return [-1, false];
         }
