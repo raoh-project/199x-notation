@@ -54,6 +54,11 @@ final class RustEmitter {
                 casing.finalSigma());
         ranges(out, "CASED", "`Cased`", casing.cased());
         ranges(out, "CASE_IGNORABLE", "`Case_Ignorable`", casing.caseIgnorable());
+        paged(out, "LOWER_POSITION", "For each code point, 0 where `LOWER` maps it to itself, and otherwise one"
+                + " more than where it is in `LOWER`. No code point `FINAL_SIGMA` names is 0.",
+                model.byCodePoint().lower(), "u16");
+        paged(out, "UPPER_POSITION", "For each code point, 0 where `UPPER` maps it to itself, and otherwise one"
+                + " more than where it is in `UPPER`.", model.byCodePoint().upper(), "u16");
         return out.toString();
     }
 
@@ -73,11 +78,14 @@ final class RustEmitter {
                         + " in `CANONICAL` or in neither",
                 decomposition.compatibility());
 
-        out.append("/// The non-zero canonical combining classes, by code point; every other code point's is 0.\n");
-        out.append("pub(crate) static COMBINING_CLASSES: &[(char, u8)] = &[\n");
-        decomposition.combiningClass().entries().forEach((cp, value) ->
-                out.append("    (").append(code(cp)).append(", ").append(value).append("),\n"));
-        out.append("];\n\n");
+        paged(out, "COMBINING_CLASS", "Each code point's canonical combining class, 0 for a starter.",
+                model.byCodePoint().combiningClass(), "u8");
+        paged(out, "STABLE", "For each code point, the forms it is a stable starter in, a bit each: NFC 1, NFD 2,"
+                + " NFKC 4 and NFKD 8. A stable starter is a starter whose quick check for the form is Yes. Text"
+                + " made only of them is its own normalization in the form, and one of them ends what comes"
+                + " before it: no mark after it is put in order before it or composes with a starter before it,"
+                + " and it composes with nothing before it, since what does is Maybe, which the generator"
+                + " checks.", model.byCodePoint().stableStarters(), "u8");
 
         out.append("/// `CompositionExclusions.txt`'s script-specific exclusions, the composition eligibility\n");
         out.append("/// `UnicodeData.txt` alone does not decide.\n");
@@ -158,6 +166,56 @@ final class RustEmitter {
             out.append("    (").append(code(r[0])).append(", ").append(code(r[1])).append("),\n");
         }
         out.append("];\n\n");
+    }
+
+    /**
+     * {@code table} as two statics, {@code <NAME>_BLOCKS} and {@code <NAME>_PAGES}, the pages'
+     * values of type {@code type}: the value of {@code c} is at
+     * {@code <NAME>_PAGES[usize::from(<NAME>_BLOCKS[c as usize >> 8]) << 8 | c as usize & 0xFF]}.
+     */
+    private static void paged(StringBuilder out, String name, String what, PagedTable table, String type) {
+        long most = type.equals("u8") ? 0xFF : 0xFFFF;
+        if (table.pages().size() > 0x100 || table.greatest() > most) {
+            throw new IllegalStateException(name + " does not fit the statics it is written as");
+        }
+        docComment(out, what + " The value of `c` is at `" + name + "_PAGES[usize::from(" + name + "_BLOCKS[c as usize >> "
+                + PagedTable.SHIFT + "]) << " + PagedTable.SHIFT + " | c as usize & 0x"
+                + UcdModel.hex(PagedTable.PAGE - 1) + "]`: each block of " + PagedTable.PAGE + " code points has"
+                + " the page of its values, and blocks that hold the same values share one ("
+                + table.pages().size() + " pages).");
+        out.append("pub(crate) static ").append(name).append("_BLOCKS: [u8; ").append(table.blocks().length)
+                .append("] = [\n");
+        values(out, table.blocks(), 2);
+        out.append("];\n\n");
+        int[] values = table.values();
+        out.append("pub(crate) static ").append(name).append("_PAGES: [").append(type).append("; ")
+                .append(values.length).append("] = [\n");
+        values(out, values, type.equals("u8") ? 2 : 4);
+        out.append("];\n\n");
+    }
+
+    /** {@code values} as hex literals of {@code digits} digits, sixteen to a line. */
+    private static void values(StringBuilder out, int[] values, int digits) {
+        for (int i = 0; i < values.length; i += 16) {
+            out.append("    ");
+            for (int j = i; j < Math.min(i + 16, values.length); j++) {
+                out.append(j > i ? " " : "").append(String.format("0x%0" + digits + "X,", values[j]));
+            }
+            out.append('\n');
+        }
+    }
+
+    /** {@code text} as a doc comment, broken between words before the hundredth column. */
+    private static void docComment(StringBuilder out, String text) {
+        StringBuilder line = new StringBuilder("///");
+        for (String word : text.split(" ")) {
+            if (line.length() + 1 + word.length() > 100) {
+                out.append(line).append('\n');
+                line = new StringBuilder("///");
+            }
+            line.append(' ').append(word);
+        }
+        out.append(line).append('\n');
     }
 
     /** {@code text} as line comments, broken between words before the hundredth column. */

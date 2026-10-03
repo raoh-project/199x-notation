@@ -1,7 +1,9 @@
-use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::string::{String, ToString};
 
-use crate::case_tables::{CASE_IGNORABLE, CASED, FINAL_SIGMA, LOWER, UPPER};
+use crate::case_tables::{
+    CASE_IGNORABLE, CASED, FINAL_SIGMA, LOWER, LOWER_POSITION_BLOCKS, LOWER_POSITION_PAGES, UPPER,
+    UPPER_POSITION_BLOCKS, UPPER_POSITION_PAGES,
+};
 use crate::tables::{mapped, within};
 
 /// `text` in lowercase: Unicode 18.0.0's untailored full mapping, from `UnicodeData.txt` and
@@ -39,96 +41,203 @@ pub fn uppercase_within(text: &str, longest: usize) -> Option<String> {
 
 /// The mapped text, or `None` where it is longer than `longest`.
 ///
-/// The text is read once, forward, and the conversion goes over it in this loop, one code point at
-/// a time; the one other loop, in [`Mapped::settle`], goes over code points this one has read.
-/// `Final_Sigma` holds of a sigma with a `Cased` code point before it and none after it, each looked
-/// for past the `Case_Ignorable` code points between. What comes before is carried as the text is
-/// read: whether the last code point that is not `Case_Ignorable` was `Cased`. What comes after is
-/// not known yet where the sigma is read, so a sigma that has a cased code point before it is
-/// pending, and the `Case_Ignorable` code points after it are mapped and held rather than written,
-/// until the next code point that is not `Case_Ignorable`, or the end of the text, decides which
-/// mapping the sigma takes; then the sigma's mapping is written and what was held after it. Only one
-/// is pending at a time, since the code point that decides it is read before another sigma could be.
+/// Text that maps to itself is answered as it is. Otherwise what maps to itself is copied a run at
+/// a time, from `kept`, and the answer is made only once a code point that changes is met. Whether
+/// one does is read off [`LOWER_POSITION_PAGES`] or [`UPPER_POSITION_PAGES`], which answer where its
+/// mapping is as well, and for ASCII off [`ASCII`], read off the same tables.
 ///
-/// What is bounded is what is written and held: each code point's mapping is counted before any of
-/// it is, a pending sigma's once it is decided, so the answer never holds more than `longest`.
-/// Whether the whole answer is within `longest` does not depend on the order the mappings were
-/// counted in.
+/// `Final_Sigma` holds of a sigma with a `Cased` code point before it and none after it, each looked
+/// for past the `Case_Ignorable` code points between, in the text, by [`is_final_sigma`]. A sigma is
+/// not `Case_Ignorable`, so what one sigma looks past another does not, and the looking around all
+/// the sigmas of a text goes over each code point at most twice.
+///
+/// The text is gone over a code point at a time in [`same_up_to`] and in this loop, each code point
+/// by one of them, and around a sigma in [`is_final_sigma`]; no other loop turns on the text.
+///
+/// What is bounded is what is written: each code point's mapping is counted before any of it is
+/// written, so the answer never holds more than `longest`, nor part of a mapping that would take it
+/// past.
 fn map_case(text: &str, lower: bool, longest: usize) -> Option<String> {
-    let mut mapped_text = Mapped {
-        out: String::with_capacity(text.len().min(longest)),
-        written: 0,
-        longest,
-        pending: None,
-        held: Vec::new(),
+    let (blocks, pages, mappings, ascii) = if lower {
+        (
+            &LOWER_POSITION_BLOCKS,
+            &LOWER_POSITION_PAGES[..],
+            LOWER,
+            &ASCII[0],
+        )
+    } else {
+        (
+            &UPPER_POSITION_BLOCKS,
+            &UPPER_POSITION_PAGES[..],
+            UPPER,
+            &ASCII[1],
+        )
     };
-    let mut cased_before = false;
-    for c in text.chars() {
-        let ignorable = within(CASE_IGNORABLE, c);
-        if !ignorable && let Some(sigma) = mapped_text.pending.take() {
-            mapped_text.settle(sigma, !within(CASED, c))?;
-        }
-        if lower && cased_before && mapped(FINAL_SIGMA, c).is_some() {
-            mapped_text.pending = Some(c);
-        } else {
-            mapped_text.put(mapped(if lower { LOWER } else { UPPER }, c), c)?;
-        }
-        if !ignorable {
-            cased_before = within(CASED, c);
-        }
-    }
-    if let Some(sigma) = mapped_text.pending.take() {
-        mapped_text.settle(sigma, true)?;
-    }
-    Some(mapped_text.out)
-}
-
-/// The answer as it is written: what is written, how many scalar values that and what is held come
-/// to, a sigma whose mapping is not decided yet, and the mappings of the code points after it,
-/// held until it is.
-struct Mapped {
-    out: String,
-    written: usize,
-    longest: usize,
-    pending: Option<char>,
-    held: Vec<char>,
-}
-
-impl Mapped {
-    /// Counts `c`'s `mapping`, or `c` where it has none, and writes it, or holds it where a sigma is
-    /// pending; `None` where that would take the answer past `longest`.
-    fn put(&mut self, mapping: Option<&[char]>, c: char) -> Option<()> {
-        let adding = mapping.map_or(1, <[char]>::len);
-        if adding > self.longest - self.written {
+    let bytes = text.as_bytes();
+    // The answer up to `kept`, where a code point that changes has been met.
+    let mut out: Option<String> = None;
+    let mut kept = 0;
+    let mut written: usize = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        let (same, count) = same_up_to(text, at, ascii, blocks, pages);
+        written += count;
+        if written > longest {
             return None;
         }
-        self.written += adding;
-        // A mapping is at most a few code points, as the table holds it.
-        let mapped = mapping.unwrap_or(core::slice::from_ref(&c));
-        if self.pending.is_some() {
-            self.held.extend_from_slice(mapped);
-        } else {
-            self.out.extend(mapped);
+        at = same;
+        if at == bytes.len() {
+            break;
         }
-        Some(())
+        let out = out.get_or_insert_with(|| String::with_capacity(text.len().min(longest)));
+        out.push_str(&text[kept..at]);
+        if bytes[at] < 0x80 && ascii[usize::from(bytes[at])] >= 0 {
+            // The ASCII from here that changes is written as it is mapped, a character at a time.
+            loop {
+                if written == longest {
+                    return None;
+                }
+                written += 1;
+                out.push(char::from(ascii[usize::from(bytes[at])] as u8));
+                at += 1;
+                if at == bytes.len()
+                    || bytes[at] >= 0x80
+                    || ascii[usize::from(bytes[at])] < 0
+                    || ascii[usize::from(bytes[at])] == i16::from(bytes[at])
+                {
+                    break;
+                }
+            }
+            kept = at;
+            continue;
+        }
+        let c = text[at..]
+            .chars()
+            .next()
+            .expect("same_up_to stops where a character begins");
+        let after = at + c.len_utf8();
+        let mut mapping = mappings[usize::from(position(blocks, pages, c)) - 1].1;
+        if lower
+            && let Some(final_mapping) = mapped(FINAL_SIGMA, c)
+            && is_final_sigma(text, at, after)
+        {
+            mapping = final_mapping;
+        }
+        if mapping.len() > longest - written {
+            return None;
+        }
+        written += mapping.len();
+        out.extend(mapping);
+        kept = after;
+        at = after;
     }
+    Some(match out {
+        None => text.to_string(),
+        Some(mut out) => {
+            out.push_str(&text[kept..]);
+            out
+        }
+    })
+}
 
-    /// Writes a pending sigma's mapping, the final form's where `final_sigma`, and then what was
-    /// held after it one code point at a time; `None` where the sigma's mapping would take the
-    /// answer past `longest`.
-    fn settle(&mut self, sigma: char, final_sigma: bool) -> Option<()> {
-        let mapping = if final_sigma {
-            mapped(FINAL_SIGMA, sigma)
-        } else {
-            mapped(LOWER, sigma)
-        };
-        self.put(mapping, sigma)?;
-        for i in 0..self.held.len() {
-            self.out.push(self.held[i]);
+/// Where the code points `text` has from byte `at` that the mapping leaves as they are end: the
+/// first one from there that it changes, or the end of the text; and how many they are.
+fn same_up_to(
+    text: &str,
+    mut at: usize,
+    ascii: &[i16; 128],
+    blocks: &[u8; 4352],
+    pages: &[u16],
+) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    let mut count = 0;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        if byte < 0x80 {
+            if ascii[usize::from(byte)] != i16::from(byte) {
+                break;
+            }
+            at += 1;
+            count += 1;
+            continue;
         }
-        self.held.clear();
-        Some(())
+        let c = text[at..]
+            .chars()
+            .next()
+            .expect("a byte that is not ASCII begins a character here");
+        if position(blocks, pages, c) != 0 {
+            break;
+        }
+        at += c.len_utf8();
+        count += 1;
     }
+    (at, count)
+}
+
+/// `c`'s value in a position table: 0 where the mapping leaves it as it is, and otherwise one more
+/// than where its mapping is.
+const fn position(blocks: &[u8; 4352], pages: &[u16], c: char) -> u16 {
+    let c = c as usize;
+    pages[(blocks[c >> 8] as usize) << 8 | c & 0xFF]
+}
+
+/// For the lowercase and the uppercase mapping, what each ASCII character maps to where the mapping
+/// makes it one ASCII character and no `Final_Sigma` entry names it, and -1 where the tables are
+/// asked. Read off the tables when the crate is compiled, so that most text is mapped a byte at a
+/// time without a rule of its own about ASCII.
+static ASCII: [[i16; 128]; 2] = [
+    ascii_of(&LOWER_POSITION_BLOCKS, &LOWER_POSITION_PAGES, LOWER, true),
+    ascii_of(&UPPER_POSITION_BLOCKS, &UPPER_POSITION_PAGES, UPPER, false),
+];
+
+const fn ascii_of(
+    blocks: &[u8; 4352],
+    pages: &[u16],
+    mappings: &[(char, &[char])],
+    lower: bool,
+) -> [i16; 128] {
+    let mut out = [-1; 128];
+    let mut byte = 0;
+    while byte < 128 {
+        let c = byte as u8 as char;
+        let at = position(blocks, pages, c);
+        let mut final_sigma = false;
+        let mut i = 0;
+        while lower && i < FINAL_SIGMA.len() {
+            if FINAL_SIGMA[i].0 as u32 == c as u32 {
+                final_sigma = true;
+            }
+            i += 1;
+        }
+        if !final_sigma {
+            if at == 0 {
+                out[byte] = byte as i16;
+            } else {
+                let mapping = mappings[at as usize - 1].1;
+                if mapping.len() == 1 && (mapping[0] as u32) < 0x80 {
+                    out[byte] = mapping[0] as i16;
+                }
+            }
+        }
+        byte += 1;
+    }
+    out
+}
+
+/// Unicode's `Final_Sigma` condition of the code point between bytes `at` and `after`: preceded,
+/// skipping `Case_Ignorable` code points, by a `Cased` one, and not followed, skipping the same way,
+/// by another `Cased` one. Looked for as far as the text goes rather than over a window, since what
+/// is skipped is decided by the property and not by a count.
+fn is_final_sigma(text: &str, at: usize, after: usize) -> bool {
+    let before = text[..at]
+        .chars()
+        .rev()
+        .find(|c| !within(CASE_IGNORABLE, *c));
+    if !before.is_some_and(|c| within(CASED, c)) {
+        return false;
+    }
+    let next = text[after..].chars().find(|c| !within(CASE_IGNORABLE, *c));
+    !next.is_some_and(|c| within(CASED, c))
 }
 
 #[cfg(test)]
@@ -164,9 +273,37 @@ mod tests {
 
     /// Every text of up to six code points over a cased letter, a sigma, a `Case_Ignorable` code
     /// point, one that is both `Cased` and `Case_Ignorable`, one that is neither, and one that maps
-    /// to two, lowercased in one pass and by looking around each sigma, alike and within every bound.
+    /// to two, lowercased and by mapping each code point by the searched tables and looking around
+    /// each sigma, alike and within every bound.
+    /// Each position table answers 0 where the searched mapping has nothing for a code point or
+    /// maps it to itself, and otherwise one more than where the searched mapping holds it; and no
+    /// code point `FINAL_SIGMA` names is 0.
     #[test]
-    fn one_pass_decides_final_sigma_as_looking_around_each_does() {
+    fn a_position_table_answers_where_the_mapping_holds_what_changes() {
+        for (blocks, pages, mapping) in [
+            (&LOWER_POSITION_BLOCKS, &LOWER_POSITION_PAGES[..], LOWER),
+            (&UPPER_POSITION_BLOCKS, &UPPER_POSITION_PAGES[..], UPPER),
+        ] {
+            for c in (0..0x110000).filter_map(char::from_u32) {
+                let index = mapping.binary_search_by_key(&c, |&(from, _)| from);
+                let expected = match index {
+                    Ok(at) if mapping[at].1 != [c] => at + 1,
+                    _ => 0,
+                };
+                assert_eq!(usize::from(position(blocks, pages, c)), expected, "{c:?}");
+            }
+        }
+        for &(c, _) in FINAL_SIGMA {
+            assert_ne!(
+                position(&LOWER_POSITION_BLOCKS, &LOWER_POSITION_PAGES, c),
+                0,
+                "{c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lowercase_is_the_mapping_with_final_sigma_looked_for_around_each_sigma() {
         let alphabet = ['A', 'Σ', '.', '\u{02B0}', ' ', '\u{0130}'];
         assert!(within(CASED, '\u{02B0}') && within(CASE_IGNORABLE, '\u{02B0}'));
         assert!(within(CASE_IGNORABLE, '.') && !within(CASED, '.'));
