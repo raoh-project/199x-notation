@@ -95,6 +95,27 @@ class TheTablesACodePointIndexesAreWhatTheDatabaseStatesTest {
         assertEquals(List.of(), wrong);
     }
 
+    /** The table of where each decomposition is answers what the searched mappings do. */
+    @Test
+    void theDecompositionTableAnswersWhatTheMappingsDo() {
+        List<String> wrong = new ArrayList<>();
+        for (int cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
+            int canonical = Arrays.binarySearch(NormalizationTables.DECOMP.codePoints(), cp);
+            int compatibility = Arrays.binarySearch(NormalizationTables.COMPAT.codePoints(), cp);
+            int[] searched = canonical >= 0 ? NormalizationTables.DECOMP.mapped()[canonical] : null;
+            if (!Arrays.equals(Normalization.decomposition(cp, false), searched)) {
+                wrong.add(Integer.toHexString(cp));
+            }
+            if (searched == null && compatibility >= 0) {
+                searched = NormalizationTables.COMPAT.mapped()[compatibility];
+            }
+            if (!Arrays.equals(Normalization.decomposition(cp, true), searched)) {
+                wrong.add(Integer.toHexString(cp) + " with compatibility");
+            }
+        }
+        assertEquals(List.of(), wrong);
+    }
+
     /** The room a decomposition is written into is the longest one there is, in any form. */
     @Test
     void theRoomForADecompositionIsTheLongestThereIs() {

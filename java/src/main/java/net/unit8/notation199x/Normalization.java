@@ -535,10 +535,7 @@ public final class Normalization {
         if (isHangulSyllable(cp)) {
             return decomposeHangul(cp);
         }
-        int[] mapped = lookup(NormalizationTables.DECOMP, cp);
-        if (mapped == null && compatibility) {
-            mapped = lookup(NormalizationTables.COMPAT, cp);
-        }
+        int[] mapped = decomposition(cp, compatibility);
         if (mapped == null) {
             return null;
         }
@@ -577,10 +574,7 @@ public final class Normalization {
      *  {@code parts} from {@code at}, and answers how many code points it is, or 0 where the tables
      *  name no decomposition of {@code cp}. */
     private static int decomposeTables(int[] parts, int at, int cp, boolean compatibility) {
-        int[] mapped = lookup(NormalizationTables.DECOMP, cp);
-        if (mapped == null && compatibility) {
-            mapped = lookup(NormalizationTables.COMPAT, cp);
-        }
+        int[] mapped = decomposition(cp, compatibility);
         if (mapped == null) {
             return 0;
         }
@@ -596,9 +590,20 @@ public final class Normalization {
         return length;
     }
 
-    private static int @Nullable [] lookup(NormalizationTables.Mapping table, int cp) {
-        int index = Arrays.binarySearch(table.codePoints(), cp);
-        return index >= 0 ? table.mapped()[index] : null;
+    /** {@code cp}'s one-step decomposition by {@link NormalizationTables#DECOMP}, or with
+     *  {@code compatibility} by {@link NormalizationTables#COMPAT} as well, read where
+     *  {@link NormalizationTables#DECOMP_PAGES} says it is; null where it has none. */
+    static int @Nullable [] decomposition(int cp, boolean compatibility) {
+        int at = NormalizationTables.DECOMP_PAGES[(NormalizationTables.DECOMP_BLOCKS[cp >>> 8] & 0xFF) << 8
+                | cp & 0xFF];
+        int canonical = NormalizationTables.DECOMP.mapped().length;
+        if (at == 0) {
+            return null;
+        }
+        if (at <= canonical) {
+            return NormalizationTables.DECOMP.mapped()[at - 1];
+        }
+        return compatibility ? NormalizationTables.COMPAT.mapped()[at - canonical - 1] : null;
     }
 
     /**
