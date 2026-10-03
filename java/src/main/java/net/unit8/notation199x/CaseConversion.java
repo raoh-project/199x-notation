@@ -1,7 +1,6 @@
 package net.unit8.notation199x;
 
 import java.util.Arrays;
-import java.util.function.IntConsumer;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -126,64 +125,145 @@ public final class CaseConversion {
      * of it is, so the answer never holds more than {@code longest}, nor part of a mapping that would
      * take it past.
      *
+     * <p>Text that maps to itself is answered with itself. Otherwise what maps to itself is copied a
+     * run at a time, from {@code kept}, and the answer is made only once a code point that changes
+     * is met. Whether one does is read off {@link CaseTables#LOWER_PAGES} or
+     * {@link CaseTables#UPPER_PAGES}, which answer where its mapping is as well.
+     *
      * <p>With a checkpoint the answer is written into room that grows with it, and is made a string
      * only once the checkpoint has been asked again ({@link Checkpoints}).
      */
     private static @Nullable String mapped(String s, boolean lower, long longest,
                                             @Nullable Checkpoint checkpoint) {
-        StringBuilder out = new StringBuilder(Checkpoints.room(checkpoint, Math.min(s.length(), longest)));
-        if (!mapCase(s, lower, longest, out::appendCodePoint, checkpoint)) {
-            return null;
-        }
-        Checkpoints.ask(checkpoint);
-        return out.toString();
-    }
-
-    /**
-     * Hands each code point of the mapped text to {@code out}, and answers whether all of it was:
-     * false where it is longer than {@code longest}, and then {@code out} has been handed only what
-     * was within it.
-     */
-    static boolean mapCase(String s, boolean lower, long longest, IntConsumer out) {
-        return mapCase(s, lower, longest, out, null);
-    }
-
-    private static boolean mapCase(String s, boolean lower, long longest, IntConsumer out,
-                                   @Nullable Checkpoint checkpoint) {
         // Even the empty text is longer than a negative bound.
         if (longest < 0) {
-            return false;
+            return null;
         }
+        byte[] blocks = lower ? CaseTables.LOWER_BLOCKS : CaseTables.UPPER_BLOCKS;
+        char[] pages = lower ? CaseTables.LOWER_PAGES : CaseTables.UPPER_PAGES;
+        int[][] mappings = (lower ? CaseTables.LOWER : CaseTables.UPPER).mapped();
+        StringBuilder out = null;
+        int kept = 0;
         long written = 0;
+        byte[] ascii = lower ? LOWER_ASCII : UPPER_ASCII;
         for (int at = 0; at < s.length(); ) {
-            Checkpoints.ask(checkpoint);
+            long scanned = sameUpTo(s, at, ascii, blocks, pages, checkpoint);
+            int same = Scan.end(scanned);
+            if (same > at) {
+                written += Scan.codePoints(scanned, at);
+                if (written > longest) {
+                    return null;
+                }
+                at = same;
+                if (at == s.length()) {
+                    break;
+                }
+            }
             int cp = s.codePointAt(at);
             int after = at + Character.charCount(cp);
-            int[] mapped = null;
+            if (cp < 0x80 && ascii[cp] >= 0) {
+                if (out == null) {
+                    out = new StringBuilder(Checkpoints.room(checkpoint, Math.min(s.length(), longest)));
+                }
+                out.append(s, kept, at);
+                // The ASCII from here that changes is written as it is mapped, a character at a time.
+                while (true) {
+                    if (written == longest) {
+                        return null;
+                    }
+                    written++;
+                    out.append((char) ascii[s.charAt(at)]);
+                    at++;
+                    if (at == s.length()) {
+                        break;
+                    }
+                    char next = s.charAt(at);
+                    if (next >= 0x80 || ascii[next] < 0 || ascii[next] == next) {
+                        break;
+                    }
+                    Checkpoints.ask(checkpoint);
+                }
+                kept = at;
+                continue;
+            }
+            int position = pages[(blocks[cp >>> 8] & 0xFF) << 8 | cp & 0xFF];
+            int[] mapped = mappings[position - 1];
             if (lower) {
                 int[] finalSigmaMapped = lookup(CaseTables.FINAL_SIGMA, cp);
                 if (finalSigmaMapped != null && isFinalSigmaContext(s, at, after, checkpoint)) {
                     mapped = finalSigmaMapped;
                 }
             }
-            if (mapped == null) {
-                mapped = lookup(lower ? CaseTables.LOWER : CaseTables.UPPER, cp);
+            if (mapped.length > longest - written) {
+                return null;
             }
-            int adding = mapped == null ? 1 : mapped.length;
-            if (adding > longest - written) {
-                return false;
+            written += mapped.length;
+            if (out == null) {
+                out = new StringBuilder(Checkpoints.room(checkpoint, Math.min(s.length(), longest)));
             }
-            written += adding;
-            if (mapped == null) {
-                out.accept(cp);
-            } else {
-                for (int m : mapped) {
-                    out.accept(m);
-                }
+            out.append(s, kept, at);
+            for (int m : mapped) {
+                out.appendCodePoint(m);
             }
+            kept = after;
             at = after;
         }
-        return true;
+        if (out == null) {
+            return s;
+        }
+        out.append(s, kept, s.length());
+        Checkpoints.ask(checkpoint);
+        return out.toString();
+    }
+
+    /** Where the code points {@code s} has from {@code at} that the mapping leaves as they are end,
+     *  the first one from there that it changes or the end of the text, and how many of them are
+     *  past the basic plane, as a {@link Scan}. Asks {@code checkpoint} before each code point it
+     *  reads, the one it ends at too. */
+    private static long sameUpTo(String s, int at, byte[] ascii, byte[] blocks, char[] pages,
+                                @Nullable Checkpoint checkpoint) {
+        int pairs = 0;
+        while (at < s.length()) {
+            Checkpoints.ask(checkpoint);
+            char c = s.charAt(at);
+            if (c < 0x80) {
+                if (ascii[c] != c) {
+                    break;
+                }
+                at++;
+                continue;
+            }
+            int cp = s.codePointAt(at);
+            if (pages[(blocks[cp >>> 8] & 0xFF) << 8 | cp & 0xFF] != 0) {
+                break;
+            }
+            if (cp > Character.MAX_VALUE) {
+                pairs++;
+            }
+            at += Character.charCount(cp);
+        }
+        return Scan.of(at, pairs);
+    }
+
+    /** For the lowercase mapping, what each ASCII character maps to where the mapping makes it one
+     *  ASCII character and no {@code Final_Sigma} entry names it, and -1 where the tables are asked.
+     *  Read off the tables, so that most text is mapped a unit at a time without a rule of its own
+     *  about ASCII. */
+    private static final byte[] LOWER_ASCII = ascii(CaseTables.LOWER, CaseTables.FINAL_SIGMA);
+
+    /** {@link #LOWER_ASCII} for the uppercase mapping. */
+    private static final byte[] UPPER_ASCII = ascii(CaseTables.UPPER, null);
+
+    private static byte[] ascii(CaseTables.Mapping mapping, CaseTables.@Nullable Mapping finalSigma) {
+        byte[] ascii = new byte[0x80];
+        for (int c = 0; c < 0x80; c++) {
+            int[] mapped = lookup(mapping, c);
+            ascii[c] = finalSigma != null && lookup(finalSigma, c) != null ? -1
+                    : mapped == null ? (byte) c
+                    : mapped.length == 1 && mapped[0] < 0x80 ? (byte) mapped[0]
+                    : -1;
+        }
+        return ascii;
     }
 
     /** Unicode's {@code Final_Sigma} condition of the code point between {@code at} and

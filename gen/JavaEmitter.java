@@ -62,6 +62,7 @@ final class JavaEmitter {
         out.append("final class CaseTables {\n\n");
         out.append("    private CaseTables() {}\n\n");
         out.append(CASE_DECODERS);
+        out.append(PAGED_DECODERS);
 
         for (String[] each : new String[][] {{"LOWER", "lowercase"}, {"UPPER", "uppercase"}}) {
             UcdModel.CodePointMapping mapping = each[0].equals("LOWER") ? casing.lower() : casing.upper();
@@ -85,9 +86,60 @@ final class JavaEmitter {
         caseRanges(out, "CASED", "Cased", casing.cased());
         caseRanges(out, "CASE_IGNORABLE", "Case_Ignorable", casing.caseIgnorable());
 
+        paged(out, "LOWER", "For each code point, 0 where {@link #LOWER} maps it to itself, and otherwise one more"
+                + " than where it is among {@link #LOWER}'s code points. No code point {@link #FINAL_SIGMA}"
+                + " names is 0.", model.byCodePoint().lower(), true);
+        paged(out, "UPPER", "For each code point, 0 where {@link #UPPER} maps it to itself, and otherwise one more"
+                + " than where it is among {@link #UPPER}'s code points.", model.byCodePoint().upper(), true);
+
         out.append("}\n");
         return out.toString();
     }
+
+    /**
+     * {@code table} as two arrays, {@code <name>_BLOCKS} and {@code <name>_PAGES}: the value of
+     * {@code cp} is at {@code (BLOCKS[cp >>> 8] & 0xFF) << 8 | cp & 0xFF} of the pages, a
+     * {@code char} each where {@code wide} and a {@code byte} each otherwise. The decoders it
+     * calls are {@link #PAGED_DECODERS}.
+     */
+    private static void paged(StringBuilder out, String name, String doc, PagedTable table,
+                              boolean wide) {
+        if (table.pages().size() > 0x100 || table.greatest() > (wide ? 0xFFFF : 0xFF)) {
+            throw new IllegalStateException(name + " does not fit the arrays it is written as");
+        }
+        String shift = String.valueOf(PagedTable.SHIFT);
+        String mask = "0x" + UcdModel.hex(PagedTable.PAGE - 1);
+        docComment(out, doc + " Read as {@code " + name + "_PAGES[(" + name + "_BLOCKS[cp >>> " + shift
+                + "] & 0xFF) << " + shift + " | cp & " + mask + "]}: each block of " + PagedTable.PAGE
+                + " code points has the page of its values, and blocks that hold the same values share one ("
+                + table.pages().size() + " pages).");
+        out.append("    static final byte[] ").append(name).append("_BLOCKS = decodeBytes(")
+                .append(literal(packed(table.blocks(), 2), "")).append(");\n");
+        out.append("    static final ").append(wide ? "char" : "byte").append("[] ").append(name)
+                .append("_PAGES = ").append(wide ? "decodeChars(" : "decodeBytes(")
+                .append(literal(packed(table.values(), wide ? 4 : 2), "")).append(");\n\n");
+    }
+
+    private static final String PAGED_DECODERS = """
+                /** Decodes a string of two hex digits a value into the bytes a code point indexes. */
+                private static byte[] decodeBytes(String data) {
+                    byte[] values = new byte[data.length() / 2];
+                    for (int i = 0; i < values.length; i++) {
+                        values[i] = (byte) Integer.parseInt(data, 2 * i, 2 * i + 2, 16);
+                    }
+                    return values;
+                }
+
+                /** Decodes a string of four hex digits a value into the chars a code point indexes. */
+                private static char[] decodeChars(String data) {
+                    char[] values = new char[data.length() / 4];
+                    for (int i = 0; i < values.length; i++) {
+                        values[i] = (char) Integer.parseInt(data, 4 * i, 4 * i + 4, 16);
+                    }
+                    return values;
+                }
+
+            """.stripIndent();
 
     private static void caseRanges(StringBuilder out, String name, String property, UcdModel.RangeSet ranges) {
         out.append("    /** {@code ").append(property).append("} (the property Unicode's {@code Final_Sigma}\n");
@@ -172,6 +224,7 @@ final class JavaEmitter {
         out.append("final class NormalizationTables {\n\n");
         out.append("    private NormalizationTables() {}\n\n");
         out.append(NORMALIZATION_DECODERS);
+        out.append(PAGED_DECODERS);
 
         UcdModel.CodePointMapping canonical = decomposition.canonical();
         out.append("    /** Unicode ").append(version).append("'s one-step canonical decomposition")
@@ -188,12 +241,14 @@ final class JavaEmitter {
         out.append("    static final Mapping COMPAT = decodeMapping(").append(literal(mapping(compatibility)))
                 .append(");\n\n");
 
-        SortedMap<Integer, Integer> ccc = decomposition.combiningClass().entries();
-        out.append("    /** Unicode ").append(version).append("'s non-zero canonical combining classes (")
-                .append(ccc.size()).append(" code points); every other code point's is 0 — a starter. */\n");
-        out.append("    static final int[] CCC_KEYS = decodeIntKeys(\"").append(hexList(ccc.keySet())).append("\");\n");
-        out.append("    static final int[] CCC_VALUES = decodeIntValues(\"").append(hexList(ccc.values()))
-                .append("\");\n\n");
+        paged(out, "CCC", "Unicode " + version + "'s canonical combining class of each code point, 0 for a"
+                + " starter.", model.byCodePoint().combiningClass(), false);
+
+        paged(out, "STABLE", "For each code point, the forms it is a stable starter in, a bit each: NFC 1, NFD 2,"
+                + " NFKC 4 and NFKD 8. A stable starter is a starter whose quick check for the form is Yes. Text"
+                + " made only of them is its own normalization in the form, and one of them ends what comes before"
+                + " it: no mark after it is put in order before it or composes with a starter before it, and it"
+                + " composes with nothing before it, since what does is Maybe, which the generator checks.", model.byCodePoint().stableStarters(), false);
 
         UcdModel.CodePoints exclusions = decomposition.scriptSpecificExclusions();
         out.append("    /** {@code CompositionExclusions.txt}'s script-specific exclusions (")
@@ -201,16 +256,22 @@ final class JavaEmitter {
                 .append(" eligibility {@code UnicodeData.txt} alone does not decide.")
                 .append(" {@link Normalization#compose} folds the other two")
                 .append(" {@code Full_Composition_Exclusion} categories (singleton and non-starter")
-                .append(" decompositions) in from {@link #DECOMP}/{@link #CCC_KEYS} directly. */\n");
+                .append(" decompositions) in from {@link #DECOMP}/{@link #CCC_PAGES} directly. */\n");
         out.append("    static final int[] SCRIPT_SPECIFIC_EXCLUSIONS = decodeSortedInts(\"")
                 .append(hexList(exclusions.members())).append("\");\n\n");
 
         out.append("    /** For each form, the least code point that is not a starter or whose quick check for the")
                 .append(" form is not Yes. Text made only of code points below it is its own normalization in")
                 .append(" that form (UAX #15, the Detecting Normalization Forms section). */\n");
-        decomposition.trivialLimits().forEach((form, limit) ->
-                out.append("    static final int ").append(form).append("_TRIVIAL_LIMIT = 0x")
-                        .append(UcdModel.hex(limit)).append(";\n"));
+        for (String form : UcdModel.FORMS) {
+            out.append("    static final int ").append(form).append("_TRIVIAL_LIMIT = 0x")
+                    .append(UcdModel.hex(decomposition.trivialLimit(form))).append(";\n");
+        }
+
+        out.append("\n    /** The most code points one code point decomposes into fully, in any form: the room a")
+                .append(" decomposition is written into. */\n");
+        out.append("    static final int LONGEST_DECOMPOSITION = ")
+                .append(model.normalizationDerived().longestDecomposition()).append(";\n");
 
         out.append("}\n");
         return out.toString();
@@ -352,17 +413,48 @@ final class JavaEmitter {
      *  class file holds in one constant, several cut between entries and joined again with the space
      *  that was between them. */
     private static String literal(String data) {
+        return literal(data, " ");
+    }
+
+    /** {@code data} as the Java expression for it, cut where it is longer than one constant holds:
+     *  at a space where {@code between} is one, which is joined in again, and anywhere where it is
+     *  empty. */
+    private static String literal(String data, String between) {
         if (data.length() <= LITERAL) {
             return '"' + data + '"';
         }
-        StringBuilder out = new StringBuilder("String.join(\" \"");
+        StringBuilder out = new StringBuilder("String.join(\"").append(between).append('"');
         int from = 0;
         while (from < data.length()) {
-            int to = data.length() - from <= LITERAL ? data.length() : data.lastIndexOf(' ', from + LITERAL);
+            int to = data.length() - from <= LITERAL ? data.length()
+                    : between.isEmpty() ? from + LITERAL : data.lastIndexOf(' ', from + LITERAL);
             out.append(",\n            \"").append(data, from, to).append('"');
-            from = to + 1;
+            from = to + between.length();
         }
         return out.append(')').toString();
+    }
+
+    /** {@code text} as a doc comment of a member, broken between words before the hundredth column. */
+    private static void docComment(StringBuilder out, String text) {
+        StringBuilder line = new StringBuilder("    /**");
+        for (String word : text.split(" ")) {
+            if (line.length() + 1 + word.length() > 100) {
+                out.append(line).append('\n');
+                line = new StringBuilder("     *");
+            }
+            line.append(' ').append(word);
+        }
+        out.append(line).append(" */\n");
+    }
+
+    /** {@code values} as hex, {@code digits} digits each, one after another. */
+    private static String packed(int[] values, int digits) {
+        StringBuilder sb = new StringBuilder(values.length * digits);
+        for (int value : values) {
+            String hex = UcdModel.hex(value);
+            sb.append("0".repeat(digits - hex.length())).append(hex);
+        }
+        return sb.toString();
     }
 
     /** {@code <cp>:<mapped>[+<mapped>...]}, space separated. */

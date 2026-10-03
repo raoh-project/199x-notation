@@ -97,7 +97,27 @@ final class PhpEmitter {
                 .append(escape(pair[1])).append("\" => ").append(character(cp)).append(",\n"));
         out.append("    ];\n\n");
 
-        decomposition.trivialLimits().forEach((form, limit) -> {
+        PagedTable stable = model.byCodePoint().stableStarters();
+        if (stable.pages().size() > 0x100 || stable.greatest() > 0xFF) {
+            throw new IllegalStateException("STABLE does not fit the strings it is written as");
+        }
+        out.append("    /**\n");
+        comment(out, "    ", "For each code point, the forms it is a stable starter in, a bit each: NFC 1, NFD 2, NFKC 4 and"
+                + " NFKD 8, as the byte at ord(STABLE_BLOCKS[$cp >> " + PagedTable.SHIFT + "]) << " + PagedTable.SHIFT
+                + " | $cp & 0x" + UcdModel.hex(PagedTable.PAGE - 1) + " of STABLE_PAGES: each block of "
+                + PagedTable.PAGE + " code points has the page of its values, and blocks that hold the same values"
+                + " share one (" + stable.pages().size() + " pages). A stable starter is a starter whose quick"
+                + " check for the form is Yes. Text made only of them is its own normalization in the form, and"
+                + " one of them ends what comes before it: no mark after it is put in order before it or composes"
+                + " with a starter before it, and it composes with nothing before it, since what does is Maybe,"
+                + " which the generator checks.");
+        out.append("     */\n");
+        out.append("    public const STABLE_BLOCKS = ").append(bytes(stable.blocks())).append(";\n\n");
+        out.append("    /** The pages STABLE_BLOCKS gives each block. */\n");
+        out.append("    public const STABLE_PAGES = ").append(bytes(stable.values())).append(";\n\n");
+
+        for (String form : UcdModel.FORMS) {
+            int limit = decomposition.trivialLimit(form);
             out.append("    /**\n");
             out.append("     * The least code point that is not a starter or whose quick check for ").append(form)
                     .append(" is not Yes.\n");
@@ -105,7 +125,7 @@ final class PhpEmitter {
             out.append("     */\n");
             out.append("    public const ").append(form.toUpperCase(Locale.ROOT)).append("_TRIVIAL_LIMIT = ")
                     .append(code(limit)).append(";\n\n");
-        });
+        }
         return footer(out);
     }
 
@@ -195,14 +215,30 @@ final class PhpEmitter {
         out.append("    ];\n\n");
     }
 
+    /** {@code values}, each a byte, as one PHP string literal of them. One literal rather than lines
+     *  joined with the concatenation operator, which PHPStan works out at a cost that grows past its
+     *  default memory limit. */
+    private static String bytes(int[] values) {
+        StringBuilder out = new StringBuilder("\"");
+        for (int value : values) {
+            out.append(String.format("\\x%02X", value));
+        }
+        return out.append('"').toString();
+    }
+
     /** {@code text} as the lines of a doc comment, broken between words before the hundredth
      *  column. */
     private static void comment(StringBuilder out, String text) {
-        StringBuilder line = new StringBuilder(" *");
+        comment(out, "", text);
+    }
+
+    /** {@link #comment(StringBuilder, String)}, each line after {@code indent}. */
+    private static void comment(StringBuilder out, String indent, String text) {
+        StringBuilder line = new StringBuilder(indent + " *");
         for (String word : text.split(" ")) {
             if (line.length() + 1 + word.length() > 100) {
                 out.append(line).append('\n');
-                line = new StringBuilder(" *");
+                line = new StringBuilder(indent + " *");
             }
             line.append(' ').append(word);
         }

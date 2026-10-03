@@ -157,8 +157,9 @@ final class Walks
     }
 
     /**
-     * The normalization of $s, which shows it is normalized past the trivial limit, a character at
-     * a time, by holding a code point at or above the form's limit.
+     * The normalization of $s, which shows it reads past the trivial limit, where whether a
+     * character is a stable starter is asked of the tables, by holding a code point at or above the
+     * form's limit.
      *
      * @return array{\Closure(): mixed, \Closure(): ?string}
      */

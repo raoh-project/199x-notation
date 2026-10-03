@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Raoh\Notation199x;
 
 use Raoh\Notation199x\Internal\Composing;
+use Raoh\Notation199x\Internal\FormFacts;
 use Raoh\Notation199x\Internal\NormalizationTables;
-use Raoh\Notation199x\Internal\Utf8;
 
 /**
  * Unicode 18.0.0 normalization: NFC, NFD, NFKC and NFKD.
@@ -51,101 +51,120 @@ final class Normalization
     /**
      * $s in $form, and null where that is longer than $longest; a negative $longest is no bound.
      *
-     * Text made only of code points below the form's trivial limit is its own normalization, and is
-     * answered with itself. Other text is normalized from the last code point below the limit
-     * before the first one that is not, and what comes before that is kept as it is: it is its own
-     * normalization, and nothing from there on reaches back into it, since the code point there is
-     * a starter that composes with nothing before it and blocks every mark after it from composing
-     * with a starter before it. That code point is normalized with the rest, since what follows it
-     * may compose with it.
+     * Text that is its own normalization is answered with itself. The text is kept as it is up to
+     * the first character that is not a stable starter of the form: a starter whose quick check
+     * for the form is Yes (NormalizationTables::STABLE_PAGES). From the stable starter before that
+     * one, which what follows it may compose with, the algorithm is run up to the next stable
+     * starter, and the text is kept as it is again from there. A stable starter composes with
+     * nothing before it and blocks every mark after it from reaching a starter before it, so what
+     * comes before it is settled when it is read.
+     *
+     * Two things are kept as the text is read: where the next run the algorithm goes over would
+     * begin, the last stable starter read or, where none has been read since the last such run,
+     * where the text is read to; and how many scalar values of the answer come before that. A run
+     * is written into the answer only where it changed what it went over, and the answer is made
+     * only once one has: up to there it is the text.
      *
      * What a normalization does that grows with the text is done in these loops and in no call to
-     * PHP, so a checkpoint added later asks in each of them: normalizeCore() over the text below
-     * the trivial limit; normalizeFrom() over the rest, a character at a time; Composing::settle()
-     * and Composing::order() over a combining run, which may be as long as the text; and
-     * Composing::write() over the marks of a run it writes.
+     * PHP, so a checkpoint added later asks in each of them: normalizeCore() over the runs of the
+     * text; stableUpTo() over the stable starters, a character at a time apart from a run of ASCII;
+     * Composing::run() over a run the algorithm goes over, a character at a time;
+     * Composing::settle() and Composing::order() over a combining run, which may be as long as the
+     * text; and Composing::write() over the marks of a run it writes.
      *
      * LoopsTest holds this list to every loop a normalization reaches, apart from those it says are
      * bounded whatever the text, and holds what a normalization calls of PHP to a list.
      */
     private static function normalizeCore(NormalizationForm $form, string $s, int $longest): ?string
     {
-        $limit = match ($form) {
-            NormalizationForm::NFC => NormalizationTables::NFC_TRIVIAL_LIMIT,
-            NormalizationForm::NFD => NormalizationTables::NFD_TRIVIAL_LIMIT,
-            NormalizationForm::NFKC => NormalizationTables::NFKC_TRIVIAL_LIMIT,
-            NormalizationForm::NFKD => NormalizationTables::NFKD_TRIVIAL_LIMIT,
-        };
+        $facts = FormFacts::of($form);
         $length = strlen($s);
-        $last = 0;
-        $beforeLast = 0;
+        // The answer up to $kept, where a run has changed what it went over.
+        $out = null;
+        $kept = 0;
+        $start = 0;
+        // The scalar values of the answer before the last run the algorithm went over, and the
+        // stable starters read since, the last of them at $start where $start is before $at.
+        $before = 0;
         $read = 0;
+        $composing = null;
         for ($at = 0; $at < $length;) {
-            // A run of ASCII, which is below every form's limit (NormalizationTest holds the
-            // tables to that). A checkpoint added later bounds the run by strspn's length.
-            $run = strspn($s, self::ASCII, $at, $length - $at);
-            if ($run > 0) {
-                $last = $at + $run - 1;
-                $beforeLast = $read + $run - 1;
-                $read += $run;
-                $at += $run;
-                continue;
+            $stable = self::stableUpTo($s, $at, $length, $facts->limit, $facts->bit, $read, $start);
+            if ($stable === $length) {
+                break;
             }
-            $width = Utf8::width(ord($s[$at]));
-            if (Utf8::decode(substr($s, $at, $width)) >= $limit) {
-                return self::normalizeFrom($form, $s, $last, $beforeLast, $longest);
+            if ($start < $stable) {
+                $read--;
             }
-            $last = $at;
-            $beforeLast = $read;
-            $read++;
-            $at += $width;
+            $composing ??= new Composing($facts, $longest);
+            $end = $composing->run($s, $start, $stable, $before + $read);
+            if ($end < 0) {
+                return null;
+            }
+            $written = $composing->answer();
+            if ($written !== substr($s, $start, $end - $start)) {
+                $out ??= '';
+                $out .= substr($s, $kept, $start - $kept);
+                $out .= $written;
+                $kept = $end;
+            }
+            $before = $composing->written();
+            $read = 0;
+            $start = $end;
+            $at = $end;
         }
-        if ($longest >= 0 && $read > $longest) {
+        if ($longest >= 0 && $before + $read > $longest) {
             return null;
         }
-        return $s;
+        return $out === null ? $s : $out . substr($s, $kept);
     }
 
     /**
-     * The algorithm from the text's start, taking the text before $from, $kept scalar values long,
-     * as it is.
+     * Where the stable starters of the form that $s has from $at end: the first character from
+     * there that is not one, or the end of the text. Adds how many it read to $read, and sets
+     * $last to where the last of them begins where it read any.
      *
-     * The three steps are taken one combining run at a time, as the text is read: each character
-     * is decomposed as it arrives, the marks after a starter are held until the next starter, and
-     * then they are put in canonical order and, in a composing form, composed into it. Canonical
-     * ordering never moves a mark past a starter, and composition joins a starter only to the marks
-     * after it or, where nothing is between them, to the starter after it, so a run settled when
-     * the next starter arrives is settled as the whole text's algorithm would settle it. What is
-     * held at once is one run's marks, never the decomposition of the whole text.
-     *
-     * A step of its loop is one character of the text, decomposed and taken.
+     * A step of its loop is a run of ASCII, which is below every form's limit (NormalizationTest
+     * holds the tables to that), gone past whole, or one character. A character is decoded from
+     * its bytes where it is, and not taken out of the text first.
      */
-    private static function normalizeFrom(NormalizationForm $form, string $s, int $from, int $kept, int $longest): ?string
+    private static function stableUpTo(string $s, int $at, int $length, int $limit, int $bit, int &$read, int &$last): int
     {
-        if ($longest >= 0 && $kept > $longest) {
-            return null;
-        }
-        $compatibility = $form === NormalizationForm::NFKC || $form === NormalizationForm::NFKD;
-        $composes = $form === NormalizationForm::NFC || $form === NormalizationForm::NFKC;
-        $c = new Composing($composes, $longest, substr($s, 0, $from), $kept);
-        $length = strlen($s);
-        for ($at = $from; $at < $length;) {
-            $width = Utf8::width(ord($s[$at]));
-            $character = substr($s, $at, $width);
-            $at += $width;
-            $parts = Composing::decompose($character, $compatibility);
-            if ($parts === null) {
-                if (!$c->take($character)) {
-                    return null;
-                }
+        $blocks = NormalizationTables::STABLE_BLOCKS;
+        $pages = NormalizationTables::STABLE_PAGES;
+        while ($at < $length) {
+            $b0 = ord($s[$at]);
+            if ($b0 < 0x80) {
+                // A checkpoint added later bounds the run by strspn's length.
+                $run = strspn($s, self::ASCII, $at, $length - $at);
+                $read += $run;
+                $at += $run;
+                $last = $at - 1;
                 continue;
             }
-            foreach ($parts as $part) {
-                if (!$c->take($part)) {
-                    return null;
-                }
+            if ($b0 >= 0xE0 && $b0 < 0xF0) {
+                $cp = (($b0 & 0x0F) << 12) | ((ord($s[$at + 1] ?? "\x80") & 0x3F) << 6)
+                    | (ord($s[$at + 2] ?? "\x80") & 0x3F);
+                $width = 3;
+            } elseif ($b0 < 0xC0) {
+                // Not the first byte of a character, which valid UTF-8 has none of here.
+                $cp = $b0;
+                $width = 1;
+            } elseif ($b0 < 0xE0) {
+                $cp = (($b0 & 0x1F) << 6) | (ord($s[$at + 1] ?? "\x80") & 0x3F);
+                $width = 2;
+            } else {
+                $cp = (($b0 & 0x07) << 18) | ((ord($s[$at + 1] ?? "\x80") & 0x3F) << 12)
+                    | ((ord($s[$at + 2] ?? "\x80") & 0x3F) << 6) | (ord($s[$at + 3] ?? "\x80") & 0x3F);
+                $width = 4;
             }
+            if ($cp >= $limit && $cp <= 0x10FFFF && (ord($pages[ord($blocks[$cp >> 8]) << 8 | $cp & 0xFF]) & $bit) === 0) {
+                return $at;
+            }
+            $read++;
+            $last = $at;
+            $at += $width;
         }
-        return $c->finish();
+        return $at;
     }
 }

@@ -36,7 +36,10 @@ final class Composing
      */
     private static array $decompositions = [[], []];
 
-    private string $out;
+    /** What run() wrote, the run settled. */
+    private string $out = '';
+    /** How many scalar values of the answer come before what is held: those before the run, and those it has written. */
+    private int $written = 0;
     private ?string $starter = null;
     /**
      * @var array<int, string> the marks held after the starter, from 0 up to their count and in
@@ -45,12 +48,75 @@ final class Composing
     private array $marks = [];
 
     public function __construct(
-        private readonly bool $composes,
+        private readonly FormFacts $form,
         private readonly int $longest,
-        string $kept,
-        private int $written,
     ) {
-        $this->out = $kept;
+    }
+
+    /**
+     * Runs the algorithm over $s from byte $start, $before scalar values of the answer coming
+     * before it, up to the first stable starter after byte $at, or to the end of the text where
+     * none comes, and holds the run settled as answer(). The characters from $start to $at are
+     * taken, and so is the one there, whatever they are; with $at the end of the text, all of it
+     * from $start is. Answers where it stopped, or -1 where the answer has passed the bound.
+     *
+     * A step of its loop is one character of the text, decomposed and taken.
+     */
+    public function run(string $s, int $start, int $at, int $before): int
+    {
+        $this->out = '';
+        $this->written = $before;
+        $this->starter = null;
+        $this->marks = [];
+        $length = strlen($s);
+        $j = $start;
+        while ($j < $length) {
+            $width = Utf8::width(ord($s[$j]));
+            $character = substr($s, $j, $width);
+            if ($j > $at && $this->stable($character)) {
+                break;
+            }
+            $j += $width;
+            $parts = self::decompose($character, $this->form->compatibility);
+            if ($parts === null) {
+                if (!$this->take($character)) {
+                    return -1;
+                }
+                continue;
+            }
+            foreach ($parts as $part) {
+                if (!$this->take($part)) {
+                    return -1;
+                }
+            }
+        }
+        return $this->write($this->settle()) ? $j : -1;
+    }
+
+    /**
+     * What the last run() wrote.
+     */
+    public function answer(): string
+    {
+        return $this->out;
+    }
+
+    /**
+     * How many scalar values of the answer come before where the last run() stopped.
+     */
+    public function written(): int
+    {
+        return $this->written;
+    }
+
+    /**
+     * Whether $character is a stable starter of the form.
+     */
+    private function stable(string $character): bool
+    {
+        $cp = Utf8::decode($character);
+        return $cp < $this->form->limit || $cp > 0x10FFFF
+            || (ord(NormalizationTables::STABLE_PAGES[ord(NormalizationTables::STABLE_BLOCKS[$cp >> 8]) << 8 | $cp & 0xFF]) & $this->form->bit) !== 0;
     }
 
     /**
@@ -104,14 +170,14 @@ final class Composing
      * Takes the next decomposed character, and is false where what is written has passed the
      * bound.
      */
-    public function take(string $character): bool
+    private function take(string $character): bool
     {
         if (isset(NormalizationTables::COMBINING_CLASSES[$character])) {
             $this->marks[] = $character;
             return true;
         }
         $kept = $this->settle();
-        if ($this->composes && $this->starter !== null && $kept === 0) {
+        if ($this->form->composes && $this->starter !== null && $kept === 0) {
             $composed = self::compose($this->starter, $character);
             if ($composed !== null) {
                 $this->starter = $composed;
@@ -126,15 +192,6 @@ final class Composing
     }
 
     /**
-     * What was written, the run being read settled and written after it, or null where that
-     * passes the bound.
-     */
-    public function finish(): ?string
-    {
-        return $this->write($this->settle()) ? $this->out : null;
-    }
-
-    /**
      * Puts the held marks in canonical order and, where the form composes, composes into the
      * starter each one nothing blocks, and answers how many marks are left after the starter.
      */
@@ -143,7 +200,7 @@ final class Composing
         if (count($this->marks) > 1) {
             $this->order();
         }
-        if (!$this->composes || $this->starter === null) {
+        if (!$this->form->composes || $this->starter === null) {
             return count($this->marks);
         }
         $kept = [];

@@ -71,11 +71,12 @@ class ARuleIsStoppedWhereItIsAskedTest {
             long read = LONG_RUN.codePointCount(0, LONG_RUN.length());
             String answer = Normalization.normalize(form, LONG_RUN);
             boolean composes = form == Form.NFC || form == Form.NFKC;
-            // The starter is read before the first mark, which sends the text to the algorithm, and
-            // the algorithm reads all of it. The run is put in order by counting, which goes over the
-            // marks twice; composed, in a composing form; and the marks left, which is the answer
-            // without its two starters, written. Then the answer is made a string.
-            long says = 2 + read + 2L * MANY + (composes ? MANY : 0)
+            // Each code point is read once: the starter and the first mark, which sends the text to
+            // the algorithm, before it, the rest of the marks by the algorithm, and the starter that
+            // ends the run after it. The run is put in order by counting, which goes over the marks
+            // twice; composed, in a composing form; and the marks left, which is the answer without
+            // its two starters, written. Then the answer is made a string.
+            long says = read + 2L * MANY + (composes ? MANY : 0)
                     + (answer.codePointCount(0, answer.length()) - 2) + 1;
             assertEquals(says, all.asked, form + " asked " + all.asked + " times, and says " + says);
             // The last code point is asked about before it is read, and the run is settled after.
@@ -123,7 +124,7 @@ class ARuleIsStoppedWhereItIsAskedTest {
     void aStopAtTheFirstAskHasMadeNothingAsLongAsTheText() {
         String text = "a".repeat(10_000_000);
         // A mark first sends the text to the algorithm at once: the first ask reads the mark, and the
-        // second is the algorithm's own, once it has made room for the answer.
+        // second reads the starter after it, once the algorithm has gone over the mark.
         String marked = "\u0300" + text;
         for (Form form : Form.values()) {
             long made = allocatedBy(() -> assertInstanceOf(Outcome.Stopped.class,
