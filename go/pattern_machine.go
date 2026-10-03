@@ -11,9 +11,18 @@ import (
 // counted at and no more.
 //
 // What labels a step is a set of symbols and never one, so a step is as cheap for [^a] as for a.
+//
+// A state is a place in arrays and nothing made: a state's steps are from its place in stepStart to
+// the next state's, each over stepOver to stepTo, and its steps for nothing are from its place in
+// freeStart to the next state's, each to freeTo. So a machine of 250,000 states is as many places,
+// and its steps as many more, however many states have none.
 type machine struct {
-	states []state
-	accept int32
+	stepStart []int32
+	stepTo    []int32
+	stepOver  []symbols
+	freeStart []int32
+	freeTo    []int32
+	accept    int32
 	// spare is a walk no match is in, with the sets it kept, or nil. A match takes it and puts it
 	// back, so that a match does not make room the size of the machine each time, nor work out
 	// again the sets the match before it kept. It is held as long as the machine is: a collection
@@ -23,34 +32,89 @@ type machine struct {
 	spare atomic.Pointer[walk]
 }
 
-type state struct {
-	steps []step
-	free  []int32
+// size is how many states the machine has.
+func (m *machine) size() int {
+	return len(m.stepStart) - 1
 }
 
-type step struct {
-	over symbols
-	to   int32
+// laying is a machine's states and steps while they are made, before they are laid out a state at
+// a time (laid). Each step is written where it is made, out of whichever state it leaves, as
+// numbers in slices that grow; nothing is made for a state but its number.
+type laying struct {
+	states   int32
+	stepFrom []int32
+	stepTo   []int32
+	stepOver []symbols
+	freeFrom []int32
+	freeTo   []int32
 }
 
 // build is the machine m is run as. It refuses nothing: m was read within [MachineStates], and
 // building makes no more states than the count.
 func build(m *meaning) *machine {
-	b := &machine{}
+	// Made as large as building m makes them, so that nothing is made twice as it grows.
+	size := laidSize{states: 1}.plus(sizeOf(m))
+	b := &laying{
+		stepFrom: make([]int32, 0, size.steps),
+		stepTo:   make([]int32, 0, size.steps),
+		stepOver: make([]symbols, 0, size.steps),
+		freeFrom: make([]int32, 0, size.frees),
+		freeTo:   make([]int32, 0, size.frees),
+	}
 	start := b.state()
-	b.accept = b.build(m, start)
-	return b
+	accept := b.build(m, start)
+	return b.laid(accept)
 }
 
-func (b *machine) state() int32 {
-	b.states = append(b.states, state{})
-	return int32(len(b.states) - 1)
+// laid is the machine b made, its steps laid out a state at a time, a state's in the order they
+// were made, whatever order the states were made in.
+func (b *laying) laid(accept int32) *machine {
+	states := int(b.states)
+	m := &machine{
+		stepStart: make([]int32, states+1),
+		stepTo:    make([]int32, len(b.stepTo)),
+		stepOver:  make([]symbols, len(b.stepOver)),
+		freeStart: make([]int32, states+1),
+		freeTo:    make([]int32, len(b.freeTo)),
+		accept:    accept,
+	}
+	for _, from := range b.stepFrom {
+		m.stepStart[from+1]++
+	}
+	for q := range states {
+		m.stepStart[q+1] += m.stepStart[q]
+	}
+	filled := make([]int32, states)
+	copy(filled, m.stepStart)
+	for i, from := range b.stepFrom {
+		at := filled[from]
+		filled[from]++
+		m.stepTo[at] = b.stepTo[i]
+		m.stepOver[at] = b.stepOver[i]
+	}
+	for _, from := range b.freeFrom {
+		m.freeStart[from+1]++
+	}
+	for q := range states {
+		m.freeStart[q+1] += m.freeStart[q]
+	}
+	copy(filled, m.freeStart)
+	for i, from := range b.freeFrom {
+		m.freeTo[filled[from]] = b.freeTo[i]
+		filled[from]++
+	}
+	return m
+}
+
+func (b *laying) state() int32 {
+	b.states++
+	return b.states - 1
 }
 
 // build makes the states for m, walked into from from, and answers where it leaves off: one entry
 // and one exit apiece, which is what lets the shapes compose without any of them knowing what it
 // is inside. Recursive, since a pattern that was read nests no deeper than the nesting depth.
-func (b *machine) build(m *meaning, from int32) int32 {
+func (b *laying) build(m *meaning, from int32) int32 {
 	switch m.kind {
 	case nothingMeaning:
 		return from
@@ -59,7 +123,9 @@ func (b *machine) build(m *meaning, from int32) int32 {
 		return b.state()
 	case symbolsMeaning:
 		to := b.state()
-		b.states[from].steps = append(b.states[from].steps, step{over: m.held, to: to})
+		b.stepFrom = append(b.stepFrom, from)
+		b.stepTo = append(b.stepTo, to)
+		b.stepOver = append(b.stepOver, m.held)
 		return to
 	case inTurnMeaning:
 		at := from
@@ -83,14 +149,15 @@ func (b *machine) build(m *meaning, from int32) int32 {
 	}
 }
 
-func (b *machine) freely(from, to int32) {
-	b.states[from].free = append(b.states[from].free, to)
+func (b *laying) freely(from, to int32) {
+	b.freeFrom = append(b.freeFrom, from)
+	b.freeTo = append(b.freeTo, to)
 }
 
 // repeated makes a repetition as the copies it is: the floor is copies one after another, what
 // is above it is copies each of which may be stepped over, and an unbounded ceiling is one more
 // copy with a step back to where it began.
-func (b *machine) repeated(m *meaning, from int32) int32 {
+func (b *laying) repeated(m *meaning, from int32) int32 {
 	what := m.parts[0]
 	// A body that makes no state is the empty string however many times it is taken, and is built
 	// as that: one state to end in. Copied a count at a time it would cost the count and make
@@ -117,6 +184,60 @@ func (b *machine) repeated(m *meaning, from int32) int32 {
 		b.freely(at, out)
 	}
 	return out
+}
+
+// laidSize is how many states, steps and steps for nothing building a meaning makes.
+type laidSize struct {
+	states, steps, frees int
+}
+
+func (a laidSize) plus(b laidSize) laidSize {
+	return laidSize{a.states + b.states, a.steps + b.steps, a.frees + b.frees}
+}
+
+func (a laidSize) times(n int) laidSize {
+	return laidSize{a.states * n, a.steps * n, a.frees * n}
+}
+
+// sizeOf is what laying.build makes for m, counted shape by shape as it builds them: a repetition
+// is its body counted once and multiplied, so this looks at what is written and not at the copies.
+// A step is made with the state it leads to, and at most two steps for nothing with each state,
+// so no count is more than twice the states the meaning was read within.
+func sizeOf(m *meaning) laidSize {
+	switch m.kind {
+	case nothingMeaning:
+		return laidSize{}
+	case neverMeaning:
+		return laidSize{states: 1}
+	case symbolsMeaning:
+		return laidSize{states: 1, steps: 1}
+	case inTurnMeaning:
+		var sum laidSize
+		for _, part := range m.parts {
+			sum = sum.plus(sizeOf(part))
+		}
+		return sum
+	case eitherOfMeaning:
+		sum := laidSize{states: 1}
+		for _, arm := range m.parts {
+			sum = sum.plus(laidSize{states: 1, frees: 2}).plus(sizeOf(arm))
+		}
+		return sum
+	case repeatedMeaning:
+		what := m.parts[0]
+		if buildsNoState(what) {
+			return laidSize{states: 1, frees: 1}
+		}
+		body := sizeOf(what)
+		if m.most == noCeiling {
+			return body.times(m.least + 1).plus(laidSize{states: 1, frees: 2})
+		}
+		return body.times(m.least).plus(laidSize{states: 1, frees: 1}).
+			plus(body.plus(laidSize{frees: 1}).times(m.most - m.least))
+	default:
+		unreachable("meaning", uint8(m.kind))
+		return laidSize{}
+	}
 }
 
 // buildsNoState is whether building m makes no state, which is only ever the empty string.
@@ -227,8 +348,8 @@ func (m *machine) matches(subject string) bool {
 func (m *machine) newWalk() *walk {
 	// pending holds a state at most once at a time, so it never grows past the machine's states
 	// in an append.
-	return &walk{now: newStateSet(len(m.states)), next: newStateSet(len(m.states)),
-		pending: make([]int32, 0, len(m.states))}
+	return &walk{now: newStateSet(m.size()), next: newStateSet(m.size()),
+		pending: make([]int32, 0, m.size())}
 }
 
 // matchesIn is whether the whole of subject is accepted, walked in w, which keeps the sets it
@@ -362,9 +483,9 @@ func (m *machine) forgets(w *walk, hash uint32, from *knownSet, r rune) *knownSe
 func (m *machine) advance(w *walk, from []int32, r rune) {
 	w.next.clear()
 	for _, q := range from {
-		for _, s := range m.states[q].steps {
-			if s.over.has(r) {
-				m.enter(w, w.next, s.to)
+		for at := m.stepStart[q]; at < m.stepStart[q+1]; at++ {
+			if m.stepOver[at].has(r) {
+				m.enter(w, w.next, m.stepTo[at])
 			}
 		}
 	}
@@ -381,7 +502,7 @@ func (m *machine) enter(w *walk, into *stateSet, q int32) {
 	for len(w.pending) > 0 {
 		from := w.pending[len(w.pending)-1]
 		w.pending = w.pending[:len(w.pending)-1]
-		for _, to := range m.states[from].free {
+		for _, to := range m.freeTo[m.freeStart[from]:m.freeStart[from+1]] {
 			if !into.has(to) {
 				into.add(to)
 				w.pending = append(w.pending, to)

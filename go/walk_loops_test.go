@@ -17,7 +17,7 @@ import (
 // and not as a subject is read, and is left out.
 func TestTheWalkNamesEveryLoopItHas(t *testing.T) {
 	files := []string{"pattern_machine.go", "pattern_known.go"}
-	building := []string{"machine.build", "machine.repeated", "buildsNoState"}
+	building := []string{"laying.build", "laying.repeated", "laying.laid", "buildsNoState", "sizeOf"}
 	// maphash is asked for one number at random when a table of steps is made, of no bytes.
 	imports := []string{"hash/maphash", "sync/atomic", "unicode/utf8"}
 	fset := token.NewFileSet()
