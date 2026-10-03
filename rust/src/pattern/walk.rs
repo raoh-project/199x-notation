@@ -89,6 +89,8 @@ pub(crate) struct Cache {
     /// What keeping the sets every match needs, and the step between them, added to
     /// [`Cache::held`], which is held beside [`KNOWN_BYTES`] and not in it ([`Cache::room`]).
     needed: usize,
+    /// What the room holds, [`KNOWN_BYTES`]; a test gives a cache less.
+    limit: usize,
     walk: Walk,
 }
 
@@ -100,8 +102,12 @@ pub(crate) struct Cache {
 /// ([`Cache::make_room`]). The first time, it does so without asking anything: what was kept was
 /// worked out by earlier matches, and how often they looked it up says nothing about this one. After
 /// that, they are forgotten again only where what this match read by kept steps since it last forgot
-/// them is ten times the sets it made; where it is less, keeping them has saved it nothing, and the
-/// match is frozen for the rest of the subject. So one match starts the kept sets again once for
+/// them is ten times what it worked out a state at a time to keep, whether that came to a new set or
+/// to a kept one by a new step; where it is less, keeping them has saved it nothing, and the match
+/// is frozen for the rest of the subject. Both are counted in bytes of the subject. Counted in sets
+/// made, a match whose new steps led only to kept sets, and filled the room with steps, counted
+/// nothing it had worked out, was never frozen, and started the kept sets again each time it
+/// filled the room. So one match starts the kept sets again once for
 /// nothing, and after that only as often as what it reads by them pays for what it keeps.
 ///
 /// A frozen match keeps no new set and no new step, so what is kept is no larger for it. It reads by
@@ -114,9 +120,9 @@ pub(crate) struct Keeping {
     restarted: bool,
     /// Whether this match keeps no more sets.
     frozen: bool,
-    /// The sets this match has made, and the bytes it has read by kept steps, since it last forgot
-    /// the kept sets.
-    made: usize,
+    /// The bytes this match has worked out a state at a time to keep, and the bytes it has read by
+    /// kept steps, since it last forgot the kept sets.
+    worked: usize,
     read: usize,
 }
 
@@ -125,7 +131,7 @@ impl Keeping {
         Keeping {
             restarted: false,
             frozen: false,
-            made: 0,
+            worked: 0,
             read: 0,
         }
     }
@@ -159,6 +165,7 @@ impl Cache {
             start: None,
             state_room: 0,
             needed: 0,
+            limit: KNOWN_BYTES,
             walk: Walk {
                 entered: Vec::new(),
                 generation: 0,
@@ -215,12 +222,7 @@ impl Cache {
     /// is those two sets and that step, whoever calls it and however often, and not something the
     /// callers keep to by the order they call in. Called by [`Cache::make_room`], and by
     /// [`walk_with`] for a cache that has kept nothing, alone.
-    fn afresh(
-        &mut self,
-        machine: &Machine,
-        width: usize,
-        from_start: Option<usize>,
-    ) -> (u32, bool) {
+    fn afresh(&mut self, machine: &Machine, width: usize, from_start: Option<usize>) -> u32 {
         let start = match self.start {
             Some(row) if row != NONE => Some((
                 core::mem::take(&mut self.sets[row as usize / width]),
@@ -240,18 +242,18 @@ impl Cache {
         if let Some((states, hash, accepting)) = start {
             self.start = Some(self.put(width, states, hash, accepting, true));
         }
-        let (row, made) = if self.walk.next.is_empty() {
-            (NONE, false)
+        let row = if self.walk.next.is_empty() {
+            NONE
         } else {
             let hash = hash_of(&self.walk.next);
             match self.found(hash, width) {
-                Some(row) => (row, false),
-                None => (self.admit(machine, width, hash, true), true),
+                Some(row) => row,
+                None => self.admit(machine, width, hash, true),
             }
         };
         let Some(start) = self.start else {
             self.start = Some(row);
-            return (row, made);
+            return row;
         };
         if let Some(class) = from_start
             && start != NONE
@@ -263,7 +265,7 @@ impl Cache {
                 self.cold.insert(start, class, row);
             }
         }
-        (row, made)
+        row
     }
 
     /// What a match does where there is no room for a set or a step it would keep, as [`Keeping`]
@@ -277,18 +279,14 @@ impl Cache {
         keeping: &mut Keeping,
         from_start: Option<usize>,
     ) -> Option<u32> {
-        if keeping.restarted && keeping.read < 10 * keeping.made {
+        if keeping.restarted && keeping.read < 10 * keeping.worked {
             keeping.frozen = true;
             return None;
         }
         keeping.restarted = true;
-        keeping.made = 0;
+        keeping.worked = 0;
         keeping.read = 0;
-        let (row, made) = self.afresh(machine, width, from_start);
-        if made {
-            keeping.made += 1;
-        }
-        Some(row)
+        Some(self.afresh(machine, width, from_start))
     }
 
     /// Where class `class` leads from the kept set whose row begins at `row`: the place the row of
@@ -311,7 +309,7 @@ impl Cache {
             return true;
         }
         let more = self.cold.room_for_one();
-        if self.room() + more > KNOWN_BYTES {
+        if self.room() + more > self.limit {
             return false;
         }
         self.cold.insert(row, class, to);
@@ -334,10 +332,7 @@ impl Cache {
         }
         match self.keep(machine, width) {
             Kept::Found(row) => Some((row, false)),
-            Kept::Added(row) => {
-                keeping.made += 1;
-                Some((row, false))
-            }
+            Kept::Added(row) => Some((row, false)),
             Kept::Full => self
                 .make_room(machine, width, keeping, from_start)
                 .map(|row| (row, true)),
@@ -382,7 +377,7 @@ impl Cache {
         if let Some(row) = self.found(hash, width) {
             return Kept::Found(row);
         }
-        if self.room() + self.room_for(width, self.walk.next.len()) > KNOWN_BYTES {
+        if self.room() + self.room_for(width, self.walk.next.len()) > self.limit {
             return Kept::Full;
         }
         Kept::Added(self.admit(machine, width, hash, false))
@@ -785,11 +780,7 @@ fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut 
             // Only a cache that has kept nothing comes here: starting the kept sets again keeps
             // this one, which is kept whatever it costs.
             cache.walk.begin(machine);
-            let (start, made) = cache.afresh(machine, width, None);
-            if made {
-                keeping.made += 1;
-            }
-            start
+            cache.afresh(machine, width, None)
         }
     };
     loop {
@@ -810,6 +801,9 @@ fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut 
             .walk
             .advance(machine, &cache.sets[at as usize / width], c);
         i += c.len_utf8();
+        if !keeping.frozen {
+            keeping.worked += c.len_utf8();
+        }
         let row = at;
         // Starting the kept sets again keeps the one a walk starts in, and the step from it to the
         // set the walk came to.
@@ -1043,21 +1037,29 @@ mod tests {
         let (tenth, subject) = paths::tenth();
         let mut fresh = tenth.matcher();
         let (_, keeping) = decided(&mut fresh, &subject);
+        let sets = fresh.cache.sets.len();
         assert!(
-            keeping.made * 2 > subject.len() && !keeping.frozen,
+            sets * 2 > subject.len() && !keeping.frozen,
             "a new set at {} of {} characters",
-            keeping.made,
+            sets,
             subject.len()
         );
 
         let (_, keeping) = decided(&mut fresh, &subject);
-        assert_eq!(keeping.made, 0, "no set made over steps worked out");
+        assert_eq!(
+            keeping.worked, 0,
+            "nothing worked out over steps worked out"
+        );
         assert_eq!(keeping.read, subject.len(), "every character read by them");
 
         paths::forget_steps(&mut fresh.cache);
         let (_, keeping) = decided(&mut fresh, &subject);
         let found = subject.len() - keeping.read;
-        assert_eq!(keeping.made, 0, "no set made where each is kept");
+        assert_eq!(
+            fresh.cache.sets.len(),
+            sets,
+            "no set made where each is kept"
+        );
         assert!(
             found * 2 > subject.len() && !keeping.frozen,
             "a kept set found at {found} of {} characters",
@@ -1140,6 +1142,47 @@ mod tests {
         std::println!(
             "{:<56} {found:>10.2?}",
             "kept sets found by their hash, 400 bytes"
+        );
+    }
+
+    /// A match whose new steps lead only to sets already kept, and fill the room with steps, is
+    /// frozen once it fills the room the second time having read little by kept steps, as a match
+    /// that fills it with sets is: what it worked out is counted step by step, and not set by set.
+    /// The y before the thousand and twenty-four characters cuts them into a class each, and every
+    /// one of them leads the set the walk goes round back to itself. Counted in sets made, the
+    /// match counted nothing it worked out, was never frozen, and started the kept sets again each
+    /// time it filled the room with steps.
+    #[test]
+    fn a_match_that_fills_the_room_with_steps_is_frozen_as_one_that_fills_it_with_sets() {
+        let mut text = String::from("y(?:");
+        for c in 0x100..0x500u32 {
+            if c > 0x100 {
+                text.push('|');
+            }
+            text.push(char::from_u32(c).expect("a scalar value"));
+        }
+        text.push_str(")|[\\x{100}-\\x{4FF}]*");
+        let pattern = pattern(&text);
+        let mut matcher = pattern.matcher();
+        assert!(matcher.matches("\u{100}\u{101}"));
+        // Room for the sets and a few dozen steps past the row.
+        matcher.cache.limit = matcher.cache.room() + 2048;
+        let mut numbers = Numbers(11);
+        let subject: String = (0..20_000)
+            .map(|_| char::from_u32(0x100 + numbers.below(0x400) as u32).expect("a scalar value"))
+            .collect();
+        let (answer, keeping) = decided(&mut matcher, &subject);
+        assert!(answer);
+        assert!(
+            matcher.cache.sets.len() <= 3,
+            "{} sets kept",
+            matcher.cache.sets.len()
+        );
+        assert!(
+            keeping.restarted && keeping.frozen,
+            "worked {}, read {}",
+            keeping.worked,
+            keeping.read
         );
     }
 
@@ -1367,7 +1410,7 @@ mod tests {
             let subject = numbers.ab(20_000);
             let (answer, keeping) = decided(&mut matcher, &subject);
             assert_eq!(answer, seventeenth(&subject));
-            assert!(keeping.restarted && keeping.frozen, "{}", keeping.made);
+            assert!(keeping.restarted && keeping.frozen, "{}", keeping.worked);
         }
     }
 
@@ -1401,7 +1444,10 @@ mod tests {
         // forgot them, and is worked out once; the set it leads to is found kept.
         let (answer, keeping) = decided(&mut matcher, &friendly);
         assert_eq!(answer, seventeenth(&friendly));
-        assert_eq!(keeping.made, 0, "no set made once they are kept");
+        assert!(
+            keeping.worked <= 1,
+            "one step worked out once they are kept"
+        );
         assert!(
             keeping.read + 1 >= friendly.len(),
             "{} of {} characters read by kept steps",
@@ -1465,8 +1511,8 @@ mod tests {
         assert!(keeping.restarted, "the room filled");
         assert!(
             !keeping.frozen,
-            "made {}, read {}",
-            keeping.made, keeping.read
+            "worked {}, read {}",
+            keeping.worked, keeping.read
         );
     }
 
@@ -1497,7 +1543,7 @@ mod tests {
         );
         let (answer, keeping) = decided(&mut matcher, &subject);
         assert!(answer);
-        assert_eq!(keeping.made, 0);
+        assert_eq!(keeping.worked, 0);
         assert_eq!(
             keeping.read,
             subject.len(),
@@ -1550,7 +1596,7 @@ mod tests {
         // Every step was kept by the match that forgot the sets, the step from the set a walk
         // starts in with the set it led to.
         let (_, keeping) = decided(&mut matcher, &subject);
-        assert_eq!(keeping.made, 0, "no set made once they are kept");
+        assert_eq!(keeping.worked, 0, "nothing worked out once they are kept");
         assert_eq!(
             keeping.read,
             subject.len(),
@@ -1584,7 +1630,7 @@ mod tests {
         );
         assert!(matcher.cache.room() >= gone_round);
         let (_, keeping) = decided(&mut matcher, &subject);
-        assert!(!keeping.frozen && keeping.made == 0);
+        assert!(!keeping.frozen && keeping.worked == 0);
         assert_eq!(
             keeping.read,
             subject.len(),
