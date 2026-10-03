@@ -45,12 +45,20 @@ const knownSetBytes = 8*utf8RuneSelf + 64
 // says so: none of them forgets anything to make room, and none leaves something out without
 // saying so. What to do when something does not fit, to forget the kept sets or to go on without
 // keeping more, is the match's to decide, in one place ([machine.hold]), and is decided again in
-// every match. Only the set a walk starts in, the set the walk is in and the step between them are
-// kept whatever they take, so that a walk goes on by kept steps however large its sets are.
+// every match.
 //
-// bytes is charged where room is made, with the room made: a set's states and its knownSet when it
-// is kept, and the slots and the table of other steps when they grow, by what they grow by. So
-// bytes is what the kept sets hold, but for the allocator's rounding.
+// The sets every walk needs, the set it starts in and the set it is in when the others are
+// forgotten for it, are kept whatever they take, and so is the step between them; and they are
+// not charged against knownBytes, but counted apart, in needed. knownBytes bounds everything else:
+// the other sets, the steps, and the slots and table that hold them. So a walk goes on by kept
+// steps however large its sets are, a step from a set larger than knownBytes is kept in knownBytes
+// as any is, and what is kept is at most knownBytes and those two sets, at most twice the
+// machine's states.
+//
+// Room is charged where it is made, with the room made: a set's states and its knownSet when it is
+// kept, and the slots and the table of other steps when they grow, by what they grow by; to
+// needed where it is made for what every walk needs, and to bytes otherwise. So bytes and needed
+// together are what the kept sets hold, but for the allocator's rounding.
 //
 // A set is looked up in slots by its hash, a sum over its states that is the same in whatever
 // order the walk put them in, so the set is never put in order. The hash is summed where a set is
@@ -65,8 +73,9 @@ type knownSets struct {
 	first *knownSet
 	// others is where each character past ASCII leads from each kept set, where that is known.
 	others otherSteps
-	// kept is how many sets are kept, and bytes what they and their steps take.
-	kept, bytes int
+	// kept is how many sets are kept; bytes is what they and their steps take in knownBytes, and
+	// needed what the sets every walk needs and the step between them take beside it.
+	kept, bytes, needed int
 }
 
 // forget forgets every set kept but the one a walk starts in, and every step. Every match needs
@@ -78,13 +87,23 @@ func (k *knownSets) forget() {
 	k.slots = nil
 	k.first = nil
 	k.others.forget()
-	k.kept, k.bytes = 0, 0
+	k.kept, k.bytes, k.needed = 0, 0, 0
 	if first == nil {
 		return
 	}
 	first.ascii = [utf8RuneSelf]*knownSet{}
-	k.put(first)
+	k.put(first, true)
 	k.first = first
+}
+
+// charge counts more bytes of room made: beside knownBytes, in needed, where it is made for what
+// every walk needs, and in bytes otherwise.
+func (k *knownSets) charge(more int, needed bool) {
+	if needed {
+		k.needed += more
+	} else {
+		k.bytes += more
+	}
 }
 
 // setBytes is what a kept set of n states takes: its states and its knownSet.
@@ -107,7 +126,7 @@ func (k *knownSets) fits(more int) bool {
 
 // keep is the set now holds, whose hash is hash: found where it is kept, and otherwise kept, made
 // reporting so. It is nil where it does not fit beside the sets kept, unless always, which keeps it
-// whatever it takes.
+// whatever it takes, beside knownBytes: always is asked only for the sets every walk needs.
 func (k *knownSets) keep(m *machine, now *stateSet, hash uint32, always bool) (set *knownSet, made bool) {
 	if set := k.find(now, hash); set != nil {
 		return set, false
@@ -120,19 +139,20 @@ func (k *knownSets) keep(m *machine, now *stateSet, hash uint32, always bool) (s
 		states[i] = q
 	}
 	set = &knownSet{states: states, hash: hash, accepts: now.has(m.accept), none: len(states) == 0}
-	k.put(set)
+	k.put(set, always)
 	return set, true
 }
 
-// put keeps set, which is not kept, charging its states, its knownSet and what the slots grow by.
-func (k *knownSets) put(set *knownSet) {
+// put keeps set, which is not kept, charging its states, its knownSet and what the slots grow by,
+// beside knownBytes where needed.
+func (k *knownSets) put(set *knownSet, needed bool) {
 	if (k.kept+1)*2 > len(k.slots) {
-		k.grow()
+		k.grow(needed)
 	}
 	k.kept++
 	set.id = uint32(k.kept)
 	k.slots[k.free(set.hash)] = set
-	k.bytes += setBytes(len(set.states))
+	k.charge(setBytes(len(set.states)), needed)
 }
 
 // step is where r leads from from, or nil where that is not known.
@@ -145,7 +165,8 @@ func (k *knownSets) step(from *knownSet, r rune) *knownSet {
 
 // lead keeps that r leads from from to to, both kept, and is whether it did: a step over ASCII has
 // its room in from, and another is kept where what the table of other steps grows by fits, or
-// always.
+// always, beside knownBytes: always is asked only for the step from the set a walk starts in to the
+// set it is in when the others were just forgotten for it.
 func (k *knownSets) lead(from *knownSet, r rune, to *knownSet, always bool) bool {
 	if r < utf8RuneSelf {
 		from.ascii[r] = to
@@ -156,7 +177,7 @@ func (k *knownSets) lead(from *knownSet, r rune, to *knownSet, always bool) bool
 		return false
 	}
 	k.others.put(from.id, r, to)
-	k.bytes += more
+	k.charge(more, always)
 	return true
 }
 
@@ -317,12 +338,13 @@ func (k *knownSets) free(hash uint32) int {
 	return at
 }
 
-// grow makes twice the slots, or sixteen, charging what they grow by, and puts each kept set in
-// them again by its hash. What is gone over is the kept sets, at most what knownBytes holds.
-func (k *knownSets) grow() {
+// grow makes twice the slots, or sixteen, charging what they grow by, beside knownBytes where
+// needed, and puts each kept set in them again by its hash. What is gone over is the kept sets, at
+// most what knownBytes holds and the two every walk needs.
+func (k *knownSets) grow(needed bool) {
 	old := k.slots
 	k.slots = make([]*knownSet, max(16, 2*len(old)))
-	k.bytes += 8 * (len(k.slots) - len(old))
+	k.charge(8*(len(k.slots)-len(old)), needed)
 	for _, set := range old {
 		if set != nil {
 			k.slots[k.free(set.hash)] = set

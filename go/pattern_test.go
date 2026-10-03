@@ -595,11 +595,47 @@ func TestASetLargerThanTheRoomIsKeptBesideTheStart(t *testing.T) {
 	if w.frozen || w.in == nil || w.known.kept != 2 || w.in == w.known.first {
 		t.Fatalf("the set was not kept beside the start: %d kept, keeping no more %v", w.known.kept, w.frozen)
 	}
+	// The two are kept beside the room and take none of it.
+	if w.known.bytes > knownBytes || w.known.needed <= knownBytes {
+		t.Fatalf("%d bytes charged in a room of %d, and %d beside it", w.known.bytes, knownBytes, w.known.needed)
+	}
 	// The step from the set a walk starts in to it was kept with it, so the next match reads every
 	// character by kept steps, keeping no new set.
 	m.matchesIn(w, subject)
 	if w.frozen || w.made != 0 || w.read != len(subject) {
 		t.Fatalf("the next match read %d of %d by kept steps", w.read, len(subject))
+	}
+}
+
+// The sets every walk needs take none of the room, so the steps from a set larger than the room
+// are kept in it as any are, past ASCII as over it. Every character from U+0100 to U+03FF leads the
+// set the walk goes round back to itself, and it and the set a walk starts in are each larger than
+// the room; the 768 steps fit in it. The next match reads every character by kept steps and is not
+// frozen. Before, those two sets were charged in the room, so no step past ASCII from them fitted,
+// and every match was frozen on its first.
+func TestStepsFromASetLargerThanTheRoomAreKeptInTheRoom(t *testing.T) {
+	defer func(was int) { knownBytes = was }(knownBytes)
+	knownBytes = 64 << 10
+	m := pathMachine("(?:[\u0100-\u03FF]*){20000}")
+	var subject strings.Builder
+	for range 2 {
+		for r := rune(0x100); r < 0x400; r++ {
+			subject.WriteRune(r)
+		}
+	}
+	text := subject.String()
+	w := m.newWalk()
+	if !m.matchesIn(w, text) {
+		t.Fatal("the pattern does not accept the subject")
+	}
+	if w.known.kept != 2 || w.known.needed <= knownBytes || w.known.bytes > knownBytes {
+		t.Fatalf("%d sets kept, %d bytes beside a room of %d and %d in it", w.known.kept,
+			w.known.needed, knownBytes, w.known.bytes)
+	}
+	m.matchesIn(w, text)
+	if w.frozen || w.made != 0 || w.read != len([]rune(text)) {
+		t.Fatalf("the next match read %d of %d characters by kept steps; kept no more %v",
+			w.read, len([]rune(text)), w.frozen)
 	}
 }
 
@@ -676,7 +712,7 @@ func TestKeptSetsChargeWhatTheyTake(t *testing.T) {
 		runtime.KeepAlive(w)
 		runtime.KeepAlive(text)
 		grew := float64(after.HeapAlloc) - float64(before.HeapAlloc)
-		charged := float64(w.known.bytes)
+		charged := float64(w.known.bytes + w.known.needed)
 		// The allocator rounds each list up to its size class, an eighth more at most.
 		if !w.frozen || grew < 0.9*charged || grew > 1.25*charged {
 			t.Errorf("%s: %.0f bytes charged and the heap grew %.0f; kept no more %v", each.pattern,
