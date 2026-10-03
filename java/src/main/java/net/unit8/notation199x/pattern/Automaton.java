@@ -78,6 +78,15 @@ public final class Automaton {
     private final BitSet accepting;
 
     /**
+     * {@link #shape}, read off the table once it is held.
+     *
+     * <p>The table does not change after the machine is made, so neither does its hash; a caller
+     * holding machines as keys asks for it at every lookup, and a walk of the whole table each time
+     * would cost the machine's size where a key costs nothing.
+     */
+    private final int shape;
+
+    /**
      * For a machine made here one where a walk is only ever in one state and every symbol leads
      * somewhere, where each class of symbols leads from each state; null for any other.
      *
@@ -178,6 +187,7 @@ public final class Automaton {
         this.freeTo = freeTo;
         this.accepting = (BitSet) accepting.clone();
         this.rows = null;
+        this.shape = shapeOf(this.accepting, this.stepStart, this.stepTo, this.stepOver);
     }
 
     /** {@code machine}'s steps, which nothing writes to, with {@code accepting} and {@code rows}:
@@ -190,6 +200,7 @@ public final class Automaton {
         this.freeTo = machine.freeTo;
         this.accepting = (BitSet) accepting.clone();
         this.rows = rows;
+        this.shape = shapeOf(this.accepting, this.stepStart, this.stepTo, this.stepOver);
     }
 
     /**
@@ -1245,6 +1256,11 @@ public final class Automaton {
      * @return a hash of the table
      */
     public int shape() {
+        return shape;
+    }
+
+    /** {@link #shape} worked out from the fields {@link #sameAs} compares, as the machine holds them. */
+    private static int shapeOf(BitSet accepting, int[] stepStart, int[] stepTo, CodePoints[] stepOver) {
         int out = accepting.hashCode();
         out = out * 31 + Arrays.hashCode(stepStart);
         out = out * 31 + Arrays.hashCode(stepTo);
