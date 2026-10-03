@@ -1138,11 +1138,11 @@ public final class Automaton {
      * whose emptiness two readers disagree about, and the one that produces values would be
      * believed.
      *
-     * <p>The shortest, and among the strings of that length one written out of symbols a source can
-     * carry where there is one. Being writable is a preference and never a condition: it is about
-     * what a person can paste back, and a language holds what it holds. So the length is settled
-     * first, over every symbol there is, and only then is a string of that length looked for among
-     * the symbols that can be written.
+     * <p>The shortest, and among the strings of that length one {@link #shortestWritten} would
+     * choose where there is one. Being written is a preference and never a condition: it is about
+     * what a person is shown and pastes back, and a language holds what it holds. So the length is
+     * settled first, over every symbol there is, and only then is a string of that length looked
+     * for among the symbols a written value is made of.
      *
      * <p>Deterministic under both: the symbol taken out of a set is the least of it, and the states
      * are walked in the order they were made. Two runs over one model produce one value.
@@ -1155,41 +1155,50 @@ public final class Automaton {
             return null;
         }
         // The length first, over every symbol there is, and only then a string of that length out
-        // of the ones a source can carry. Asked the other way round, a language holding a control
-        // character and a longer word of letters answers with the longer one — which is reaching
+        // of the ones a written value is made of. Asked the other way round, a language holding a
+        // control code and a longer word of letters answers with the longer one — which is reaching
         // for what can be written at the price of what was asked for.
         String written = shortest(WRITABLE, any.codePointCount(0, any.length()));
         return written != null ? written : any;
     }
 
     /**
-     * The shortest string it accepts that a source can carry, or null where every string it accepts
-     * is one a source cannot.
+     * The shortest string it accepts that holds no control code but TAB, LF and CR, or null where
+     * every string it accepts holds one.
+     *
+     * <p>What a value is chosen from when it is made to be shown to a person, who reads it and may
+     * paste it back. A control code — General_Category=Cc — is invisible there, so a value holding
+     * one is not chosen; TAB, LF and CR are, since each has an escape it is written by. It is not
+     * whether a source can hold the string: a string literal may hold any control code raw, and a
+     * string holding one is a string. Only which value is chosen.
      *
      * <p>Beside {@link #shortest}, and a different question. That one answers with what the
      * language holds and prefers a written string at the price of nothing; this one is asked by a
-     * caller writing a value into a model, where a string nobody can paste is not an answer at all.
-     * A pattern admitting only control characters has a shortest string and no value to offer.
+     * caller writing a value out, where a string chosen to be shown and holding what cannot be
+     * seen is not an answer at all. A pattern admitting only control codes but those three, such
+     * as {@code [\x{1}-\x{2}]+}, has a shortest string and no value to offer; one admitting only
+     * TAB has both.
      *
-     * @return the shortest string it accepts that a source can carry, or null where there is
-     *         none
+     * @return the shortest string it accepts holding no control code but TAB, LF and CR, or null
+     *         where there is none
      */
     public @Nullable String shortestWritten() {
         return shortest(WRITABLE, -1);
     }
 
     /**
-     * The symbols a value can be written out of and read back.
+     * The symbols {@link #shortestWritten} makes a value of: every scalar value but the Unicode
+     * control codes, General_Category=Cc, other than TAB, LF and CR.
      *
-     * <p>A control character other than the three a literal spells reaches a source as itself, so
-     * what a person pastes is not what was chosen. Nothing about the language: a rule admitting one
-     * of these admits it, and this is only which of them a value is preferably built from.
+     * <p>Cc is a set Unicode promises never to change, so this does not move with a Unicode
+     * version. It is Cc and not Cf: a format character, a zero-width joiner among them, takes part
+     * in what a string says, and a value is chosen to say it.
      */
     private static final CodePoints WRITABLE = CodePoints.EVERYTHING
             .less(CodePoints.between(0, 8))
             .less(CodePoints.between(0x0B, 0x0C))
             .less(CodePoints.between(0x0E, 0x1F))
-            .less(CodePoints.of(0x7F));
+            .less(CodePoints.between(0x7F, 0x9F));
 
     /**
      * The shortest string it accepts out of {@code these} and no longer than {@code mostSymbols},
