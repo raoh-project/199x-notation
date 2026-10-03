@@ -30,8 +30,9 @@ func Uppercase(s string) string {
 }
 
 // LowercaseWithin is [Lowercase] where that is no longer than longest scalar values, and false
-// where it is longer, which is found out before more than longest is written. A negative bound
-// is one no text is within.
+// where it is longer, which is found out before more than longest is written. How much of s it
+// reads turns on longest and not on the length of s: it reads no further once what it has read
+// shows the answer to be longer. A negative bound is one no text is within.
 func LowercaseWithin(s string, longest int) (string, bool) {
 	if longest < 0 {
 		return "", false
@@ -40,8 +41,9 @@ func LowercaseWithin(s string, longest int) (string, bool) {
 }
 
 // UppercaseWithin is [Uppercase] where that is no longer than longest scalar values, and false
-// where it is longer, which is found out before more than longest is written. A negative bound
-// is one no text is within.
+// where it is longer, which is found out before more than longest is written. How much of s it
+// reads turns on longest and not on the length of s: it reads no further once what it has read
+// shows the answer to be longer. A negative bound is one no text is within.
 func UppercaseWithin(s string, longest int) (string, bool) {
 	if longest < 0 {
 		return "", false
@@ -55,7 +57,10 @@ func UppercaseWithin(s string, longest int) (string, bool) {
 // The text is read where it is: Final_Sigma looks either side of a sigma for as many
 // Case_Ignorable code points as there are, and looks at them in the text. What is bounded is what
 // is written: each code point's mapping is measured before any of it is, so the answer never
-// holds more than longest, nor part of a mapping that would take it past.
+// holds more than longest, nor part of a mapping that would take it past. Every code point maps to
+// at least one, which the generator checks, so the text is read no further than one code point past
+// longest either: what maps to itself is gone past up to there, and Final_Sigma looks past no more
+// Case_Ignorable code points after a sigma than the answer has room for.
 //
 // Text that maps to itself is answered with itself. Otherwise what maps to itself is copied a run
 // at a time, from kept, and the answer is made only once a code point that changes is met. Whether
@@ -72,7 +77,11 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 	changed := false
 	kept, written := 0, 0
 	for at := 0; at < len(s); {
-		if end, count := sameUpTo(s, at, ascii, blocks, pages); end > at {
+		most := -1
+		if longest >= 0 {
+			most = longest - written + 1
+		}
+		if end, count := sameUpTo(s, at, most, ascii, blocks, pages); end > at {
 			written += count
 			if longest >= 0 && written > longest {
 				return "", false
@@ -110,8 +119,23 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 		after := at + size
 		to := table[pages[int(blocks[r>>8])<<8|int(r&0xFF)]-1].to
 		if lower {
-			if final := finalSigmaMapping.of(r); final != nil && isFinalSigma(s, at, after) {
-				to = final
+			if final := finalSigmaMapping.of(r); final != nil {
+				// The sigma is at least one code point of the answer, as every code point is, and
+				// each Case_Ignorable one after it is another.
+				most := -1
+				if longest >= 0 {
+					if written >= longest {
+						return "", false
+					}
+					most = longest - written - 1
+				}
+				isFinal, decided := isFinalSigma(s, at, after, most)
+				if !decided {
+					return "", false
+				}
+				if isFinal {
+					to = final
+				}
 			}
 		}
 		if longest >= 0 && len(to) > longest-written {
@@ -133,25 +157,34 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 }
 
 // sameUpTo is where the code points s has from at that the mapping leaves as they are end: the
-// first one from there that it changes, or the end of the text; and how many code points it went
-// past.
-func sameUpTo(s string, at int, ascii *[utf8.RuneSelf]int16, blocks *[4352]uint8, pages []uint16) (int, int) {
+// first one from there that it changes, or the end of the text, or where it has gone past most of
+// them where most is not negative; and how many code points it went past.
+func sameUpTo(s string, at, most int, ascii *[utf8.RuneSelf]int16, blocks *[4352]uint8, pages []uint16) (int, int) {
 	count := 0
-	for at < len(s) {
-		if c := s[at]; c < utf8.RuneSelf {
-			if ascii[c] != int16(c) {
-				break
+	for at < len(s) && count != most {
+		// A code point is a byte or more, so going up to stop goes past no more than most of them,
+		// with no count kept against most at each; a code point past ASCII can leave it short, and
+		// it goes on from there.
+		stop := len(s)
+		if most >= 0 {
+			stop = min(stop, at+most-count)
+		}
+		for at < stop {
+			if c := s[at]; c < utf8.RuneSelf {
+				if ascii[c] != int16(c) {
+					return at, count
+				}
+				at++
+				count++
+				continue
 			}
-			at++
+			r, size := utf8.DecodeRuneInString(s[at:])
+			if pages[int(blocks[r>>8])<<8|int(r&0xFF)] != 0 {
+				return at, count
+			}
+			at += size
 			count++
-			continue
 		}
-		r, size := utf8.DecodeRuneInString(s[at:])
-		if pages[int(blocks[r>>8])<<8|int(r&0xFF)] != 0 {
-			break
-		}
-		at += size
-		count++
 	}
 	return at, count
 }
@@ -181,8 +214,9 @@ var caseOfASCII = func() (out [2][utf8.RuneSelf]int16) {
 // isFinalSigma is Unicode's Final_Sigma condition of the code point between at and after:
 // preceded, skipping Case_Ignorable code points, by a Cased one, and not followed, skipping the
 // same way, by another Cased one. Scanned as far as the text goes rather than over a window,
-// since what is skipped is decided by the property and not by a count.
-func isFinalSigma(s string, at, after int) bool {
+// since what is skipped is decided by the property and not by a count. Where most is not negative
+// and more than most Case_Ignorable code points follow it, it is not decided, and false.
+func isFinalSigma(s string, at, after, most int) (final, decided bool) {
 	precededByCased := false
 	for j := at; j > 0; {
 		r, size := utf8.DecodeLastRuneInString(s[:j])
@@ -194,15 +228,20 @@ func isFinalSigma(s string, at, after int) bool {
 		break
 	}
 	if !precededByCased {
-		return false
+		return false, true
 	}
+	skipped := 0
 	for j := after; j < len(s); {
 		r, size := utf8.DecodeRuneInString(s[j:])
 		j += size
 		if caseIgnorableRanges.has(r) {
+			if skipped == most {
+				return false, false
+			}
+			skipped++
 			continue
 		}
-		return !casedRanges.has(r)
+		return !casedRanges.has(r), true
 	}
-	return true
+	return true, true
 }

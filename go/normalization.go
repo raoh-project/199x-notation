@@ -52,24 +52,34 @@ func (f *formFacts) stable(r rune) bool {
 }
 
 // stableUpTo is where the stable starters s has from at end: the first code point from there that
-// is not one, or the end of the text; how many code points it went past; and where the last of
-// them begins, which is at where it went past none.
-func (f *formFacts) stableUpTo(s string, at int) (end, count, last int) {
+// is not one, or the end of the text, or where it has gone past most of them where most is not
+// negative; how many code points it went past; and where the last of them begins, which is at
+// where it went past none.
+func (f *formFacts) stableUpTo(s string, at, most int) (end, count, last int) {
 	last = at
-	for at < len(s) {
-		if c := s[at]; c < utf8.RuneSelf {
+	for at < len(s) && count != most {
+		// A code point is a byte or more, so going up to stop goes past no more than most of them,
+		// with no count kept against most at each; a code point past ASCII can leave it short, and
+		// it goes on from there.
+		stop := len(s)
+		if most >= 0 {
+			stop = min(stop, at+most-count)
+		}
+		for at < stop {
+			if c := s[at]; c < utf8.RuneSelf {
+				last = at
+				at++
+				count++
+				continue
+			}
+			r, size := utf8.DecodeRuneInString(s[at:])
+			if !f.stable(r) {
+				return at, count, last
+			}
 			last = at
-			at++
+			at += size
 			count++
-			continue
 		}
-		r, size := utf8.DecodeRuneInString(s[at:])
-		if !f.stable(r) {
-			break
-		}
-		last = at
-		at += size
-		count++
 	}
 	return at, count, last
 }
@@ -106,8 +116,10 @@ func Normalize(form Form, s string) string {
 }
 
 // NormalizeWithin is [Normalize] where that is no longer than longest scalar values, and false
-// where it is longer, which is found out before more than longest is written. A negative bound is
-// one no text is within. NormalizeWithin panics where form is none of the four forms.
+// where it is longer, which is found out before more than longest is written. What it holds and
+// how much of s it reads turn on longest and not on the length of s: it reads no further once what
+// it has read shows the answer to be longer. A negative bound is one no text is within.
+// NormalizeWithin panics where form is none of the four forms.
 func NormalizeWithin(form Form, s string, longest int) (string, bool) {
 	form.facts()
 	if longest < 0 {
@@ -126,6 +138,10 @@ func NormalizeWithin(form Form, s string, longest int) (string, bool) {
 // and blocks every mark after it from reaching a starter before it, so what comes before it is
 // settled when it is read. A run is written into the answer only where it changed what it went
 // over, and the answer is made only once one has: up to there it is the text.
+//
+// Each stable starter read is at least one code point of the answer, as the starter it is or
+// composed with what follows it, so with a bound the text is read no further once those read and
+// those before them are more than longest.
 func normalize(form Form, s string, longest int) (string, bool) {
 	facts := form.facts()
 	var out strings.Builder
@@ -137,8 +153,15 @@ func normalize(form Form, s string, longest int) (string, bool) {
 	before, read := 0, 0
 	var c *composing
 	for at := 0; at < len(s); {
-		if end, count, last := facts.stableUpTo(s, at); end > at {
+		most := -1
+		if longest >= 0 {
+			most = longest - before - read + 1
+		}
+		if end, count, last := facts.stableUpTo(s, at, most); end > at {
 			read += count
+			if longest >= 0 && before+read > longest {
+				return "", false
+			}
 			start = last
 			at = end
 			if at == len(s) {
@@ -169,9 +192,6 @@ func normalize(form Form, s string, longest int) (string, bool) {
 		start = end
 		at = end
 	}
-	if longest >= 0 && before+read > longest {
-		return "", false
-	}
 	if !changed {
 		return s, true
 	}
@@ -186,6 +206,11 @@ const fewMarks = 32
 // composing is one pass of canonical ordering and, where the form composes, composition over code
 // points already decomposed: the starter of the run it is in, the marks held after it, and what is
 // settled.
+//
+// With a bound, what is written and the least of the answer what is held can come to are no more
+// than longest, which take holds to before it holds another mark: the starter, and the marks but
+// those it may compose with, which are no more than mostMarksComposed. So a run holds no more than
+// longest and mostMarksComposed marks, whatever the length of the text.
 type composing struct {
 	form         *formFacts
 	compositions map[[2]rune]rune
@@ -252,6 +277,9 @@ func (c *composing) run(s string, start, at int, before int) (int, bool) {
 // longest.
 func (c *composing) take(r rune) bool {
 	if combiningClass(r) != 0 {
+		if c.longest >= 0 && c.written+c.leastHeld(len(c.marks)+1) > c.longest {
+			return false
+		}
 		c.marks = append(c.marks, r)
 		return true
 	}
@@ -267,6 +295,19 @@ func (c *composing) take(r rune) bool {
 	}
 	c.starter = r
 	return true
+}
+
+// leastHeld is the least number of code points of the answer the starter held and marks marks
+// after it come to, whatever follows: every mark, and the starter, but those of the marks it may
+// compose with in a composing form.
+func (c *composing) leastHeld(marks int) int {
+	if c.starter < 0 {
+		return marks
+	}
+	if c.form.composes {
+		marks = max(marks-mostMarksComposed, 0)
+	}
+	return 1 + marks
 }
 
 // settle puts the held marks in canonical order and, where the form composes, composes into the

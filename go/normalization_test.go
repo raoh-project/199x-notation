@@ -3,6 +3,7 @@ package notation199x
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -117,6 +118,27 @@ func TestABoundIsHeldOnTheAnswer(t *testing.T) {
 			if _, ok := NormalizeWithin(form, text, -1); ok {
 				t.Errorf("%v of %s is within a negative bound", form, shown(text))
 			}
+		}
+	}
+}
+
+// A starter and a combining run of a million marks, held to a bound of ten, is found past the bound
+// before the run is held: what is made is the room for the bound and the marks that may compose,
+// not for the run.
+func TestABoundedNormalizationHoldsNoMoreThanItsBound(t *testing.T) {
+	text := "a" + strings.Repeat("\u0301", 1_000_000)
+	// The composition table is made the first time a text is normalized, once for the program.
+	Normalize(NFC, "a\u0301")
+	for _, form := range []Form{NFC, NFD, NFKC, NFKD} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, ok := NormalizeWithin(form, text, 10)
+		runtime.ReadMemStats(&after)
+		if ok {
+			t.Errorf("%v of the run is within 10", form)
+		}
+		if made := after.TotalAlloc - before.TotalAlloc; made > 64<<10 {
+			t.Errorf("%v made %d bytes", form, made)
 		}
 	}
 }
