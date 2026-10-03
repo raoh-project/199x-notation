@@ -347,6 +347,43 @@ class WhatAMatchDecidesGoesNoFurtherThanTheMatchTest {
                 + seen.size() + " looks");
     }
 
+    /**
+     * A walk told to stop leaves nothing counted that is not held: stopped at each place it asks,
+     * one after another, what the budget counts is what the sets and the table of steps past the
+     * rows take, and a match after, told nothing, keeps as many steps as one on a new pattern.
+     * Before, a walk that grew the table counted the larger one before making it, and one stopped
+     * while it copied the steps into it left that counted, held by nothing, for every match after.
+     */
+    @Test
+    void aWalkToldToStopLeavesNothingCountedThatIsNotHeld() {
+        // Six hundred characters one after another, each a class of its own, more than a row holds.
+        StringBuilder text = new StringBuilder();
+        for (int c = 0x100; c < 0x100 + 2 * 600; c += 2) {
+            text.appendCodePoint(c);
+        }
+        Automaton shaped = shaped(text.toString());
+        String once = text.substring(0, 200);
+        long[] asked = {0};
+        assertEquals(new Outcome.Answered<>(false),
+                StringPattern.of(shaped).matches(once, () -> ++asked[0] > 0));
+        StringPattern fresh = StringPattern.of(shaped);
+        assertFalse(fresh.matches(once));
+        for (long stop = 1; stop < asked[0]; stop++) {
+            StringPattern each = StringPattern.of(shaped);
+            long[] count = {0};
+            long at = stop;
+            assertEquals(new Outcome.Stopped<>(), each.matches(once, () -> ++count[0] < at));
+            long[] counted = each.counted();
+            assertEquals(counted[1], counted[0], "stopped at ask " + stop);
+            if (stop % 53 == 0) {
+                // Matched again, told nothing, it keeps what a new pattern keeps.
+                assertFalse(each.matches(once));
+                assertEquals(fresh.stepsKnown(), each.stepsKnown(), "after a stop at ask " + stop);
+                assertEquals(fresh.counted()[0], each.counted()[0], "after a stop at ask " + stop);
+            }
+        }
+    }
+
     /** How many times a match of {@code subject}, which ends in b and is not accepted, asks. */
     private static long asks(StringPattern pattern, String subject) {
         long[] asked = {0};

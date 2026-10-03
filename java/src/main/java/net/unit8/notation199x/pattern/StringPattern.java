@@ -419,6 +419,17 @@ public final class StringPattern implements Predicate<String> {
         return now.count.get() + now.needed;
     }
 
+    /** What the generation kept now counts against the budget, and what the sets and table it holds
+     *  within the budget take, worked out from them: what a test of the counting asks, and no walk. */
+    long[] counted() {
+        Subsets known = subsets;
+        if (known == null) {
+            return new long[] {0, 0};
+        }
+        Generation now = known.current();
+        return new long[] {now.remembered.get(), now.held()};
+    }
+
     /** How many of the sets kept now are kept whatever they take, beside the budget, and the states
      *  and steps they hold: what a test of what a generation holds asks, and no walk. */
     long[] keptBeside() {
@@ -1584,12 +1595,10 @@ public final class StringPattern implements Predicate<String> {
      * set reads all of it, since everything a set holds was given to it as it was made. It leads
      * only to a set of its own {@link Generation}, or to the set with no state in it.
      *
-     * <p>{@link #next} has a place for every class of the machine, at most
-     * {@link SymbolClasses#MOST}, whether a walk reads that class from here or not, and is counted
-     * in the budget at that length. A row only as wide as the classes ASCII is in, with the others
-     * held apart by what was read, would hold less; read and written by any number of walks at once
-     * without a lock, it would be a table copied whole at each step written, or one grown in place
-     * under them, and a character past ASCII would be a search where it is one lookup here.
+     * <p>{@link #next} has a place for each class ASCII is in, at most 128, and is counted in the
+     * budget at that length. Where the other classes lead is kept in the generation's table of
+     * them ({@link Cold}), as it is found, so what a set holds does not grow with how many classes
+     * the machine has.
      */
     private static final class Subset {
 
@@ -1755,6 +1764,10 @@ public final class StringPattern implements Predicate<String> {
      * within the budget ({@link #keep}), whichever walk keeps it: a walk that goes into a generation
      * another walk made keeps the set it has come to there only where the budget has room for it.
      * So one generation holds at most the budget and those two sets, however many walks go into it.
+     *
+     * <p>What is counted here is held across matches, and a walk told to stop leaves wherever it
+     * asks. So nothing is counted while anything that asks is still to be done: a walk does what
+     * asks first, and then counts, and keeps or gives back what it counted, asking nothing between.
      * Counted in the budget, a set larger than it would leave no room for any other, and a walk that
      * went on from it to one more would be frozen.
      */
@@ -1766,7 +1779,7 @@ public final class StringPattern implements Predicate<String> {
         private final Budget budget;
         private final AtomicReferenceArray<Subset> slots;
         final AtomicInteger count = new AtomicInteger();
-        private final AtomicLong remembered = new AtomicLong();
+        final AtomicLong remembered = new AtomicLong();
         /** The ids of the set a walk starts in and of {@link #entry}; the sets kept after are named
          *  from {@link #ids} on. */
         static final int START = 1;
@@ -1797,6 +1810,9 @@ public final class StringPattern implements Predicate<String> {
          *  states and steps they hold, beside the budget: fixed as the generation is made. */
         final int needed;
         private final long beside;
+        /** What the table of steps past the rows the generation was made with was counted beside the
+         *  budget, or nought: a larger one in its place is counted in the budget for what it adds. */
+        private final long coldBeside;
 
         /**
          * A generation holding {@code start}, unless it is the set with no state in it, and
@@ -1830,6 +1846,7 @@ public final class StringPattern implements Predicate<String> {
                 kept++;
                 holds += (long) entry.states.length + entry.next.length;
             }
+            long firstCold = 0;
             if (over >= 0) {
                 Subset to = overTo == null ? start : overTo;
                 if (over < width) {
@@ -1838,7 +1855,8 @@ public final class StringPattern implements Predicate<String> {
                     Cold first = new Cold(Cold.FEWEST);
                     first.put(key(start, over), to, null);
                     cold = first;
-                    holds += first.holds();
+                    firstCold = first.holds();
+                    holds += firstCold;
                 }
                 if (to == start) {
                     start.staysOn(classes, over);
@@ -1846,6 +1864,7 @@ public final class StringPattern implements Predicate<String> {
             }
             this.needed = kept;
             this.beside = holds;
+            this.coldBeside = firstCold;
         }
 
         /** The key a step over class {@code each} from {@code from} is kept by in {@link Cold},
@@ -1890,15 +1909,21 @@ public final class StringPattern implements Predicate<String> {
                 }
                 int capacity = table == null ? Cold.FEWEST : 2 * table.capacity();
                 long more = Cold.holds(capacity) - (table == null ? 0 : table.holds());
-                if (remembered.addAndGet(more) > budget.remembered()) {
-                    remembered.addAndGet(-more);
+                if (remembered.get() + more > budget.remembered()) {
                     return false;
                 }
-                // A table is as large as the steps kept, and is made only once asked.
+                // A table is as large as the steps kept, and is made only once asked. Making it and
+                // filling it ask, and a walk told to stop leaves here: so it is made before anything
+                // is counted, and is let go uncounted where the walk stops.
                 ask(checkpoint);
                 Cold larger = new Cold(capacity);
                 if (table != null) {
                     table.copyInto(larger, checkpoint);
+                }
+                // From here nothing asks until what is counted is settled: kept, or given back.
+                if (remembered.addAndGet(more) > budget.remembered()) {
+                    remembered.addAndGet(-more);
+                    return false;
                 }
                 if (!COLD.compareAndSet(this, table, larger)) {
                     // Another walk put one in its place first: this one is let go, and counted no more.
@@ -1952,6 +1977,20 @@ public final class StringPattern implements Predicate<String> {
                 at = (at + 1) & mask;
             }
             return null;
+        }
+
+        /** {@link StringPattern#counted}: the sets kept within the budget, and the table of steps past
+         *  the rows, less what its first table was counted beside the budget. */
+        long held() {
+            long held = 0;
+            for (int at = 0; at < slots.length(); at++) {
+                Subset kept = slots.get(at);
+                if (kept != null && kept != start && kept != entry) {
+                    held += (long) kept.states.length + kept.next.length;
+                }
+            }
+            @Nullable Cold table = (Cold) COLD.getAcquire(this);
+            return table == null ? held : held + table.holds() - coldBeside;
         }
 
         /** {@link StringPattern#stepsKnown}. */
