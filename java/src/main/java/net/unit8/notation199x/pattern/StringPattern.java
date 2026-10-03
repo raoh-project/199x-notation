@@ -271,6 +271,10 @@ public final class StringPattern implements Predicate<String> {
      *  is past the {@link Budget}. */
     private final @Nullable Subsets subsets;
 
+    /** The room the last walk as sets of states to finish left for the next, or null where a walk
+     *  has it or none has finished ({@link Room}). */
+    private final AtomicReference<@Nullable Room> spare = new AtomicReference<>();
+
     private StringPattern(boolean deterministic, boolean[] accepting, int[][][] over, int[][] target,
                           int[][] free, Budget budget) {
         this.accepting = accepting;
@@ -422,6 +426,14 @@ public final class StringPattern implements Predicate<String> {
         if (known != null) {
             known.current().forgetSteps();
         }
+    }
+
+    /** Leaves a room for the next walk whose rounds are at {@code round}, so that the walks after go
+     *  past where the rounds come round to nought. What a test does, and no walk. */
+    void leaveRoomAt(int round) {
+        Room room = room();
+        room.round = round;
+        spare.set(room);
     }
 
     /** Each set the steps are over, once however many steps are over it. */
@@ -640,7 +652,7 @@ public final class StringPattern implements Predicate<String> {
      *  past what the sets kept may hold, and every walk moves each state for every character. */
     private @Nullable Subsets subsets(Steps steps, SymbolClasses classes, Budget budget) {
         Room room = new Room(accepting.length);
-        room.round = 1;
+        room.nextRound();
         int count = close(steps, 0, room.there, 0, room, null);
         return Subsets.of(classes, budget, room, count, accepting);
     }
@@ -1332,103 +1344,109 @@ public final class StringPattern implements Predicate<String> {
         boolean frozen = false;
         int at = 0;
         int length = value.length();
-        while (at < length) {
-            ask(checkpoint);
-            char unit = value.charAt(at);
-            int each = classes.at(value, at);
-            if (each < 0) {
-                return false;
-            }
-            at += Character.isHighSurrogate(unit) ? 2 : 1;
-            Subset from = in;
-            if (from != null) {
-                Subset next = from.next[each];
-                if (next != null) {
-                    read++;
-                    if (next == nothing) {
-                        return false;
+        try {
+            while (at < length) {
+                ask(checkpoint);
+                char unit = value.charAt(at);
+                int each = classes.at(value, at);
+                if (each < 0) {
+                    return false;
+                }
+                at += Character.isHighSurrogate(unit) ? 2 : 1;
+                Subset from = in;
+                if (from != null) {
+                    Subset next = from.next[each];
+                    if (next != null) {
+                        read++;
+                        if (next == nothing) {
+                            return false;
+                        }
+                        if (next != from) {
+                            in = next;
+                        } else if (checkpoint == null) {
+                            // As over a deterministic machine's table ({@link #look}).
+                            int was = at;
+                            at = from.stay.over(value, at);
+                            read += at - was;
+                        }
+                        continue;
                     }
-                    if (next != from) {
-                        in = next;
-                    } else if (checkpoint == null) {
-                        // As over a deterministic machine's table ({@link #look}).
-                        int was = at;
-                        at = from.stay.over(value, at);
-                        read += at - was;
+                    if (room == null) {
+                        // The room a walk works a set out in is as large as the machine, and is
+                        // taken only once asked.
+                        ask(checkpoint);
+                        room = room();
                     }
-                    continue;
+                    count = move(steps, from.states, from.states.length, classes.some(each), room,
+                            checkpoint);
+                } else {
+                    count = move(steps, Objects.requireNonNull(room).here, count, classes.some(each),
+                            room, checkpoint);
                 }
-                if (room == null) {
-                    // The room a walk works a set out in is as large as the machine, and is made
-                    // only once asked.
-                    ask(checkpoint);
-                    room = new Room(accepting.length);
+                Room working = Objects.requireNonNull(room);
+                if (count == 0) {
+                    if (from != null && !frozen) {
+                        from.next[each] = nothing;
+                    }
+                    return false;
                 }
-                count = move(steps, from.states, from.states.length, classes.some(each), room,
-                        checkpoint);
-            } else {
-                count = move(steps, Objects.requireNonNull(room).here, count, classes.some(each),
-                        room, checkpoint);
-            }
-            Room working = Objects.requireNonNull(room);
-            if (count == 0) {
-                if (from != null && !frozen) {
-                    from.next[each] = nothing;
-                }
-                return false;
-            }
-            Generation held = kept;
-            @Nullable Subset to = kept.held(working, count, accepting, !frozen, checkpoint);
-            if (to == null && !frozen) {
-                Generation now = known.current();
-                if (now == kept && (!restarted || read >= 10 * made)) {
-                    ask(checkpoint);
-                    now = known.restart(kept);
-                    restarted = true;
-                }
-                if (now != kept) {
-                    // Started here or by another walk: the set the walk has come to is kept in it
-                    // as the first of this walk's.
-                    kept = now;
-                    made = 0;
-                    read = 0;
-                    to = kept.held(working, count, accepting, true, checkpoint);
+                Generation held = kept;
+                @Nullable Subset to = kept.held(working, count, accepting, !frozen, checkpoint);
+                if (to == null && !frozen) {
+                    Generation now = known.current();
+                    if (now == kept && (!restarted || read >= 10 * made)) {
+                        ask(checkpoint);
+                        now = known.restart(kept);
+                        restarted = true;
+                    }
+                    if (now != kept) {
+                        // Started here or by another walk: the set the walk has come to is kept in it
+                        // as the first of this walk's.
+                        kept = now;
+                        made = 0;
+                        read = 0;
+                        to = kept.held(working, count, accepting, true, checkpoint);
+                    }
+                    if (to == null) {
+                        frozen = true;
+                    }
                 }
                 if (to == null) {
-                    frozen = true;
+                    // Not kept, and no more will be: the walk goes on from the states it has come to.
+                    int[] was = working.here;
+                    working.here = working.there;
+                    working.there = was;
+                    in = null;
+                    continue;
                 }
-            }
-            if (to == null) {
-                // Not kept, and no more will be: the walk goes on from the states it has come to.
-                int[] was = working.here;
-                working.here = working.there;
-                working.there = was;
-                in = null;
-                continue;
-            }
-            if (working.made) {
-                made++;
-            }
-            // A step is written only from a set of the generation the set it leads to is in, so a
-            // generation that is let go holds nothing of one after it, and a walk that keeps no
-            // more sets writes none.
-            if (from != null && !frozen && held == kept) {
-                if (to == from) {
-                    from.staysOn(classes, each);
+                if (working.made) {
+                    made++;
                 }
-                from.next[each] = to;
+                // A step is written only from a set of the generation the set it leads to is in, so a
+                // generation that is let go holds nothing of one after it, and a walk that keeps no
+                // more sets writes none.
+                if (from != null && !frozen && held == kept) {
+                    if (to == from) {
+                        from.staysOn(classes, each);
+                    }
+                    from.next[each] = to;
+                }
+                if (to == from && checkpoint == null) {
+                    int was = at;
+                    at = to.stay.over(value, at);
+                    read += at - was;
+                }
+                in = to;
             }
-            if (to == from && checkpoint == null) {
-                int was = at;
-                at = to.stay.over(value, at);
-                read += at - was;
+            if (in != null) {
+                return in.accepting;
             }
-            in = to;
+            return acceptsAny(accepting, Objects.requireNonNull(room).here, count, checkpoint);
+        } finally {
+            if (room != null) {
+                leave(room);
+            }
         }
-        if (in != null) {
-            return in.accepting;
-        }
-        return acceptsAny(accepting, Objects.requireNonNull(room).here, count, checkpoint);
     }
 
     /** The states the first {@code count} of {@code from} lead to over {@code symbol}, each with the
@@ -1437,7 +1455,7 @@ public final class StringPattern implements Predicate<String> {
      *  before each state and each step it looks at. */
     private int move(Steps steps, int[] from, int count, int symbol, Room room,
                      @Nullable Checkpoint checkpoint) {
-        room.round++;
+        room.nextRound();
         int next = 0;
         for (int i = 0; i < count; i++) {
             ask(checkpoint);
@@ -1743,6 +1761,11 @@ public final class StringPattern implements Predicate<String> {
      * <p>Every walk puts states in through {@link #close}, with sets kept or without, so nothing is
      * held here that only one of them needs. What only keeping a set needs, its hash and whether it
      * accepts, is worked out of the set where it is kept ({@link #hashOf}, {@link #acceptsAny}).
+     *
+     * <p>A pattern keeps one for the next walk, as the last walk to finish left it, so a walk does
+     * not make room the size of the machine each time ({@link #room}, {@link #leave}). Its rounds go
+     * on from one walk to the next, so nothing a walk before put in it is taken as put in by this
+     * one.
      */
     private static final class Room {
 
@@ -1760,6 +1783,15 @@ public final class StringPattern implements Predicate<String> {
             this.there = new int[states];
             this.seen = new int[states];
             this.pending = new int[states];
+        }
+
+        /** Starts a round no state has been put in yet. Once in four billion, where the rounds come
+         *  round to nought, every state is marked as put in none. */
+        void nextRound() {
+            if (++round == 0) {
+                Arrays.fill(seen, 0);
+                round = 1;
+            }
         }
     }
 
@@ -1805,25 +1837,43 @@ public final class StringPattern implements Predicate<String> {
      * for one it may stop at, and that is asked about as the rest of the walk is.
      */
     private boolean spread(Steps steps, String value, @Nullable Checkpoint checkpoint) {
-        // The room a walk is held in is as large as the machine, and is made only once asked.
+        // The room a walk is held in is as large as the machine, and is taken only once asked.
         ask(checkpoint);
-        Room room = new Room(accepting.length);
-        room.round = 1;
-        int count = close(steps, 0, room.here, 0, room, checkpoint);
-        int at = 0;
-        while (at < value.length()) {
-            ask(checkpoint);
-            if (count == 0) {
-                return false;
+        Room room = room();
+        try {
+            room.nextRound();
+            int count = close(steps, 0, room.here, 0, room, checkpoint);
+            int at = 0;
+            while (at < value.length()) {
+                ask(checkpoint);
+                if (count == 0) {
+                    return false;
+                }
+                int symbol = value.codePointAt(at);
+                at += Character.charCount(symbol);
+                count = move(steps, room.here, count, symbol, room, checkpoint);
+                int[] was = room.here;
+                room.here = room.there;
+                room.there = was;
             }
-            int symbol = value.codePointAt(at);
-            at += Character.charCount(symbol);
-            count = move(steps, room.here, count, symbol, room, checkpoint);
-            int[] was = room.here;
-            room.here = room.there;
-            room.there = was;
+            return acceptsAny(accepting, room.here, count, checkpoint);
+        } finally {
+            leave(room);
         }
-        return acceptsAny(accepting, room.here, count, checkpoint);
+    }
+
+    /** A room as large as this machine for a walk to work in: the one the last walk to finish left,
+     *  where no other walk has taken it, and otherwise a new one. */
+    private Room room() {
+        Room left = spare.getAndSet(null);
+        return left != null ? left : new Room(accepting.length);
+    }
+
+    /** Leaves {@code room} for the next walk, where no other walk has left one; otherwise it is let
+     *  go. A walk stopped part of the way leaves it too: what it held is never read again, as
+     *  {@link Room#nextRound} says. */
+    private void leave(Room room) {
+        spare.compareAndSet(null, room);
     }
 
     /** {@code from} and every state it reaches for no character, put into {@code into} after its
