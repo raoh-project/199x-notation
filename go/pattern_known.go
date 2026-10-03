@@ -82,30 +82,31 @@ type knownSets struct {
 }
 
 // afresh starts the kept sets again from what every walk needs, and is the set now holds, whose
-// hash is hash, with whether it was made here. It forgets every set but the one a walk starts in,
+// hash is hash. It forgets every set but the one a walk starts in,
 // and every step, and keeps now beside that one, whatever it takes, with the step over r to it
 // where from is the set a walk starts in; a walk that has kept nothing keeps now as the set it
 // starts in. Every match needs the set it starts in, whatever it reads, so no match forgets the
 // others to make room for it. A set held across it is still the set it was, and is no longer
 // looked up but for that one. It is the one way anything is kept beside knownBytes, and only
 // machine.forgets and machine.begin call it.
-func (k *knownSets) afresh(m *machine, now *stateSet, hash uint32, from *knownSet, r rune) (set *knownSet, made bool) {
+func (k *knownSets) afresh(m *machine, now *stateSet, hash uint32, from *knownSet, r rune) *knownSet {
 	first := k.first
 	k.slots = nil
 	k.first = nil
 	k.others.forget()
 	k.kept, k.bytes, k.needed = 0, 0, 0
 	if first == nil {
-		set = k.made(m, now, hash)
+		set := k.made(m, now, hash)
 		k.put(set, true)
 		k.first = set
-		return set, true
+		return set
 	}
 	first.ascii = [utf8RuneSelf]*knownSet{}
 	k.put(first, true)
 	k.first = first
-	if set = k.find(now, hash); set == nil {
-		set, made = k.made(m, now, hash), true
+	set := k.find(now, hash)
+	if set == nil {
+		set = k.made(m, now, hash)
 		k.put(set, true)
 	}
 	if from == first {
@@ -117,7 +118,7 @@ func (k *knownSets) afresh(m *machine, now *stateSet, hash uint32, from *knownSe
 			k.charge(more, true)
 		}
 	}
-	return set, made
+	return set
 }
 
 // made is a new set of the states now holds, whose hash is hash, kept nowhere yet.
@@ -158,17 +159,17 @@ func (k *knownSets) fits(more int) bool {
 }
 
 // keep is the set now holds, whose hash is hash: found where it is kept, and otherwise kept in
-// knownBytes, made reporting so. It is nil where it does not fit beside the sets kept.
-func (k *knownSets) keep(m *machine, now *stateSet, hash uint32) (set *knownSet, made bool) {
+// knownBytes. It is nil where it does not fit beside the sets kept.
+func (k *knownSets) keep(m *machine, now *stateSet, hash uint32) *knownSet {
 	if set := k.find(now, hash); set != nil {
-		return set, false
+		return set
 	}
 	if !k.fits(setBytes(len(now.states())) + k.slotsGrowth()) {
-		return nil, false
+		return nil
 	}
-	set = k.made(m, now, hash)
+	set := k.made(m, now, hash)
 	k.put(set, false)
-	return set, true
+	return set
 }
 
 // put keeps set, which is not kept, charging its states, its knownSet and what the slots grow by,

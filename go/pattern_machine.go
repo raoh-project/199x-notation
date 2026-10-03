@@ -200,9 +200,11 @@ type walk struct {
 	// keeps no more of them: it goes on by those kept, and a state at a time where they do not
 	// lead, until it comes back to one.
 	forgot, frozen bool
-	// made and read are the sets this match made and the characters it read by kept steps, a step
-	// already known and no other, since it last forgot the kept sets or since it began.
-	made, read int
+	// worked and read are the characters this match worked out a state at a time to keep, whether
+	// that came to a new set or to a kept one by a new step, and the characters it read by kept
+	// steps, a step already known and no other, since it last forgot the kept sets or since it
+	// began.
+	worked, read int
 }
 
 // matches is whether the whole of subject is accepted: every state the machine may be in is
@@ -265,14 +267,14 @@ func (m *machine) matchesIn(w *walk, subject string) bool {
 // kept set it starts in.
 func (m *machine) begin(w *walk) {
 	w.forgot, w.frozen = false, false
-	w.made, w.read = 0, 0
+	w.worked, w.read = 0, 0
 	if w.in = w.known.first; w.in != nil {
 		return
 	}
 	// Only a walk that has kept nothing comes here: starting the kept sets again keeps this one.
 	w.now.clear()
 	m.enter(w, w.now, 0)
-	w.in, _ = w.known.afresh(m, w.now, hashOf(w.now), nil, 0)
+	w.in = w.known.afresh(m, w.now, hashOf(w.now), nil, 0)
 }
 
 // take moves the walk over one symbol, and is false where it is in no state after it. Where the
@@ -288,6 +290,9 @@ func (m *machine) take(w *walk, r rune) bool {
 			return !next.none
 		}
 		m.advance(w, from.states, r)
+		if !w.frozen {
+			w.worked++
+		}
 	} else {
 		m.advance(w, w.now.states(), r)
 	}
@@ -310,12 +315,9 @@ func (m *machine) hold(w *walk, from *knownSet, r rune) *knownSet {
 	if w.frozen {
 		return w.known.find(w.now, hash)
 	}
-	set, made := w.known.keep(m, w.now, hash)
+	set := w.known.keep(m, w.now, hash)
 	if set == nil {
 		return m.forgets(w, hash, from, r)
-	}
-	if made {
-		w.made++
 	}
 	if from == nil || w.known.lead(from, r, set) {
 		return set
@@ -336,23 +338,20 @@ func (m *machine) hold(w *walk, from *knownSet, r rune) *knownSet {
 //
 // The first time, the kept sets are forgotten: they may be another match's, and say nothing of
 // this one. After that, they are forgotten again where what this match read by kept steps since
-// it last forgot them is ten times the sets it made; otherwise keeping them saves nothing, and the
+// it last forgot them is ten times what it worked out a state at a time to keep, whether that came
+// to a new set or to a kept one by a new step; otherwise keeping them saves nothing, and the
 // match keeps no more but goes on by those it has, coming back to them wherever a step a state at
 // a time leads to one. So a match that keeps coming to new sets pays for keeping two rooms of them
 // and then walks a state at a time, and one whose sets are looked up again pays for keeping them
 // out of what it saves.
 func (m *machine) forgets(w *walk, hash uint32, from *knownSet, r rune) *knownSet {
-	if w.forgot && w.read < 10*w.made {
+	if w.forgot && w.read < 10*w.worked {
 		w.frozen = true
 		return nil
 	}
 	w.forgot = true
-	w.made, w.read = 0, 0
-	set, made := w.known.afresh(m, w.now, hash, from, r)
-	if made {
-		w.made++
-	}
-	return set
+	w.worked, w.read = 0, 0
+	return w.known.afresh(m, w.now, hash, from, r)
 }
 
 // advance puts the walk, in w.now, where from leads over one symbol: from each state, each step

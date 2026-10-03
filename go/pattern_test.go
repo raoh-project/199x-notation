@@ -197,7 +197,7 @@ func TestTheNextMatchIsInTheWalkTheLastLeftEvenAfterACollection(t *testing.T) {
 	runtime.GC()
 	runtime.GC()
 	m.matches("aaa")
-	if w := m.spare.Load(); w != left || w.made != 0 || w.read != 3 {
+	if w := m.spare.Load(); w != left || w.worked != 0 || w.read != 3 {
 		t.Fatal("the match after a collection was not in the walk the last one left, by its steps")
 	}
 }
@@ -298,21 +298,21 @@ func TestEachTimedWalkGoesTheWayItIsNamed(t *testing.T) {
 	m, subject := tenthPath()
 	w := m.newWalk()
 	m.matchesIn(w, subject)
-	made := w.made
+	made := w.known.kept
 	if made*2 <= len(subject) || w.frozen || w.forgot {
 		t.Fatalf("a new set at %d of %d characters", made, len(subject))
 	}
 
 	steps := stepsKnown(w)
 	m.matchesIn(w, subject)
-	if w.made != 0 || w.read != len(subject) || stepsKnown(w) != steps {
+	if w.worked != 0 || w.read != len(subject) || stepsKnown(w) != steps {
 		t.Fatal("a match over steps worked out made a set or worked a step out")
 	}
 
 	forgetSteps(w)
 	m.matchesIn(w, subject)
-	if found := stepsKnown(w); w.made != 0 || found*2 <= len(subject) || w.frozen {
-		t.Fatalf("%d sets made, and a kept set found at %d of %d characters", w.made, found, len(subject))
+	if found := stepsKnown(w); w.known.kept != made || found*2 <= len(subject) || w.frozen {
+		t.Fatalf("%d sets kept of %d, and a kept set found at %d of %d characters", w.known.kept, made, found, len(subject))
 	}
 }
 
@@ -420,10 +420,10 @@ func TestASetPutInInAnotherOrderIsTheSetKept(t *testing.T) {
 		}
 	}
 	put(1, 2, 3)
-	first, _ := w.known.keep(m, w.now, hashOf(w.now))
+	first := w.known.keep(m, w.now, hashOf(w.now))
 	put(3, 1, 2)
-	again, made := w.known.keep(m, w.now, hashOf(w.now))
-	if again != first || made || w.known.kept != 1 {
+	again := w.known.keep(m, w.now, hashOf(w.now))
+	if again != first || w.known.kept != 1 {
 		t.Fatalf("{3, 1, 2} was kept apart from {1, 2, 3}: %d sets kept", w.known.kept)
 	}
 }
@@ -436,7 +436,7 @@ func TestSetsWithTheSameHashAreToldApart(t *testing.T) {
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(3)
-	held, _ := w.known.keep(m, w.now, hashOf(w.now))
+	held := w.known.keep(m, w.now, hashOf(w.now))
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(2)
@@ -469,6 +469,45 @@ func machineOf(t *testing.T, pattern string) *machine {
 func tenthOf17() (*machine, func(string) bool) {
 	return pathMachine("(?:a|b)*a(?:a|b){16}"), func(subject string) bool {
 		return len(subject) >= 17 && subject[len(subject)-17] == 'a'
+	}
+}
+
+// A match whose new steps lead only to sets already kept, and fill the room with steps, is frozen
+// once it fills the room the second time having read little by kept steps, as a match that fills
+// it with sets is: what it worked out is counted step by step, and not set by set. The y before
+// the thousand and twenty-four characters cuts them into a class each, and every one of them leads
+// the set a walk goes round back to itself. Counted in sets made, the match counted nothing it
+// worked out, was never frozen, and started the kept sets again each time it filled the room.
+func TestAMatchThatFillsTheRoomWithStepsIsFrozenAsOneThatFillsItWithSets(t *testing.T) {
+	var text strings.Builder
+	text.WriteString("y(?:")
+	for c := rune(0x100); c < 0x500; c++ {
+		if c > 0x100 {
+			text.WriteByte('|')
+		}
+		text.WriteRune(c)
+	}
+	text.WriteString(`)|[\x{100}-\x{4FF}]*`)
+	m := machineOf(t, text.String())
+	w := m.newWalk()
+	if !m.matchesIn(w, "\u0100\u0101") {
+		t.Fatal("two of the characters are not accepted")
+	}
+	defer func(was int) { knownBytes = was }(knownBytes)
+	// Room for the sets and a few dozen steps past ASCII.
+	knownBytes = w.known.bytes + 2048
+	seed := uint32(11)
+	var subject strings.Builder
+	for range 20_000 {
+		seed = seed*1664525 + 1013904223
+		subject.WriteRune(rune(0x100 + seed>>22))
+	}
+	if !m.matchesIn(w, subject.String()) {
+		t.Fatal("the characters at random are not accepted")
+	}
+	if w.known.kept > 3 || !w.forgot || !w.frozen {
+		t.Fatalf("%d sets kept, forgot %v, frozen %v, worked %d, read %d", w.known.kept, w.forgot,
+			w.frozen, w.worked, w.read)
 	}
 }
 
@@ -522,11 +561,11 @@ func TestAMatchThatComesToNewSetsSlowsNoMatchAfterIt(t *testing.T) {
 	if got := m.matchesIn(w, friendly); got != want(friendly) {
 		t.Fatalf("%q... is %v", friendly[:20], got)
 	}
-	if w.frozen || w.made == 0 {
-		t.Fatalf("the next match kept no more %v, and made %d sets", w.frozen, w.made)
+	if w.frozen || w.worked == 0 {
+		t.Fatalf("the next match kept no more %v, and worked %d steps out", w.frozen, w.worked)
 	}
-	if got := m.matchesIn(w, friendly); got != want(friendly) || w.made != 0 || w.read != len(friendly) || w.forgot {
-		t.Fatalf("the match after it made %d sets and read %d of %d characters by kept steps", w.made, w.read, len(friendly))
+	if got := m.matchesIn(w, friendly); got != want(friendly) || w.worked != 0 || w.read != len(friendly) || w.forgot {
+		t.Fatalf("the match after it worked %d steps out and read %d of %d characters by kept steps", w.worked, w.read, len(friendly))
 	}
 }
 
@@ -608,7 +647,7 @@ func TestASetLargerThanTheRoomIsKeptBesideTheStart(t *testing.T) {
 	// The step from the set a walk starts in to it was kept with it, so the next match reads every
 	// character by kept steps, keeping no new set.
 	m.matchesIn(w, subject)
-	if w.frozen || w.made != 0 || w.read != len(subject) {
+	if w.frozen || w.worked != 0 || w.read != len(subject) {
 		t.Fatalf("the next match read %d of %d by kept steps", w.read, len(subject))
 	}
 }
@@ -639,7 +678,7 @@ func TestStepsFromASetLargerThanTheRoomAreKeptInTheRoom(t *testing.T) {
 			w.known.needed, knownBytes, w.known.bytes)
 	}
 	m.matchesIn(w, text)
-	if w.frozen || w.made != 0 || w.read != len([]rune(text)) {
+	if w.frozen || w.worked != 0 || w.read != len([]rune(text)) {
 		t.Fatalf("the next match read %d of %d characters by kept steps; kept no more %v",
 			w.read, len([]rune(text)), w.frozen)
 	}
@@ -676,10 +715,10 @@ func TestAStepThatDoesNotFitIsDecidedOnAsASetIs(t *testing.T) {
 	w := m.newWalk()
 	m.matchesIn(w, subject)
 	m.matchesIn(w, subject)
-	if stepsKnown(w) != steps || w.made != 0 || w.read != len([]rune(subject)) {
+	if stepsKnown(w) != steps || w.worked != 0 || w.read != len([]rune(subject)) {
 		t.Fatalf("with room for the sets and not their steps, %d of %d steps are kept, and the "+
-			"second match made %d sets and read %d characters by kept steps", stepsKnown(w), steps,
-			w.made, w.read)
+			"second match worked %d steps out and read %d characters by kept steps", stepsKnown(w), steps,
+			w.worked, w.read)
 	}
 }
 
