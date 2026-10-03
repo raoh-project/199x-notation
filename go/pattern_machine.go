@@ -1,7 +1,7 @@
 package notation199x
 
 import (
-	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
@@ -14,9 +14,13 @@ import (
 type machine struct {
 	states []state
 	accept int32
-	// scratch holds what a walk works in, so that a match does not make room the size of the
-	// machine each time.
-	scratch sync.Pool
+	// spare is a walk no match is in, with the sets it kept, or nil. A match takes it and puts it
+	// back, so that a match does not make room the size of the machine each time, nor work out
+	// again the sets the match before it kept. It is held as long as the machine is: a collection
+	// does not take it, as it would from a sync.Pool. A match that finds no spare, because another
+	// goroutine is in it, makes a walk of its own, and only one walk is put back, so no two
+	// goroutines are ever in one walk.
+	spare atomic.Pointer[walk]
 }
 
 type state struct {
@@ -206,12 +210,13 @@ type walk struct {
 // An ASCII character whose step from the kept set the walk is in is known is taken here, as one
 // lookup. Every other character is taken by take.
 func (m *machine) matches(subject string) bool {
-	w, _ := m.scratch.Get().(*walk)
+	w := m.spare.Swap(nil)
 	if w == nil {
 		w = m.newWalk()
 	}
-	defer m.scratch.Put(w)
-	return m.matchesIn(w, subject)
+	accepted := m.matchesIn(w, subject)
+	m.spare.CompareAndSwap(nil, w)
+	return accepted
 }
 
 // newWalk is a walk of m that has kept no sets.

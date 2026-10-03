@@ -1,6 +1,7 @@
 package notation199x
 
 import (
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -177,6 +178,24 @@ func TestAPatternIsMatchedFromSeveralGoroutinesAtOnce(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// The walk a match leaves, with the sets it kept, is the one the next match is in, a collection
+// between them or not. In a sync.Pool, the match after a collection made a walk anew: on a machine
+// of 250,000 states, 5 MB and as long as 2,500 matches that go by kept steps.
+func TestTheNextMatchIsInTheWalkTheLastLeftEvenAfterACollection(t *testing.T) {
+	m := pathMachine("a{0,1000}")
+	m.matches("aaa")
+	left := m.spare.Load()
+	if left == nil || left.known.kept == 0 {
+		t.Fatal("the match left no walk, or one that kept no set")
+	}
+	runtime.GC()
+	runtime.GC()
+	m.matches("aaa")
+	if w := m.spare.Load(); w != left || w.made != 0 || w.read != 3 {
+		t.Fatal("the match after a collection was not in the walk the last one left, by its steps")
+	}
 }
 
 // A machine at the limit of states is walked a character at a time, every state it may be in at
