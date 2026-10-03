@@ -12,14 +12,14 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * A string somebody can write is a different question from a string a machine holds.
  *
  * <p>{@link Automaton#shortest} answers with what the machine holds; {@link Automaton#shortestWritten}
- * refuses to answer with a string holding a character a source cannot carry as itself, which is a
- * Unicode control code, General_Category=Cc, other than TAB, LF and CR. A caller writing a value out
- * wants the second — a value carrying one of those is not one anybody can read back — and one
- * deciding whether a machine holds anything wants the first. TAB, LF and CR are control codes a
- * literal spells, so a value holding one is written.
+ * does not choose a string holding a Unicode control code, General_Category=Cc, other than TAB, LF
+ * and CR. A caller making a value to show a person wants the second — a control code is invisible
+ * there, though a string literal may hold one raw — and one deciding whether a machine holds
+ * anything wants the first. TAB, LF and CR each have an escape they are written by, so a value
+ * holding one is chosen.
  *
- * <p>The two come apart exactly where the shortest string held is one a source cannot carry, and
- * they come apart the most where every string held is.
+ * <p>The two come apart exactly where the shortest string held holds one of the others, and they
+ * come apart the most where every string held does.
  */
 class WhatCanBeWrittenIsAskedApartFromWhatIsHeldTest {
 
@@ -39,9 +39,9 @@ class WhatCanBeWrittenIsAskedApartFromWhatIsHeldTest {
         // Shorter and unwritable beside longer and writable: what it holds is the short one, and
         // what can be written is the long one.
         Automaton either = machine("[\\x{1}]|abc");
-        // Written as a value rather than as itself: a character pasted into a source that the
-        // source cannot carry is what this whole question is about, and one sitting in the
-        // expectation would be the same trap in the test.
+        // Written as a value rather than as itself: a control code nobody can see is what this
+        // whole question is about, and one sitting raw in the expectation would be the same trap
+        // in the test.
         assertEquals(one, either.shortest());
         assertEquals("abc", either.shortestWritten());
 
@@ -49,15 +49,15 @@ class WhatCanBeWrittenIsAskedApartFromWhatIsHeldTest {
         Automaton unwritable = machine("[\\x{1}-\\x{2}]+");
         assertEquals(one, unwritable.shortest());
         assertNull(unwritable.shortestWritten(),
-                "every string it holds is one nobody can paste, so there is nothing to write");
+                "every string it holds holds a control code, so there is nothing to choose");
     }
 
     /**
-     * The line is the Unicode control codes less the three a literal spells: those three are
-     * written, and every other control code, C0, DEL and C1 alike, is not.
+     * The line is the Unicode control codes less the three with an escape: those three are chosen,
+     * and every other control code, C0, DEL and C1 alike, is not.
      */
     @Test
-    void theControlsALiteralSpellsAreWrittenAndNoOtherIs() {
+    void theControlsWithAnEscapeAreWrittenAndNoOtherIs() {
         for (int spelled : new int[] {0x09, 0x0A, 0x0D}) {
             String pattern = "[\\x{" + Integer.toHexString(spelled) + "}]+";
             String value = Character.toString(spelled);

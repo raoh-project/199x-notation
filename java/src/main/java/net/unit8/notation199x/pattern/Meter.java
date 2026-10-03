@@ -90,7 +90,11 @@ public final class Meter {
      * than as a comment. The day a pair that builds arrives, the state it asks for is refused where
      * it is asked for, rather than made out of an allowance nobody granted and charged to nobody.
      *
-     * @return a meter that refuses every state
+     * <p>Every request for more than none is refused, of states and of work alike, so an operation
+     * answered with this meter is one that asked it for nothing a meter counts. A request for none
+     * is granted, as on every meter.
+     *
+     * @return a meter that refuses every request for a state or for work
      */
     public static Meter refusing() {
         return new Meter();

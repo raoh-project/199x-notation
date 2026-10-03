@@ -18,7 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>A meter counts states and work apart, and either can be what refuses, so the later refusal is
  * asked on both. Each is one of the other kind than the first, which the controls show: on a meter
- * nothing refused before, the same asks come to the allowance.
+ * nothing refused before, the same asks come to the allowance. And the two kinds are asked in both
+ * orders, so a meter that let one kind replace the other would be found whichever kind it favoured.
  */
 class AMeterKeepsTheFirstRefusalTest {
 
@@ -53,6 +54,24 @@ class AMeterKeepsTheFirstRefusalTest {
         assertFalse(meter.making().work(WORK / 2), "within one machine and past what is left");
         assertEquals(Meter.Stopped.ONE_MACHINE, meter.stoppedBy(),
                 "a refusal of work after it does not replace it either");
+    }
+
+    /**
+     * And the other way round: a first refusal for the allowance is not replaced by a later one for
+     * a machine larger than one may be. Which of the two is kept is the order they came in, not
+     * which of them is about a pattern.
+     */
+    @Test
+    void aLaterRefusalOfAMachineDoesNotReplaceAFirstOfTheAllowance() {
+        Meter meter = new Meter(10, 10, WORK);
+        meter.starting();
+        assertTrue(meter.making().states(10), "the whole allowance, by one machine of its most");
+        assertFalse(meter.making().states(1), "and nothing left for one more");
+        assertEquals(Meter.Stopped.THE_ANSWER, meter.stoppedBy());
+
+        assertFalse(meter.making().states(20), "more than one machine may be");
+        assertEquals(Meter.Stopped.THE_ANSWER, meter.stoppedBy(),
+                "the first refusal still stands, though the later one is about a pattern");
     }
 
     @Test
