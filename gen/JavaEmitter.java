@@ -241,6 +241,10 @@ final class JavaEmitter {
         out.append("    static final Mapping COMPAT = decodeMapping(").append(literal(mapping(compatibility)))
                 .append(");\n\n");
 
+        paged(out, "DECOMP", "For each code point, 0 where it has no decomposition, one more than where it is"
+                + " among {@link #DECOMP}'s code points where it has a canonical one, and otherwise the number of"
+                + " those and one more than where it is among {@link #COMPAT}'s.",
+                model.byCodePoint().decomposition(), true);
         paged(out, "CCC", "Unicode " + version + "'s canonical combining class of each code point, 0 for a"
                 + " starter.", model.byCodePoint().combiningClass(), false);
 

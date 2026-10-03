@@ -78,6 +78,9 @@ final class RustEmitter {
                         + " in `CANONICAL` or in neither",
                 decomposition.compatibility());
 
+        paged(out, "DECOMPOSITION_POSITION", "For each code point, 0 where it has no decomposition, one more"
+                + " than where it is in `CANONICAL` where it has a canonical one, and otherwise `CANONICAL.len()`"
+                + " and one more than where it is in `COMPATIBILITY`.", model.byCodePoint().decomposition(), "u16");
         paged(out, "COMBINING_CLASS", "Each code point's canonical combining class, 0 for a starter.",
                 model.byCodePoint().combiningClass(), "u8");
         paged(out, "STABLE", "For each code point, the forms it is a stable starter in, a bit each: NFC 1, NFD 2,"

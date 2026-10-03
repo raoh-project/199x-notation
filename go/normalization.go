@@ -422,10 +422,7 @@ func decomposeInto(dst []rune, r rune, compatibility bool) ([]rune, bool) {
 		}
 		return dst, true
 	}
-	mapped := canonicalDecomposition.of(r)
-	if mapped == nil && compatibility {
-		mapped = compatibilityDecomposition.of(r)
-	}
+	mapped := decompositionOf(r, compatibility)
 	if mapped == nil {
 		return dst, false
 	}
@@ -436,6 +433,22 @@ func decomposeInto(dst []rune, r rune, compatibility bool) ([]rune, bool) {
 		}
 	}
 	return dst, true
+}
+
+// decompositionOf is r's one-step decomposition by canonicalDecomposition, or with compatibility by
+// compatibilityDecomposition as well, read where decompositionPositionPages says it is; nil where
+// it has none.
+func decompositionOf(r rune, compatibility bool) []rune {
+	at := int(decompositionPositionPages[int(decompositionPositionBlocks[r>>8])<<8|int(r&0xFF)])
+	switch {
+	case at == 0:
+		return nil
+	case at <= len(canonicalDecomposition):
+		return canonicalDecomposition[at-1].to
+	case compatibility:
+		return compatibilityDecomposition[at-len(canonicalDecomposition)-1].to
+	}
+	return nil
 }
 
 // combiningClass is r's canonical combining class: 0 for a starter, and for a mark the class

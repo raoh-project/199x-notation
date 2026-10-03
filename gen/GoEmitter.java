@@ -76,6 +76,10 @@ final class GoEmitter {
                         + " in canonicalDecomposition or in neither",
                 decomposition.compatibility());
 
+        paged(out, "decompositionPosition", "for each code point, 0 where it has no decomposition, one more"
+                + " than where it is in canonicalDecomposition where it has a canonical one, and otherwise"
+                + " len(canonicalDecomposition) and one more than where it is in compatibilityDecomposition.",
+                model.byCodePoint().decomposition(), "uint16");
         paged(out, "combiningClass", "each code point's canonical combining class, 0 for a starter.",
                 model.byCodePoint().combiningClass(), "uint8");
         paged(out, "stable", "for each code point, the forms it is a stable starter in, a bit each: NFC 1, NFD 2,"

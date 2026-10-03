@@ -2,6 +2,7 @@ package notation199x
 
 import (
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,7 +15,8 @@ import (
 // the generator's word.
 
 // A stable starter of a form is a code point whose combining class is 0 and whose quick check for
-// the form is Yes, and the combining class is the one UnicodeData.txt states.
+// the form is Yes, and the combining class is the one UnicodeData.txt states. The table of where
+// each decomposition is answers what the searched mappings do.
 func TestTheNormalizationTablesAreWhatTheDatabaseStates(t *testing.T) {
 	classes := make(map[rune]uint8)
 	data, err := os.ReadFile(repositoryFile(t, "ucd/18.0.0/UnicodeData.txt"))
@@ -61,6 +63,16 @@ func TestTheNormalizationTablesAreWhatTheDatabaseStates(t *testing.T) {
 	}
 	wrong := 0
 	for r := rune(0); r <= utf8.MaxRune; r++ {
+		for _, compatibility := range []bool{false, true} {
+			searched := canonicalDecomposition.of(r)
+			if searched == nil && compatibility {
+				searched = compatibilityDecomposition.of(r)
+			}
+			if got := decompositionOf(r, compatibility); !slices.Equal(got, searched) {
+				wrong++
+				t.Errorf("the decomposition of U+%04X, compatibility %v, is %X, not %X", r, compatibility, got, searched)
+			}
+		}
 		if combiningClass(r) != classes[r] {
 			wrong++
 			t.Errorf("the combining class of U+%04X is %d, not %d", r, combiningClass(r), classes[r])

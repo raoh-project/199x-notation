@@ -157,9 +157,15 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      * @param stableStarters for each code point, the forms it is a
      *                       {@linkplain Decomposition#stableStarter stable starter} in, a bit each, in
      *                       the order of {@link #FORMS}: bit 0 NFC, bit 1 NFD, bit 2 NFKC, bit 3 NFKD
+     * @param decomposition  for each code point, 0 where it has no decomposition; where
+     *                       {@link Decomposition#canonical} names it, one more than where it is among
+     *                       the code points that mapping names, in order of code point; and where
+     *                       {@link Decomposition#compatibility} does, the number canonical names and
+     *                       one more than where it is among those compatibility names. No code point
+     *                       is named by both
      */
     record ByCodePoint(PagedTable lower, PagedTable upper, PagedTable combiningClass,
-                       PagedTable stableStarters) {}
+                       PagedTable stableStarters, PagedTable decomposition) {}
 
     /** The four normalization forms, by name, in the order each is a bit of
      *  {@link ByCodePoint#stableStarters}. */
@@ -497,7 +503,23 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
                         }
                     }
                     return forms;
-                }));
+                }),
+                decompositionPositions(decomposition));
+    }
+
+    /** {@link ByCodePoint#decomposition}: the canonical decompositions numbered from 1, and the
+     *  compatibility ones after them. */
+    private static PagedTable decompositionPositions(Decomposition decomposition) {
+        Map<Integer, Integer> position = new TreeMap<>();
+        for (CodePointMapping mapping : List.of(decomposition.canonical(), decomposition.compatibility())) {
+            for (int cp : mapping.entries().keySet()) {
+                if (position.put(cp, position.size() + 1) != null) {
+                    throw new IllegalStateException("U+" + hex(cp) + " has a canonical and a compatibility"
+                            + " decomposition, where the table of decompositions holds one");
+                }
+            }
+        }
+        return PagedTable.of(cp -> position.getOrDefault(cp, 0));
     }
 
     /** For each code point, 0 where {@code mapping} maps it to itself, by not naming it or by
