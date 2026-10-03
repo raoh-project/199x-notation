@@ -1,7 +1,6 @@
 package net.unit8.notation199x;
 
 import java.util.Arrays;
-import java.util.TreeMap;
 import java.util.stream.IntStream;
 import org.jspecify.annotations.Nullable;
 
@@ -632,44 +631,24 @@ public final class Normalization {
     // blocks it — a mark of a class it is not strictly greater than, or anything at all for a
     // starter. {@link Composing#settle} and {@link Composing#take} are the two halves of it.
 
-    /** The pair-composition table, inverted once from {@link NormalizationTables#DECOMP} rather
-     *  than kept as a fourth generated table: every two-member canonical decomposition whose first
-     *  member is a starter and whose result is not a {@link NormalizationTables#SCRIPT_SPECIFIC_EXCLUSIONS}
-     *  entry, a singleton decomposition, or a non-starter decomposition — the last two read off
-     *  {@code DECOMP}/{@code CCC} themselves, so decomposition and composition cannot disagree with
-     *  each other. Keyed by {@code (long) starter << 32 | (cp & 0xFFFFFFFFL)}, sorted for binary
-     *  search. */
-    private static final long[] COMPOSE_KEYS;
-    private static final int[] COMPOSE_VALUES;
-
-    static {
-        int[] keys = NormalizationTables.DECOMP.codePoints();
-        int[][] mapped = NormalizationTables.DECOMP.mapped();
-        TreeMap<Long, Integer> pairs = new TreeMap<>();
-        for (int i = 0; i < keys.length; i++) {
-            int[] m = mapped[i];
-            if (m.length == 2 && combiningClass(m[0]) == 0
-                    && Arrays.binarySearch(NormalizationTables.SCRIPT_SPECIFIC_EXCLUSIONS, keys[i]) < 0) {
-                pairs.put(pairKey(m[0], m[1]), keys[i]);
-            }
-        }
-        COMPOSE_KEYS = pairs.keySet().stream().mapToLong(Long::longValue).toArray();
-        COMPOSE_VALUES = pairs.values().stream().mapToInt(Integer::intValue).toArray();
-    }
-
-    private static long pairKey(int starter, int cp) {
-        return ((long) starter << 32) | (cp & 0xFFFFFFFFL);
-    }
-
     /** The primary composite of {@code starter} followed by {@code cp}, or -1 if the pair does not
-     *  compose — Hangul's algorithmic L+V and LV+T composition, or {@link #COMPOSE_KEYS}. */
+     *  compose — Hangul's algorithmic L+V and LV+T composition, or
+     *  {@link NormalizationTables#COMPOSITION_CELLS} at the row of {@code starter} and the column of
+     *  {@code cp}. */
     static int compose(int starter, int cp) {
         int hangul = composeHangul(starter, cp);
         if (hangul >= 0) {
             return hangul;
         }
-        int index = Arrays.binarySearch(COMPOSE_KEYS, pairKey(starter, cp));
-        return index >= 0 ? COMPOSE_VALUES[index] : -1;
+        int row = NormalizationTables.COMPOSITION_FIRST_PAGES[
+                (NormalizationTables.COMPOSITION_FIRST_BLOCKS[starter >>> 8] & 0xFF) << 8 | starter & 0xFF];
+        int column = NormalizationTables.COMPOSITION_SECOND_PAGES[
+                (NormalizationTables.COMPOSITION_SECOND_BLOCKS[cp >>> 8] & 0xFF) << 8 | cp & 0xFF] & 0xFF;
+        if (row == 0 || column == 0) {
+            return -1;
+        }
+        int at = NormalizationTables.COMPOSITION_CELLS[(row - 1) * NormalizationTables.COMPOSITION_COLUMNS + column - 1];
+        return at == 0 ? -1 : NormalizationTables.COMPOSITES[at - 1];
     }
 
     private static int composeHangul(int starter, int cp) {

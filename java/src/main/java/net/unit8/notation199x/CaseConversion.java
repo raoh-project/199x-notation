@@ -1,6 +1,7 @@
 package net.unit8.notation199x;
 
 import java.util.Arrays;
+import java.util.Objects;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -196,8 +197,7 @@ public final class CaseConversion {
             int position = pages[(blocks[cp >>> 8] & 0xFF) << 8 | cp & 0xFF];
             int[] mapped = mappings[position - 1];
             if (lower) {
-                int[] finalSigmaMapped = lookup(CaseTables.FINAL_SIGMA, cp);
-                if (finalSigmaMapped != null) {
+                if (hasContext(cp, FINAL_SIGMA_NAMED)) {
                     // The sigma is at least one scalar value of the answer, as every code point is,
                     // and each Case_Ignorable one after it is another.
                     if (written == longest) {
@@ -208,7 +208,8 @@ public final class CaseConversion {
                         return null;
                     }
                     if (isFinal) {
-                        mapped = finalSigmaMapped;
+                        mapped = Objects.requireNonNull(lookup(CaseTables.FINAL_SIGMA, cp),
+                                "CONTEXT_PAGES says FINAL_SIGMA names it");
                     }
                 }
             }
@@ -334,21 +335,21 @@ public final class CaseConversion {
         return index >= 0 ? table.mapped()[index] : null;
     }
 
+    // What CaseTables.CONTEXT_PAGES holds of a code point, a bit each.
+    static final int CASED = 1;
+    static final int CASE_IGNORABLE = 2;
+    static final int FINAL_SIGMA_NAMED = 4;
+
+    /** Whether {@link CaseTables#CONTEXT_PAGES} holds {@code bit} of {@code cp}. */
+    static boolean hasContext(int cp, int bit) {
+        return (CaseTables.CONTEXT_PAGES[(CaseTables.CONTEXT_BLOCKS[cp >>> 8] & 0xFF) << 8 | cp & 0xFF] & bit) != 0;
+    }
+
     private static boolean isCased(int cp) {
-        return inRanges(CaseTables.CASED, cp);
+        return hasContext(cp, CASED);
     }
 
     private static boolean isCaseIgnorable(int cp) {
-        return inRanges(CaseTables.CASE_IGNORABLE, cp);
-    }
-
-    private static boolean inRanges(int[][] startsAndEnds, int cp) {
-        int[] starts = startsAndEnds[0];
-        int[] ends = startsAndEnds[1];
-        int index = Arrays.binarySearch(starts, cp);
-        if (index < 0) {
-            index = -index - 2;
-        }
-        return index >= 0 && cp <= ends[index];
+        return hasContext(cp, CASE_IGNORABLE);
     }
 }
