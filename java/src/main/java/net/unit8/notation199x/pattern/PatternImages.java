@@ -90,16 +90,17 @@ final class PatternImages {
         }
         Map<CodePoints, Integer> sets = new IdentityHashMap<>();
         for (int state = 0; state < machine.size() && out.holds(); state++) {
-            for (Automaton.Step each : machine.stepsFrom(state)) {
-                Integer set = sets.get(each.over());
+            for (int place = machine.stepsAt(state); place < machine.stepsPast(state); place++) {
+                CodePoints over = machine.stepOver(place);
+                Integer set = sets.get(over);
                 if (set == null) {
-                    set = out.set(pairs(each.over()));
-                    sets.put(each.over(), set);
+                    set = out.set(pairs(over));
+                    sets.put(over, set);
                 }
-                out.step(state, set, each.to());
+                out.step(state, set, machine.stepTo(place));
             }
-            for (int to : machine.freeFrom(state)) {
-                out.free(state, to);
+            for (int each = 0; each < machine.freeCount(state); each++) {
+                out.free(state, machine.freeTo(state, each));
             }
         }
         return out.holds() ? out.image() : null;

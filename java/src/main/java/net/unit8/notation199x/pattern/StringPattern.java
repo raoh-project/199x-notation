@@ -105,21 +105,49 @@ public final class StringPattern implements Predicate<String> {
      * be more than the {@link Budget} allows.
      *
      * <p>As many as the runs of the sets each state steps over, every state over again: a set many
-     * states step over is held once in {@link Steps#over} and once a state here. So they are made
+     * states step over is held once in {@link Steps#sets} and once a state here. So they are made
      * only where a walk goes this way, and counted before they are.
      */
-    private final int @Nullable [][] runs;
+    private final @Nullable Runs runs;
 
     /**
-     * A machine as its steps: for each state, the sets its steps are over, as {@code from, to}
-     * pairs, where each leads, and the states a walk is also in for no character. What a walk as
-     * sets of states searches, and what the other ways of walking such a machine are made from.
+     * A deterministic machine's steps as runs, every state's in one array.
+     *
+     * @param start for each state, where its runs begin in {@code runs}, as a place of a run and not
+     *              of a number; one more than the states
+     * @param runs  {@code from, to, target} for each run, a state's sorted by where they begin
+     */
+    private record Runs(int[] start, int[] runs) {}
+
+    /**
+     * A machine as its steps: the sets they are over, as {@code from, to} pairs, and for each
+     * state, which set each of its steps is over, where each leads, and the states a walk is also
+     * in for no character. What a walk as sets of states searches, and what the other ways of
+     * walking such a machine are made from.
+     *
+     * <p>A state's steps are from its place in {@code stepStart} to the next state's, as its steps
+     * for no character are in {@code freeStart}: a state is places in arrays, and nothing is made for
+     * one.
      *
      * <p>A machine read from an image of P1 or built from a pattern's shape is held so. A
      * deterministic machine that has its {@link ClassRows} is held as those instead and has no
      * steps: nothing about it is worked out from sets, and it is never walked as sets of states.
+     *
+     * @param sets      the sets the steps are over, by number, each as {@code from, to} pairs
+     * @param stepStart for each state, where its steps begin; one more than the states
+     * @param stepSet   for each step, the set it is over
+     * @param stepTo    for each step, the state it leads to
+     * @param freeStart for each state, where its steps for no character begin; one more than the
+     *                  states
+     * @param freeTo    for each step for no character, the state it leads to
      */
-    private record Steps(int[][][] over, int[][] target, int[][] free) {}
+    private record Steps(int[][] sets, int[] stepStart, int[] stepSet, int[] stepTo,
+                         int[] freeStart, int[] freeTo) {
+
+        int states() {
+            return stepStart.length - 1;
+        }
+    }
 
     /** The machine as its steps, or null where it is held as its {@link #rows}. */
     private final @Nullable Steps steps;
@@ -279,16 +307,15 @@ public final class StringPattern implements Predicate<String> {
      *  has it or none has finished ({@link Room}). */
     private final AtomicReference<@Nullable Room> spare = new AtomicReference<>();
 
-    private StringPattern(boolean deterministic, boolean[] accepting, int[][][] over, int[][] target,
-                          int[][] free, Budget budget) {
+    private StringPattern(boolean deterministic, boolean[] accepting, Steps steps, Budget budget) {
         this.accepting = accepting;
-        Steps steps = new Steps(over, target, free);
         this.steps = steps;
         this.rows = null;
-        this.live = live(accepting, target, free);
+        this.live = live(accepting, steps);
         // Worked out from this machine's own sets, so a machine has the same classes however it was
-        // come to.
-        List<int[]> sets = distinct(over);
+        // come to: the sets its steps are over, in the order the steps first meet them.
+        int[] index = new int[steps.sets().length];
+        List<int[]> sets = distinct(steps, index);
         SymbolPartition partition = null;
         SymbolClasses classes = null;
         if (budget.classWork() > 0) {
@@ -300,14 +327,14 @@ public final class StringPattern implements Predicate<String> {
         // budget decides how a machine is walked, and a deterministic machine with neither a table
         // nor runs within it is walked as the sets of states its steps lead to.
         if (deterministic) {
-            oneWay(over, sets);
+            oneWay(steps, index, sets);
         }
         this.deterministic = deterministic;
         this.classes = classes;
         this.table = deterministic && partition != null && classes != null
-                ? table(over, target, live, sets, partition, classes, budget) : null;
-        this.runs = deterministic && table == null && runs(over) <= budget.runs()
-                ? runs(over, target) : null;
+                ? table(steps, live, index, partition, classes, budget) : null;
+        this.runs = deterministic && table == null && runCount(steps) <= budget.runs()
+                ? runs(steps) : null;
         this.ascii = runs != null ? ascii(runs, live, budget) : null;
         this.subsets = table == null && runs == null && classes != null && budget.subsets() > 0
                 ? subsets(steps, classes, budget) : null;
@@ -476,15 +503,16 @@ public final class StringPattern implements Predicate<String> {
         spare.set(room);
     }
 
-    /** Each set the steps are over, once however many steps are over it. */
-    private static List<int[]> distinct(int[][][] over) {
-        Map<int[], Boolean> seen = new IdentityHashMap<>();
+    /** Each set the steps are over, once however many steps are over it, in the order the steps
+     *  first meet them; and in {@code index}, for each of the machine's sets, where it is among
+     *  these, or -1 where no step is over it. */
+    private static List<int[]> distinct(Steps steps, int[] index) {
+        Arrays.fill(index, -1);
         List<int[]> out = new ArrayList<>();
-        for (int[][] sets : over) {
-            for (int[] set : sets) {
-                if (seen.put(set, Boolean.TRUE) == null) {
-                    out.add(set);
-                }
+        for (int set : steps.stepSet()) {
+            if (index[set] < 0) {
+                index[set] = out.size();
+                out.add(steps.sets()[set]);
             }
         }
         return out;
@@ -498,38 +526,27 @@ public final class StringPattern implements Predicate<String> {
      * its runs, and a state's row is filled once each: the machine was held to stepping one way
      * before this ({@link #oneWay}).
      */
-    private static @Nullable Table table(int[][][] over, int[][] target, boolean[] live,
-                                         List<int[]> sets, SymbolPartition partition,
-                                         SymbolClasses classes, Budget budget) {
+    private static @Nullable Table table(Steps machine, boolean[] live, int[] index,
+                                         SymbolPartition partition, SymbolClasses classes,
+                                         Budget budget) {
         int width = classes.count();
-        if ((long) over.length * width > budget.tableEntries()) {
+        int states = machine.states();
+        if ((long) states * width > budget.tableEntries()) {
             return null;
         }
-        Map<int[], Integer> index = new IdentityHashMap<>();
-        for (int at = 0; at < sets.size(); at++) {
-            index.put(sets.get(at), at);
-        }
-        int[] steps = new int[over.length * width];
+        int[] steps = new int[states * width];
         Arrays.fill(steps, -1);
-        for (int state = 0; state < over.length; state++) {
-            for (int step = 0; step < over[state].length; step++) {
-                int to = target[state][step];
+        for (int state = 0; state < states; state++) {
+            for (int step = machine.stepStart()[state]; step < machine.stepStart()[state + 1]; step++) {
+                int to = machine.stepTo()[step];
                 if (live[to]) {
-                    for (int each : partition.classesOf(indexOf(index, over[state][step]))) {
+                    for (int each : partition.classesOf(index[machine.stepSet()[step]])) {
                         steps[state * width + each] = to * width;
                     }
                 }
             }
         }
-        return new Table(classes, steps, new SymbolClasses.Stay[over.length]);
-    }
-
-    private static int indexOf(Map<int[], Integer> index, int[] set) {
-        Integer at = index.get(set);
-        if (at == null) {
-            throw new IllegalStateException("every set a step is over is one of the machine's sets");
-        }
-        return at;
+        return new Table(classes, steps, new SymbolClasses.Stay[states]);
     }
 
     /**
@@ -549,20 +566,17 @@ public final class StringPattern implements Predicate<String> {
      * case, more than the image is long; an image of a deterministic machine has always been held to
      * this, and every image an earlier release wrote has to be read.
      */
-    private static void oneWay(int[][][] over, List<int[]> sets) {
-        Map<int[], Integer> index = new IdentityHashMap<>();
-        for (int at = 0; at < sets.size(); at++) {
-            index.put(sets.get(at), at);
-        }
+    private static void oneWay(Steps steps, int[] index, List<int[]> sets) {
         java.util.Set<Group> asked = new java.util.HashSet<>();
-        for (int state = 0; state < over.length; state++) {
-            int[][] mine = over[state];
-            if (mine.length < 2) {
+        for (int state = 0; state < steps.states(); state++) {
+            int first = steps.stepStart()[state];
+            int many = steps.stepStart()[state + 1] - first;
+            if (many < 2) {
                 continue;
             }
-            int[] group = new int[mine.length];
-            for (int step = 0; step < mine.length; step++) {
-                group[step] = indexOf(index, mine[step]);
+            int[] group = new int[many];
+            for (int step = 0; step < many; step++) {
+                group[step] = index[steps.stepSet()[first + step]];
             }
             Arrays.sort(group);
             if (!asked.add(new Group(group))) {
@@ -647,20 +661,20 @@ public final class StringPattern implements Predicate<String> {
 
     /** The {@link Ascii} table of a deterministic machine, or null where it would hold more than the
      *  {@link Budget} allows. */
-    private static @Nullable Ascii ascii(int[][] runs, boolean[] live, Budget budget) {
+    private static @Nullable Ascii ascii(Runs runs, boolean[] live, Budget budget) {
         // A kind begins at 0 and wherever a run begins or ends inside ASCII.
         boolean[] begins = new boolean[ASCII + 1];
         begins[0] = true;
-        for (int[] each : runs) {
-            for (int at = 0; at < each.length; at += 3) {
-                if (each[at] < ASCII) {
-                    begins[each[at]] = true;
-                }
-                if (each[at + 1] + 1 < ASCII) {
-                    begins[each[at + 1] + 1] = true;
-                }
+        int[] each = runs.runs();
+        for (int at = 0; at < each.length; at += 3) {
+            if (each[at] < ASCII) {
+                begins[each[at]] = true;
+            }
+            if (each[at + 1] + 1 < ASCII) {
+                begins[each[at + 1] + 1] = true;
             }
         }
+        int states = runs.start().length - 1;
         byte[] kind = new byte[ASCII];
         int kinds = 0;
         for (int c = 0; c < ASCII; c++) {
@@ -669,7 +683,7 @@ public final class StringPattern implements Predicate<String> {
             }
             kind[c] = (byte) (kinds - 1);
         }
-        if ((long) runs.length * kinds > budget.asciiEntries()) {
+        if ((long) states * kinds > budget.asciiEntries()) {
             return null;
         }
         // Each kind is asked by its first character, which steps every state as the rest of it does.
@@ -677,11 +691,11 @@ public final class StringPattern implements Predicate<String> {
         for (int c = ASCII - 1; c >= 0; c--) {
             first[kind[c]] = c;
         }
-        int[] steps = new int[runs.length * kinds];
-        for (int state = 0; state < runs.length; state++) {
-            for (int each = 0; each < kinds; each++) {
-                int to = next(runs[state], first[each]);
-                steps[state * kinds + each] = (to >= 0 && live[to]) ? to : -1;
+        int[] steps = new int[states * kinds];
+        for (int state = 0; state < states; state++) {
+            for (int one = 0; one < kinds; one++) {
+                int to = next(runs, state, first[one]);
+                steps[state * kinds + one] = (to >= 0 && live[to]) ? to : -1;
             }
         }
         return new Ascii(kind, kinds, steps);
@@ -1014,23 +1028,25 @@ public final class StringPattern implements Predicate<String> {
             throw new IllegalArgumentException("a machine has a state to start in");
         }
         boolean[] accepting = new boolean[states];
-        int[][][] over = new int[states][][];
-        int[][] target = new int[states][];
-        int[][] free = new int[states][];
+        int[] stepStart = new int[states + 1];
+        IntList stepSet = new IntList();
+        IntList stepTo = new IntList();
+        int[] freeStart = new int[states + 1];
+        IntList freeTo = new IntList();
         for (int state = 0; state < states; state++) {
             accepting[state] = in.flag("whether a walk stops at a state");
             int steps = in.count();
-            over[state] = new int[steps][];
-            target[state] = new int[steps];
             for (int step = 0; step < steps; step++) {
-                over[state][step] = sets[in.below(sets.length, "set")];
-                target[state][step] = in.below(states, "state");
+                stepSet.add(in.below(sets.length, "set"));
+                stepTo.add(in.below(states, "state"));
             }
-            free[state] = new int[in.count()];
-            for (int at = 0; at < free[state].length; at++) {
-                free[state][at] = in.below(states, "state");
+            stepStart[state + 1] = stepTo.size();
+            int free = in.count();
+            for (int at = 0; at < free; at++) {
+                freeTo.add(in.below(states, "state"));
             }
-            if (deterministic && free[state].length > 0) {
+            freeStart[state + 1] = freeTo.size();
+            if (deterministic && free > 0) {
                 throw new IllegalArgumentException(
                         "a deterministic machine steps nowhere for no character");
             }
@@ -1038,7 +1054,8 @@ public final class StringPattern implements Predicate<String> {
         if (!in.done()) {
             throw new IllegalArgumentException("an image holds one machine and nothing after it");
         }
-        return new StringPattern(deterministic, accepting, over, target, free, budget);
+        return new StringPattern(deterministic, accepting, new Steps(sets, stepStart,
+                stepSet.toArray(), stepTo.toArray(), freeStart, freeTo.toArray()), budget);
     }
 
     /**
@@ -1063,23 +1080,37 @@ public final class StringPattern implements Predicate<String> {
     static StringPattern of(Automaton machine, Budget budget) {
         int states = machine.size();
         boolean[] accepting = new boolean[states];
-        int[][][] over = new int[states][][];
-        int[][] target = new int[states][];
-        int[][] free = new int[states][];
+        int[] stepStart = new int[states + 1];
+        int[] stepSet = new int[machine.stepsAt(states)];
+        int[] stepTo = new int[stepSet.length];
+        int[] freeStart = new int[states + 1];
         // A set is held once in a machine however many steps are over it, so it is written out once.
-        Map<CodePoints, int[]> sets = new IdentityHashMap<>();
+        Map<CodePoints, Integer> numbered = new IdentityHashMap<>();
+        List<int[]> sets = new ArrayList<>();
         for (int state = 0; state < states; state++) {
             accepting[state] = machine.stopsAt(state);
-            List<Automaton.Step> steps = machine.stepsFrom(state);
-            over[state] = new int[steps.size()][];
-            target[state] = new int[steps.size()];
-            for (int step = 0; step < steps.size(); step++) {
-                over[state][step] = sets.computeIfAbsent(steps.get(step).over(), StringPattern::pairs);
-                target[state][step] = steps.get(step).to();
+            for (int step = machine.stepsAt(state); step < machine.stepsPast(state); step++) {
+                CodePoints over = machine.stepOver(step);
+                Integer set = numbered.get(over);
+                if (set == null) {
+                    set = sets.size();
+                    numbered.put(over, set);
+                    sets.add(pairs(over));
+                }
+                stepSet[step] = set;
+                stepTo[step] = machine.stepTo(step);
             }
-            free[state] = machine.freeFrom(state).clone();
+            stepStart[state + 1] = machine.stepsPast(state);
+            freeStart[state + 1] = freeStart[state] + machine.freeCount(state);
         }
-        return new StringPattern(false, accepting, over, target, free, budget);
+        int[] freeTo = new int[freeStart[states]];
+        for (int state = 0; state < states; state++) {
+            for (int each = 0; each < machine.freeCount(state); each++) {
+                freeTo[freeStart[state] + each] = machine.freeTo(state, each);
+            }
+        }
+        return new StringPattern(false, accepting, new Steps(sets.toArray(new int[0][]), stepStart,
+                stepSet, stepTo, freeStart, freeTo), budget);
     }
 
     /** A set as the ascending {@code from, to} pairs a walk searches. */
@@ -1110,54 +1141,79 @@ public final class StringPattern implements Predicate<String> {
         return ranges;
     }
 
-    /** How many {@link #runs} the steps {@code over} come to, counted without making them. */
-    private static long runs(int[][][] over) {
+    /** How many {@link #runs} the steps come to, counted without making them. */
+    private static long runCount(Steps steps) {
         long out = 0;
-        for (int[][] sets : over) {
-            for (int[] set : sets) {
-                out += set.length / 2;
-            }
+        for (int set : steps.stepSet()) {
+            out += steps.sets()[set].length / 2;
         }
         return out;
     }
 
     /** A deterministic machine's steps as sorted runs, so a character is one search. */
-    private static int[][] runs(int[][][] over, int[][] target) {
-        int[][] out = new int[over.length][];
-        for (int state = 0; state < over.length; state++) {
-            List<int[]> each = new ArrayList<>();
-            for (int step = 0; step < over[state].length; step++) {
-                int[] ranges = over[state][step];
+    private static Runs runs(Steps steps) {
+        int states = steps.states();
+        int[] start = new int[states + 1];
+        int[] out = new int[(int) runCount(steps) * 3];
+        // A state's runs by where they begin, each as that and its place among the state's runs in
+        // one number, so that putting them in order makes nothing for a run.
+        long[] order = new long[0];
+        int written = 0;
+        for (int state = 0; state < states; state++) {
+            int many = 0;
+            for (int step = steps.stepStart()[state]; step < steps.stepStart()[state + 1]; step++) {
+                int[] ranges = steps.sets()[steps.stepSet()[step]];
                 for (int at = 0; at < ranges.length; at += 2) {
-                    each.add(new int[] {ranges[at], ranges[at + 1], target[state][step]});
+                    out[(written + many) * 3] = ranges[at];
+                    out[(written + many) * 3 + 1] = ranges[at + 1];
+                    out[(written + many) * 3 + 2] = steps.stepTo()[step];
+                    many++;
                 }
             }
-            each.sort((one, other) -> Integer.compare(one[0], other[0]));
-            int[] flat = new int[each.size() * 3];
-            for (int i = 0; i < each.size(); i++) {
-                if (i > 0 && each.get(i)[0] <= each.get(i - 1)[1]) {
-                    throw twoWays(state, each.get(i)[0]);
-                }
-                System.arraycopy(each.get(i), 0, flat, i * 3, 3);
+            if (order.length < many) {
+                order = new long[Math.max(many, order.length * 2)];
             }
-            out[state] = flat;
+            for (int i = 0; i < many; i++) {
+                order[i] = ((long) out[(written + i) * 3] << 32) | i;
+            }
+            Arrays.sort(order, 0, many);
+            int[] mine = Arrays.copyOfRange(out, written * 3, (written + many) * 3);
+            for (int i = 0; i < many; i++) {
+                int was = (int) order[i];
+                System.arraycopy(mine, was * 3, out, (written + i) * 3, 3);
+                if (i > 0 && out[(written + i) * 3] <= out[(written + i - 1) * 3 + 1]) {
+                    throw twoWays(state, out[(written + i) * 3]);
+                }
+            }
+            written += many;
+            start[state + 1] = written;
         }
-        return out;
+        return new Runs(start, out);
     }
 
     /** Which states reach one a walk may stop at, walked back from those. */
-    private static boolean[] live(boolean[] accepting, int[][] target, int[][] free) {
+    private static boolean[] live(boolean[] accepting, Steps steps) {
         int states = accepting.length;
-        List<List<Integer>> back = new ArrayList<>(states);
-        for (int state = 0; state < states; state++) {
-            back.add(new ArrayList<>());
+        // The steps and the steps for no character turned round, laid out by the state they lead
+        // to: a state's are from its place in backStart to the next state's.
+        int[] backStart = new int[states + 1];
+        for (int to : steps.stepTo()) {
+            backStart[to + 1]++;
+        }
+        for (int to : steps.freeTo()) {
+            backStart[to + 1]++;
         }
         for (int state = 0; state < states; state++) {
-            for (int to : target[state]) {
-                back.get(to).add(state);
+            backStart[state + 1] += backStart[state];
+        }
+        int[] back = new int[backStart[states]];
+        int[] filled = Arrays.copyOf(backStart, states);
+        for (int state = 0; state < states; state++) {
+            for (int step = steps.stepStart()[state]; step < steps.stepStart()[state + 1]; step++) {
+                back[filled[steps.stepTo()[step]]++] = state;
             }
-            for (int to : free[state]) {
-                back.get(to).add(state);
+            for (int step = steps.freeStart()[state]; step < steps.freeStart()[state + 1]; step++) {
+                back[filled[steps.freeTo()[step]]++] = state;
             }
         }
         boolean[] out = new boolean[states];
@@ -1170,7 +1226,9 @@ public final class StringPattern implements Predicate<String> {
             }
         }
         while (count > 0) {
-            for (int from : back.get(waiting[--count])) {
+            int to = waiting[--count];
+            for (int at = backStart[to]; at < backStart[to + 1]; at++) {
+                int from = back[at];
                 if (!out[from]) {
                     out[from] = true;
                     waiting[count++] = from;
@@ -1247,7 +1305,7 @@ public final class StringPattern implements Predicate<String> {
      * every other character a search of the state's runs. The table leads nowhere rather than to a
      * state no walk is accepted from, so a walk stops at the same character either way.
      */
-    private boolean walk(String value, int[][] runs, @Nullable Checkpoint checkpoint) {
+    private boolean walk(String value, Runs runs, @Nullable Checkpoint checkpoint) {
         @Nullable Ascii table = ascii;
         int state = 0;
         int at = 0;
@@ -1264,7 +1322,7 @@ public final class StringPattern implements Predicate<String> {
                 }
                 int symbol = value.codePointAt(at);
                 at += Character.charCount(symbol);
-                state = next(runs[state], symbol);
+                state = next(runs, state, symbol);
             }
             if (state < 0) {
                 return false;
@@ -1318,19 +1376,20 @@ public final class StringPattern implements Predicate<String> {
         return state >= 0 && accepting[state];
     }
 
-    /** Where {@code symbol} leads from a state whose runs are {@code runs}, or -1 where it leads
+    /** Where {@code symbol} leads from {@code state} by its {@code runs}, or -1 where it leads
      *  nowhere. */
-    private static int next(int[] runs, int symbol) {
-        int low = 0;
-        int high = runs.length / 3 - 1;
+    private static int next(Runs runs, int state, int symbol) {
+        int[] all = runs.runs();
+        int low = runs.start()[state];
+        int high = runs.start()[state + 1] - 1;
         while (low <= high) {
             int mid = (low + high) >>> 1;
-            if (runs[mid * 3 + 1] < symbol) {
+            if (all[mid * 3 + 1] < symbol) {
                 low = mid + 1;
-            } else if (runs[mid * 3] > symbol) {
+            } else if (all[mid * 3] > symbol) {
                 high = mid - 1;
             } else {
-                return runs[mid * 3 + 2];
+                return all[mid * 3 + 2];
             }
         }
         return -1;
@@ -1573,12 +1632,10 @@ public final class StringPattern implements Predicate<String> {
         for (int i = 0; i < count; i++) {
             ask(checkpoint);
             int state = from[i];
-            int[][] sets = steps.over()[state];
-            for (int step = 0; step < sets.length; step++) {
+            for (int step = steps.stepStart()[state]; step < steps.stepStart()[state + 1]; step++) {
                 ask(checkpoint);
-                if (holds(sets[step], symbol)) {
-                    next = close(steps, steps.target()[state][step], room.there, next, room,
-                            checkpoint);
+                if (holds(steps.sets()[steps.stepSet()[step]], symbol)) {
+                    next = close(steps, steps.stepTo()[step], room.there, next, room, checkpoint);
                 }
             }
         }
@@ -2334,7 +2391,8 @@ public final class StringPattern implements Predicate<String> {
             ask(checkpoint);
             int state = pending[--top];
             into[held++] = state;
-            for (int to : steps.free()[state]) {
+            for (int step = steps.freeStart()[state]; step < steps.freeStart()[state + 1]; step++) {
+                int to = steps.freeTo()[step];
                 ask(checkpoint);
                 if (seen[to] != round && live[to]) {
                     seen[to] = round;

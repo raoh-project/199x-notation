@@ -32,7 +32,7 @@ import java.util.Set;
  * set, in one machine. Which is what lets a reader that looks at the symbols of a set look at them
  * once a set and not once a step — a deterministic machine whose every state steps over the same
  * class of thousands of scattered characters holds that class once, and is as cheap to read, run
- * and write out as its states and the sets it has. Every machine is made through the one
+ * and write out as its states and the sets it has. Every machine's steps are laid out by the one
  * constructor, which is where that is held.
  *
  * <p>A value, and one that does not change. A machine is what a caller outside this package builds
@@ -52,11 +52,27 @@ public final class Automaton {
      */
     public static final int START = 0;
 
-    /** For each state, the steps that cost a symbol. */
-    private final List<List<Step>> steps;
+    /**
+     * Where each state's steps that cost a symbol begin in {@link #stepTo} and {@link #stepOver},
+     * one more than the states: a state's are from its own place to the next state's.
+     *
+     * <p>Held as runs of three arrays and not as a list for each state. A state is not a thing
+     * made: a machine of 250,000 states is as many places in an array, and its steps are as many
+     * more, however many states have none.
+     */
+    private final int[] stepStart;
 
-    /** For each state, the steps that cost nothing. */
-    private final List<int[]> free;
+    /** For each step that costs a symbol, the state it leads to. */
+    private final int[] stepTo;
+
+    /** For each step that costs a symbol, the symbols it is over, one set for equal sets. */
+    private final CodePoints[] stepOver;
+
+    /** Where each state's steps that cost nothing begin in {@link #freeTo}, as {@link #stepStart}. */
+    private final int[] freeStart;
+
+    /** For each step that costs nothing, the state it leads to. */
+    private final int[] freeTo;
 
     /** The states a walk may stop at. */
     private final BitSet accepting;
@@ -105,37 +121,73 @@ public final class Automaton {
     }
 
     /**
-     * The one way a machine comes to be. What is handed in is copied, so whoever built it may go on
-     * writing to what they hold and the machine is as it was; the rows are ones nothing writes to,
-     * so {@link #stepsFrom} hands them out as they are.
+     * The one way a machine comes to be, out of what a {@link Laying} laid out.
      *
-     * <p>The free steps and the rows are arrays, which nothing freezes. Every one of them is made
-     * by the construction that calls this and let go of, and none leaves the machine uncopied.
+     * <p>The steps are laid out into arrays made here, a state's together, and nothing else holds
+     * them. The accepting states are copied, as a caller may go on writing to what it handed in.
      *
      * <p>And where two steps are over equal sets, they are made over one ({@link Automaton}). A set
      * met again as itself is known at once; one met for the first time is looked for among the sets
      * already held, which looks at its symbols once — so what this costs is the sets the
      * construction handed in, each once, which making them already cost.
      */
-    private Automaton(List<List<Step>> steps, List<int[]> free, BitSet accepting, @Nullable Rows rows) {
+    private Automaton(Laying laid, BitSet accepting) {
         Map<CodePoints, CodePoints> met = new IdentityHashMap<>();
         Map<CodePoints, CodePoints> held = new HashMap<>();
-        List<List<Step>> kept = new ArrayList<>(steps.size());
-        for (List<Step> row : steps) {
-            List<Step> out = new ArrayList<>(row.size());
-            for (Step each : row) {
-                CodePoints one = met.get(each.over());
-                if (one == null) {
-                    CodePoints had = held.putIfAbsent(each.over(), each.over());
-                    one = had != null ? had : each.over();
-                    met.put(each.over(), one);
-                }
-                out.add(one == each.over() ? each : new Step(one, each.to()));
-            }
-            kept.add(List.copyOf(out));
+        int states = laid.states;
+        int[] stepStart = new int[states + 1];
+        int[] stepTo = new int[laid.steps];
+        CodePoints[] stepOver = new CodePoints[laid.steps];
+        // Laid out a state at a time in the order they were written, so a state's steps are in the
+        // order its construction wrote them, whatever order the states were written to in.
+        for (int at = 0; at < laid.steps; at++) {
+            stepStart[laid.stepFrom[at] + 1]++;
         }
-        this.steps = List.copyOf(kept);
-        this.free = List.copyOf(free);
+        for (int state = 0; state < states; state++) {
+            stepStart[state + 1] += stepStart[state];
+        }
+        int[] filled = Arrays.copyOf(stepStart, states);
+        for (int at = 0; at < laid.steps; at++) {
+            CodePoints over = laid.stepOver[at];
+            CodePoints one = met.get(over);
+            if (one == null) {
+                CodePoints had = held.putIfAbsent(over, over);
+                one = had != null ? had : over;
+                met.put(over, one);
+            }
+            int place = filled[laid.stepFrom[at]]++;
+            stepTo[place] = laid.stepTo[at];
+            stepOver[place] = one;
+        }
+        int[] freeStart = new int[states + 1];
+        int[] freeTo = new int[laid.frees];
+        for (int at = 0; at < laid.frees; at++) {
+            freeStart[laid.freeFrom[at] + 1]++;
+        }
+        for (int state = 0; state < states; state++) {
+            freeStart[state + 1] += freeStart[state];
+        }
+        filled = Arrays.copyOf(freeStart, states);
+        for (int at = 0; at < laid.frees; at++) {
+            freeTo[filled[laid.freeFrom[at]]++] = laid.freeTo[at];
+        }
+        this.stepStart = stepStart;
+        this.stepTo = stepTo;
+        this.stepOver = stepOver;
+        this.freeStart = freeStart;
+        this.freeTo = freeTo;
+        this.accepting = (BitSet) accepting.clone();
+        this.rows = null;
+    }
+
+    /** {@code machine}'s steps, which nothing writes to, with {@code accepting} and {@code rows}:
+     *  for a construction that keeps the steps it was handed and says something new of them. */
+    private Automaton(Automaton machine, BitSet accepting, @Nullable Rows rows) {
+        this.stepStart = machine.stepStart;
+        this.stepTo = machine.stepTo;
+        this.stepOver = machine.stepOver;
+        this.freeStart = machine.freeStart;
+        this.freeTo = machine.freeTo;
         this.accepting = (BitSet) accepting.clone();
         this.rows = rows;
     }
@@ -146,7 +198,39 @@ public final class Automaton {
      * @return the number of states
      */
     public int size() {
-        return steps.size();
+        return stepStart.length - 1;
+    }
+
+    /** Where {@code state}'s steps that cost a symbol begin, for a reader going over them by place:
+     *  they are from here to {@link #stepsPast}, each {@link #stepOver} to {@link #stepTo}. */
+    int stepsAt(int state) {
+        return stepStart[state];
+    }
+
+    /** Where {@code state}'s steps that cost a symbol end, past the last of them. */
+    int stepsPast(int state) {
+        return stepStart[state + 1];
+    }
+
+    /** The symbols the step at {@code place} is over. */
+    CodePoints stepOver(int place) {
+        return stepOver[place];
+    }
+
+    /** The state the step at {@code place} leads to. */
+    int stepTo(int place) {
+        return stepTo[place];
+    }
+
+    /** How many steps that cost nothing {@code state} has, for a reader that reads them by
+     *  {@link #freeTo}. */
+    int freeCount(int state) {
+        return freeStart[state + 1] - freeStart[state];
+    }
+
+    /** The state the {@code each}th step that costs nothing out of {@code state} leads to. */
+    int freeTo(int state, int each) {
+        return freeTo[freeStart[state] + each];
     }
 
     /**
@@ -179,23 +263,21 @@ public final class Automaton {
                     + " none numbered " + (accepting.length() - 1) + " among " + states);
         }
         // What is asked about is the copy that is kept, and not what the caller still holds.
-        List<List<Step>> rows = new ArrayList<>(states);
-        List<int[]> free = new ArrayList<>(states);
+        Laying laid = new Laying();
         for (List<Step> row : steps) {
-            List<Step> kept = List.copyOf(row);
-            for (Step each : kept) {
+            int from = laid.state();
+            for (Step each : List.copyOf(row)) {
                 if (each.to() >= states) {
                     throw new IllegalArgumentException("a step leads to a state the machine has, and"
                             + " there is none numbered " + each.to() + " among " + states);
                 }
+                laid.step(from, each.over(), each.to());
             }
-            rows.add(kept);
-            free.add(new int[0]);
         }
-        if (rows.size() != states) {
+        if (laid.states != states) {
             throw new IllegalArgumentException("the states were added to while they were read");
         }
-        return new Automaton(rows, free, accepting, null);
+        return new Automaton(laid, accepting);
     }
 
     /**
@@ -206,11 +288,19 @@ public final class Automaton {
      * leads somewhere and where it leads is a fact about the symbol. Walked over a machine that is
      * not, the steps are one of the ways the pattern happened to be written.
      *
+     * <p>Made as it is asked for, a step at a time: the machine holds its steps as places in
+     * arrays, and a reader in this package goes over them there ({@link #stepsAt}).
+     *
      * @param state a state of the machine
      * @return the steps out of it, which cannot be written to
      */
     public List<Step> stepsFrom(int state) {
-        return steps.get(state);
+        Step[] out = new Step[stepStart[state + 1] - stepStart[state]];
+        for (int at = 0; at < out.length; at++) {
+            int place = stepStart[state] + at;
+            out[at] = new Step(stepOver[place], stepTo[place]);
+        }
+        return List.of(out);
     }
 
     /**
@@ -224,7 +314,7 @@ public final class Automaton {
      * @return the states its free steps lead to, as a copy
      */
     public int[] freeFrom(int state) {
-        return free.get(state).clone();
+        return Arrays.copyOfRange(freeTo, freeStart[state], freeStart[state + 1]);
     }
 
     /**
@@ -248,26 +338,37 @@ public final class Automaton {
      * @return for each state, whether a walk from it may reach one it stops at
      */
     public boolean[] reachingSomewhereItStops() {
-        List<List<Integer>> back = new ArrayList<>();
-        for (int at = 0; at < steps.size(); at++) {
-            back.add(new ArrayList<>());
+        int states = size();
+        // The steps turned round, laid out by the state they lead to as the machine's are by the
+        // state they leave.
+        int[] backStart = new int[states + 1];
+        for (int place = 0; place < stepTo.length; place++) {
+            backStart[stepTo[place] + 1]++;
         }
-        for (int at = 0; at < steps.size(); at++) {
-            for (Step each : steps.get(at)) {
-                back.get(each.to()).add(at);
+        for (int state = 0; state < states; state++) {
+            backStart[state + 1] += backStart[state];
+        }
+        int[] back = new int[stepTo.length];
+        int[] filled = Arrays.copyOf(backStart, states);
+        for (int state = 0; state < states; state++) {
+            for (int place = stepStart[state]; place < stepStart[state + 1]; place++) {
+                back[filled[stepTo[place]]++] = state;
             }
         }
-        boolean[] out = new boolean[steps.size()];
-        List<Integer> waiting = new ArrayList<>();
+        boolean[] out = new boolean[states];
+        int[] waiting = new int[states];
+        int count = 0;
         for (int at = accepting.nextSetBit(0); at >= 0; at = accepting.nextSetBit(at + 1)) {
             out[at] = true;
-            waiting.add(at);
+            waiting[count++] = at;
         }
-        for (int at = 0; at < waiting.size(); at++) {
-            for (int from : back.get(waiting.get(at))) {
+        for (int at = 0; at < count; at++) {
+            int to = waiting[at];
+            for (int place = backStart[to]; place < backStart[to + 1]; place++) {
+                int from = back[place];
                 if (!out[from]) {
                     out[from] = true;
-                    waiting.add(from);
+                    waiting[count++] = from;
                 }
             }
         }
@@ -298,7 +399,7 @@ public final class Automaton {
             int accept = building.build(meaning, start);
             BitSet accepting = new BitSet();
             accepting.set(accept);
-            return new Automaton(building.frozenSteps(), building.frozenFree(), accepting, null);
+            return new Automaton(building.laid, accepting);
         } catch (TooMany _) {
             return null;
         }
@@ -330,16 +431,16 @@ public final class Automaton {
             at += Character.charCount(symbol);
             long look = 1;
             for (int state = here.nextSetBit(0); state >= 0; state = here.nextSetBit(state + 1)) {
-                look += 1 + steps.get(state).size() + free.get(state).length;
+                look += 1 + (stepStart[state + 1] - stepStart[state]) + freeCount(state);
             }
             if (!making.work(look)) {
                 return null;
             }
             BitSet next = new BitSet();
             for (int state = here.nextSetBit(0); state >= 0; state = here.nextSetBit(state + 1)) {
-                for (Step each : steps.get(state)) {
-                    if (each.over().has(symbol)) {
-                        next.set(each.to());
+                for (int place = stepStart[state]; place < stepStart[state + 1]; place++) {
+                    if (stepOver[place].has(symbol)) {
+                        next.set(stepTo[place]);
                     }
                 }
             }
@@ -427,13 +528,11 @@ public final class Automaton {
      */
     public static @Nullable Automaton ofWords(java.util.Collection<String> words, Meter meter) {
         Meter.Making making = meter.making();
-        List<List<Step>> steps = new ArrayList<>();
-        List<int[]> free = new ArrayList<>();
+        Laying laid = new Laying();
         if (!making.state()) {
             return null;
         }
-        steps.add(new ArrayList<>());
-        free.add(new int[0]);
+        laid.state();
         BitSet accepting = new BitSet();
         for (String word : words) {
             int at = START;
@@ -444,17 +543,15 @@ public final class Automaton {
                 if (!making.state()) {
                     return null;
                 }
-                steps.add(new ArrayList<>());
-                free.add(new int[0]);
-                int made = steps.size() - 1;
-                steps.get(at).add(new Step(CodePoints.of(symbol), made));
+                int made = laid.state();
+                laid.step(at, CodePoints.of(symbol), made);
                 at = made;
             }
             // The word of no symbols ends where it began, which makes the beginning one a walk may
             // stop at rather than a state of its own.
             accepting.set(at);
         }
-        return new Automaton(steps, free, accepting, null);
+        return new Automaton(laid, accepting);
     }
 
     /**
@@ -475,16 +572,16 @@ public final class Automaton {
         if (!meter.making().states(1L + mine + other.size())) {
             return null;
         }
-        List<List<Step>> steps = new ArrayList<>();
-        List<int[]> free = new ArrayList<>();
-        steps.add(new ArrayList<>());
-        free.add(new int[] {1, 1 + mine});
-        shifted(this, 1, steps, free);
-        shifted(other, 1 + mine, steps, free);
+        Laying laid = new Laying();
+        int start = laid.state();
+        laid.freely(start, 1);
+        laid.freely(start, 1 + mine);
+        shifted(this, 1, laid);
+        shifted(other, 1 + mine, laid);
         BitSet accepting = new BitSet();
         shiftInto(accepting, this.accepting, 1);
         shiftInto(accepting, other.accepting, 1 + mine);
-        return new Automaton(steps, free, accepting, null);
+        return new Automaton(laid, accepting);
     }
 
     /**
@@ -517,8 +614,7 @@ public final class Automaton {
         try {
             Meter.Making making = meter.making();
             Pairs pairs = new Pairs(other.size(), making);
-            List<List<Step>> steps = new ArrayList<>();
-            List<int[]> free = new ArrayList<>();
+            Laying laid = new Laying();
             BitSet accepting = new BitSet();
             pairs.at(START, START);
             // Grows while it is walked: a pair first reached here is one more to take the steps
@@ -528,52 +624,49 @@ public final class Automaton {
                 int theirs = pairs.theirs(at);
                 // Every step of one side against every step of the other, and each meeting of two
                 // labels as long as the runs of both: asked for before any of them is met.
-                if (!making.work(meeting(this.steps.get(mine), other.steps.get(theirs)))) {
+                if (!making.work(meeting(this, mine, other, theirs))) {
                     throw new TooMany();
                 }
-                List<Step> out = new ArrayList<>();
-                for (Step one : this.steps.get(mine)) {
-                    for (Step two : other.steps.get(theirs)) {
-                        CodePoints over = one.over().and(two.over());
+                // The pair's own state, laid out in the order the pairs were reached; a step may
+                // lead to a pair reached later, which is laid out when the walk comes to it.
+                laid.state();
+                for (int one = this.stepStart[mine]; one < this.stepStart[mine + 1]; one++) {
+                    for (int two = other.stepStart[theirs]; two < other.stepStart[theirs + 1]; two++) {
+                        CodePoints over = this.stepOver[one].and(other.stepOver[two]);
                         if (!over.isEmpty()) {
-                            out.add(new Step(over, pairs.at(one.to(), two.to())));
+                            laid.step(at, over, pairs.at(this.stepTo[one], other.stepTo[two]));
                         }
                     }
                 }
-                List<Integer> freely = new ArrayList<>();
-                for (int to : this.free.get(mine)) {
-                    freely.add(pairs.at(to, theirs));
+                for (int place = this.freeStart[mine]; place < this.freeStart[mine + 1]; place++) {
+                    laid.freely(at, pairs.at(this.freeTo[place], theirs));
                 }
-                for (int to : other.free.get(theirs)) {
-                    freely.add(pairs.at(mine, to));
+                for (int place = other.freeStart[theirs]; place < other.freeStart[theirs + 1]; place++) {
+                    laid.freely(at, pairs.at(mine, other.freeTo[place]));
                 }
-                int[] freeOut = new int[freely.size()];
-                for (int i = 0; i < freeOut.length; i++) {
-                    freeOut[i] = freely.get(i);
-                }
-                steps.add(out);
-                free.add(freeOut);
                 if (this.accepting.get(mine) && other.accepting.get(theirs)) {
                     accepting.set(at);
                 }
             }
-            return new Automaton(steps, free, accepting, null);
+            return new Automaton(laid, accepting);
         } catch (TooMany _) {
             return null;
         }
     }
 
-    /** What meeting every step of {@code one} with every step of {@code other} looks at. */
-    private static long meeting(List<Step> one, List<Step> other) {
+    /** What meeting every step out of {@code mine} in {@code one} with every step out of
+     *  {@code theirs} in {@code other} looks at. */
+    private static long meeting(Automaton one, int mine, Automaton other, int theirs) {
         long runsOfOne = 0;
-        for (Step each : one) {
-            runsOfOne += 1 + each.over().ranges().size();
+        for (int place = one.stepStart[mine]; place < one.stepStart[mine + 1]; place++) {
+            runsOfOne += 1 + one.stepOver[place].ranges().size();
         }
         long runsOfOther = 0;
-        for (Step each : other) {
-            runsOfOther += each.over().ranges().size();
+        for (int place = other.stepStart[theirs]; place < other.stepStart[theirs + 1]; place++) {
+            runsOfOther += other.stepOver[place].ranges().size();
         }
-        return 1 + runsOfOne * other.size() + runsOfOther * one.size();
+        return 1 + runsOfOne * (other.stepStart[theirs + 1] - other.stepStart[theirs])
+                + runsOfOther * (one.stepStart[mine + 1] - one.stepStart[mine]);
     }
 
     /**
@@ -665,8 +758,8 @@ public final class Automaton {
         }
         try {
             Meter.Making making = meter.making();
-            Alphabet alphabet = alphabet(steps, making);
-            Rows oneWay = oneWay(steps, free, alphabet, making);
+            Alphabet alphabet = alphabet(this, making);
+            Rows oneWay = oneWay(this, alphabet, making);
             if (oneWay != null) {
                 return turnedOver(oneWay);
             }
@@ -676,25 +769,23 @@ public final class Automaton {
                 return null;
             }
             Meter.Making building = meter.making();
-            List<List<Step>> steps = new ArrayList<>();
-            List<int[]> free = new ArrayList<>();
+            Laying laid = new Laying();
             BitSet accepting = new BitSet();
             for (int at = 0; at < subsets.count(); at++) {
                 if (!building.state()) {
                     return null;
                 }
-                steps.add(new ArrayList<>());
-                free.add(new int[0]);
+                laid.state();
                 if (!subsets.acceptingAt(at)) {
                     accepting.set(at);
                 }
                 int[] row = subsets.rowFrom(at);
                 for (int over = 0; over < row.length; over++) {
-                    steps.get(at).add(new Step(classes.get(over), row[over]));
+                    laid.step(at, classes.get(over), row[over]);
                 }
             }
             // Deterministic and complete, as what the subsets are always is.
-            return new Automaton(steps, free, accepting, rowsOf(steps, free, building));
+            return withRows(new Automaton(laid, accepting), building);
         } catch (TooMany _) {
             return null;
         }
@@ -719,31 +810,28 @@ public final class Automaton {
      * the states and nothing more. A state's row is charged for before it is looked at, as the rows
      * of the subsets are.
      */
-    private static @Nullable Rows oneWay(List<List<Step>> steps, List<int[]> free,
-                                         Alphabet alphabet, Meter.Making making) {
-        for (int[] each : free) {
-            if (each.length > 0) {
-                return null;
-            }
+    private static @Nullable Rows oneWay(Automaton machine, Alphabet alphabet, Meter.Making making) {
+        if (machine.freeTo.length > 0) {
+            return null;
         }
         int width = alphabet.classes().count();
-        int[][] next = new int[steps.size()][];
-        for (int at = 0; at < steps.size(); at++) {
+        int[][] next = new int[machine.size()][];
+        for (int at = 0; at < machine.size(); at++) {
             long look = width;
-            for (Step each : steps.get(at)) {
-                look += 1 + alphabet.classesOf(each.over()).length;
+            for (int place = machine.stepStart[at]; place < machine.stepStart[at + 1]; place++) {
+                look += 1 + alphabet.classesOf(machine.stepOver[place]).length;
             }
             if (!making.work(look)) {
                 throw new TooMany();
             }
             int[] row = new int[width];
             Arrays.fill(row, -1);
-            for (Step each : steps.get(at)) {
-                for (int over : alphabet.classesOf(each.over())) {
+            for (int place = machine.stepStart[at]; place < machine.stepStart[at + 1]; place++) {
+                for (int over : alphabet.classesOf(machine.stepOver[place])) {
                     if (row[over] >= 0) {
                         return null;
                     }
-                    row[over] = each.to();
+                    row[over] = machine.stepTo[place];
                 }
             }
             for (int to : row) {
@@ -756,14 +844,15 @@ public final class Automaton {
         return new Rows(alphabet.classes(), next);
     }
 
-    /** The {@link Rows} of a machine its construction made deterministic and complete. */
-    private static Rows rowsOf(List<List<Step>> steps, List<int[]> free, Meter.Making making) {
-        Rows out = oneWay(steps, free, alphabet(steps, making), making);
+    /** {@code machine}, which its construction made deterministic and complete, holding its
+     *  {@link Rows}. */
+    private static Automaton withRows(Automaton machine, Meter.Making making) {
+        Rows out = oneWay(machine, alphabet(machine, making), making);
         if (out == null) {
             throw new IllegalStateException("a machine made deterministic and complete leads every"
                     + " symbol one way");
         }
-        return out;
+        return new Automaton(machine, machine.accepting, out);
     }
 
     /**
@@ -780,7 +869,7 @@ public final class Automaton {
         BitSet stops = new BitSet();
         stops.set(0, size());
         stops.andNot(accepting);
-        return new Automaton(steps, free, stops, rows);
+        return new Automaton(this, stops, rows);
     }
 
     /**
@@ -807,7 +896,7 @@ public final class Automaton {
     public @Nullable Automaton canonical(Meter meter) {
         try {
             Meter.Making making = meter.making();
-            Subsets subsets = new Subsets(making, alphabet(steps, making));
+            Subsets subsets = new Subsets(making, alphabet(this, making));
             List<int[]> table = new ArrayList<>();
             BitSet accepting = new BitSet();
             for (int at = 0; at < subsets.count(); at++) {
@@ -1000,51 +1089,90 @@ public final class Automaton {
                 }
             }
         }
-        List<List<Step>> steps = new ArrayList<>();
-        List<int[]> free = new ArrayList<>();
-        Map<List<Integer>, CodePoints> labels = new HashMap<>();
+        Laying laid = new Laying();
+        Map<Classes, CodePoints> labels = new HashMap<>();
         BitSet stops = new BitSet();
+        int width = table.get(0).length;
+        // For each state of the answer, the first class of the row leading to it, and for each
+        // class the next one leading where it does: the classes gathered by where they lead without
+        // a list made for each.
+        int[] firstClass = new int[order.size()];
+        Arrays.fill(firstClass, -1);
+        int[] nextClass = new int[width];
+        int[] leadsTo = new int[width];
         for (int at = 0; at < order.size(); at++) {
             if (!making.state()) {
                 throw new TooMany();
             }
+            laid.state();
             int[] row = table.get(first[order.get(at)]);
             if (accepting.get(first[order.get(at)])) {
                 stops.set(at);
             }
-            // Gathered by where they lead, so that what a step is over is as wide as it can be.
-            java.util.TreeMap<Integer, List<Integer>> leading = new java.util.TreeMap<>();
-            for (int over = 0; over < row.length; over++) {
-                leading.computeIfAbsent(renamed[block[row[over]]], _ -> new ArrayList<>()).add(over);
+            // Gathered by where they lead, so that what a step is over is as wide as it can be. The
+            // classes are put in from the last, so each state's are in ascending order.
+            int targets = 0;
+            for (int over = width - 1; over >= 0; over--) {
+                int to = renamed[block[row[over]]];
+                if (firstClass[to] < 0) {
+                    leadsTo[targets++] = to;
+                }
+                nextClass[over] = firstClass[to];
+                firstClass[to] = over;
             }
-            List<Step> out = new ArrayList<>();
-            for (Map.Entry<Integer, List<Integer>> each : leading.entrySet()) {
-                CodePoints over = labels.get(each.getValue());
+            Arrays.sort(leadsTo, 0, targets);
+            for (int t = 0; t < targets; t++) {
+                int to = leadsTo[t];
+                int many = 0;
+                for (int one = firstClass[to]; one >= 0; one = nextClass[one]) {
+                    many++;
+                }
+                int[] gathered = new int[many];
+                many = 0;
+                for (int one = firstClass[to]; one >= 0; one = nextClass[one]) {
+                    gathered[many++] = one;
+                }
+                firstClass[to] = -1;
+                Classes key = new Classes(gathered);
+                CodePoints over = labels.get(key);
                 if (over == null) {
                     // The runs are collected and put in order once: joined one run at a time, each
                     // join would order everything before it again.
-                    long many = 0;
-                    for (int one : each.getValue()) {
-                        many += symbols.get(one).ranges().size();
+                    long runCount = 0;
+                    for (int one : gathered) {
+                        runCount += symbols.get(one).ranges().size();
                     }
-                    if (!making.work(1L + many)) {
+                    if (!making.work(1L + runCount)) {
                         throw new TooMany();
                     }
-                    List<CodePoints.Range> runs = new ArrayList<>((int) many);
-                    for (int one : each.getValue()) {
+                    List<CodePoints.Range> runs = new ArrayList<>((int) runCount);
+                    for (int one : gathered) {
                         runs.addAll(symbols.get(one).ranges());
                     }
                     over = new CodePoints(runs);
-                    labels.put(each.getValue(), over);
+                    labels.put(key, over);
                 }
-                out.add(new Step(over, each.getKey()));
+                laid.step(at, over, to);
             }
-            steps.add(out);
-            free.add(new int[0]);
         }
         // Where each class leads, over the classes of these labels and not of the subsets': the
         // states no string tells apart were put together, and so may the classes no step does.
-        return new Automaton(steps, free, stops, rowsOf(steps, free, making));
+        return withRows(new Automaton(laid, stops), making);
+    }
+
+    /** The classes one step of {@link #numbered} is over, ascending, as a key equal to another for
+     *  the same classes. */
+    private record Classes(int[] held) {
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Classes it && Arrays.equals(held, it.held);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(held);
+        }
     }
 
     /**
@@ -1057,15 +1185,9 @@ public final class Automaton {
      * @return whether the two are the same machine
      */
     public boolean sameAs(Automaton other) {
-        if (size() != other.size() || !accepting.equals(other.accepting)) {
-            return false;
-        }
-        for (int at = 0; at < steps.size(); at++) {
-            if (!steps.get(at).equals(other.steps.get(at))) {
-                return false;
-            }
-        }
-        return true;
+        return size() == other.size() && accepting.equals(other.accepting)
+                && Arrays.equals(stepStart, other.stepStart) && Arrays.equals(stepTo, other.stepTo)
+                && Arrays.equals(stepOver, other.stepOver);
     }
 
     /**
@@ -1103,12 +1225,12 @@ public final class Automaton {
      * @param out where the table is written
      */
     public void writtenInto(StringBuilder out) {
-        out.append(steps.size());
-        for (int at = 0; at < steps.size(); at++) {
+        out.append(size());
+        for (int at = 0; at < size(); at++) {
             out.append(accepting.get(at) ? "!" : ".");
-            for (Step each : steps.get(at)) {
-                out.append(each.to()).append(':');
-                for (CodePoints.Range range : each.over().ranges()) {
+            for (int place = stepStart[at]; place < stepStart[at + 1]; place++) {
+                out.append(stepTo[place]).append(':');
+                for (CodePoints.Range range : stepOver[place].ranges()) {
                     out.append(range.from()).append('-').append(range.to()).append(',');
                 }
                 out.append(';');
@@ -1124,10 +1246,9 @@ public final class Automaton {
      */
     public int shape() {
         int out = accepting.hashCode();
-        for (List<Step> each : steps) {
-            out = out * 31 + each.hashCode();
-        }
-        return out;
+        out = out * 31 + Arrays.hashCode(stepStart);
+        out = out * 31 + Arrays.hashCode(stepTo);
+        return out * 31 + Arrays.hashCode(stepOver);
     }
 
     /**
@@ -1244,12 +1365,12 @@ public final class Automaton {
             int found = 0;
             for (int i = 0; i < count; i++) {
                 int here = reached[i];
-                for (Step step : steps.get(here)) {
-                    CodePoints over = within.computeIfAbsent(step.over(), each -> each.and(these));
+                for (int place = stepStart[here]; place < stepStart[here + 1]; place++) {
+                    CodePoints over = within.computeIfAbsent(stepOver[place], each -> each.and(these));
                     if (over.isEmpty()) {
                         continue;
                     }
-                    BitSet after = closure(only(step.to()));
+                    BitSet after = closure(only(stepTo[place]));
                     for (int state = after.nextSetBit(0); state >= 0;
                             state = after.nextSetBit(state + 1)) {
                         // Every state met at any shorter length, or earlier at this one, is one
@@ -1294,7 +1415,8 @@ public final class Automaton {
         }
         while (count > 0) {
             int state = pending[--count];
-            for (int to : free.get(state)) {
+            for (int place = freeStart[state]; place < freeStart[state + 1]; place++) {
+                int to = freeTo[place];
                 if (!out.get(to)) {
                     out.set(to);
                     if (count == pending.length) {
@@ -1313,21 +1435,19 @@ public final class Automaton {
         return out;
     }
 
-    /** The same machine with every state moved up by {@code by}, written into what is being built. */
-    private static void shifted(Automaton machine, int by,
-                                List<List<Step>> steps, List<int[]> free) {
+    /** The same machine with every state moved up by {@code by}, written into what is being laid
+     *  out, whose states up to {@code by} are already there. */
+    private static void shifted(Automaton machine, int by, Laying laid) {
         for (int state = 0; state < machine.size(); state++) {
-            List<Step> mine = new ArrayList<>();
-            for (Step each : machine.steps.get(state)) {
-                mine.add(new Step(each.over(), each.to() + by));
+            laid.state();
+        }
+        for (int state = 0; state < machine.size(); state++) {
+            for (int place = machine.stepStart[state]; place < machine.stepStart[state + 1]; place++) {
+                laid.step(state + by, machine.stepOver[place], machine.stepTo[place] + by);
             }
-            steps.add(mine);
-            int[] theirs = machine.free.get(state);
-            int[] moved = new int[theirs.length];
-            for (int i = 0; i < theirs.length; i++) {
-                moved[i] = theirs[i] + by;
+            for (int place = machine.freeStart[state]; place < machine.freeStart[state + 1]; place++) {
+                laid.freely(state + by, machine.freeTo[place] + by);
             }
-            free.add(moved);
         }
     }
 
@@ -1380,11 +1500,7 @@ public final class Automaton {
         Subsets(Meter.Making making, Alphabet alphabet) {
             this.making = making;
             this.alphabet = alphabet;
-            boolean found = false;
-            for (int[] each : free) {
-                found = found || each.length > 0;
-            }
-            this.anyFree = found;
+            this.anyFree = freeTo.length > 0;
             at(reached(only(START)));
         }
 
@@ -1431,8 +1547,8 @@ public final class Automaton {
             // Asked for before any of it is looked at, as a state is.
             long look = alphabet.classes().count();
             for (int one = here.nextSetBit(0); one >= 0; one = here.nextSetBit(one + 1)) {
-                for (Step each : steps.get(one)) {
-                    look += 1 + alphabet.classesOf(each.over()).length;
+                for (int place = stepStart[one]; place < stepStart[one + 1]; place++) {
+                    look += 1 + alphabet.classesOf(stepOver[place]).length;
                 }
             }
             if (!making.work(look)) {
@@ -1443,12 +1559,12 @@ public final class Automaton {
             // the whole row.
             BitSet[] next = new BitSet[alphabet.classes().count()];
             for (int one = here.nextSetBit(0); one >= 0; one = here.nextSetBit(one + 1)) {
-                for (Step each : steps.get(one)) {
-                    for (int over : alphabet.classesOf(each.over())) {
+                for (int place = stepStart[one]; place < stepStart[one + 1]; place++) {
+                    for (int over : alphabet.classesOf(stepOver[place])) {
                         if (next[over] == null) {
                             next[over] = new BitSet();
                         }
-                        next[over].set(each.to());
+                        next[over].set(stepTo[place]);
                     }
                 }
             }
@@ -1516,25 +1632,23 @@ public final class Automaton {
      * <p>A label is read once however many steps are over it, since a set is held once however many
      * steps are over it ({@link Automaton}); and the runs of the labels read are charged for.
      */
-    private static Alphabet alphabet(List<List<Step>> steps, Meter.Making making) {
+    private static Alphabet alphabet(Automaton machine, Meter.Making making) {
         List<CodePoints> labels = new ArrayList<>();
         List<int[]> sets = new ArrayList<>();
         Set<CodePoints> read = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (List<Step> out : steps) {
-            for (Step each : out) {
-                if (read.add(each.over())) {
-                    List<CodePoints.Range> ranges = each.over().ranges();
-                    if (!making.work(1L + ranges.size())) {
-                        throw new TooMany();
-                    }
-                    int[] pairs = new int[ranges.size() * 2];
-                    for (int at = 0; at < ranges.size(); at++) {
-                        pairs[at * 2] = ranges.get(at).from();
-                        pairs[at * 2 + 1] = ranges.get(at).to();
-                    }
-                    labels.add(each.over());
-                    sets.add(pairs);
+        for (CodePoints over : machine.stepOver) {
+            if (read.add(over)) {
+                List<CodePoints.Range> ranges = over.ranges();
+                if (!making.work(1L + ranges.size())) {
+                    throw new TooMany();
                 }
+                int[] pairs = new int[ranges.size() * 2];
+                for (int at = 0; at < ranges.size(); at++) {
+                    pairs[at * 2] = ranges.get(at).from();
+                    pairs[at * 2 + 1] = ranges.get(at).to();
+                }
+                labels.add(over);
+                sets.add(pairs);
             }
         }
         SymbolPartition classes = SymbolPartition.of(sets, making);
@@ -1552,8 +1666,7 @@ public final class Automaton {
     private static final class Building {
 
         private final Meter.Making making;
-        private final List<List<Step>> steps = new ArrayList<>();
-        private final List<List<Integer>> free = new ArrayList<>();
+        private final Laying laid = new Laying();
 
         Building(Meter.Making making) {
             this.making = making;
@@ -1563,17 +1676,15 @@ public final class Automaton {
             if (!making.state()) {
                 throw new TooMany();
             }
-            steps.add(new ArrayList<>());
-            free.add(new ArrayList<>());
-            return steps.size() - 1;
+            return laid.state();
         }
 
         void step(int from, CodePoints over, int to) {
-            steps.get(from).add(new Step(over, to));
+            laid.step(from, over, to);
         }
 
         void freely(int from, int to) {
-            free.get(from).add(to);
+            laid.freely(from, to);
         }
 
         /**
@@ -1664,22 +1775,54 @@ public final class Automaton {
             };
         }
 
-                List<List<Step>> frozenSteps() {
-            List<List<Step>> out = new ArrayList<>(steps.size());
-            steps.forEach(each -> out.add(List.copyOf(each)));
-            return List.copyOf(out);
+    }
+
+    /**
+     * A machine's states and steps while a construction writes them, before they are laid out a
+     * state at a time ({@link #Automaton(Laying, BitSet)}).
+     *
+     * <p>Each step is written where it is made, out of whichever state it leaves, as three numbers
+     * in arrays that grow; nothing is made for a state but its number. Steps out of one state are
+     * kept in the order they were written, which is the order a walk and an image meet them in.
+     */
+    private static final class Laying {
+
+        int states;
+        int steps;
+        int[] stepFrom = new int[16];
+        int[] stepTo = new int[16];
+        CodePoints[] stepOver = new CodePoints[16];
+        int frees;
+        int[] freeFrom = new int[16];
+        int[] freeTo = new int[16];
+
+        /** One more state, numbered after the last. */
+        int state() {
+            return states++;
         }
 
-        List<int[]> frozenFree() {
-            List<int[]> out = new ArrayList<>(free.size());
-            for (List<Integer> each : free) {
-                int[] to = new int[each.size()];
-                for (int i = 0; i < to.length; i++) {
-                    to[i] = each.get(i);
-                }
-                out.add(to);
+        void step(int from, CodePoints over, int to) {
+            if (steps == stepFrom.length) {
+                int more = steps * 2;
+                stepFrom = Arrays.copyOf(stepFrom, more);
+                stepTo = Arrays.copyOf(stepTo, more);
+                stepOver = Arrays.copyOf(stepOver, more);
             }
-            return List.copyOf(out);
+            stepFrom[steps] = from;
+            stepTo[steps] = to;
+            stepOver[steps] = over;
+            steps++;
+        }
+
+        void freely(int from, int to) {
+            if (frees == freeFrom.length) {
+                int more = frees * 2;
+                freeFrom = Arrays.copyOf(freeFrom, more);
+                freeTo = Arrays.copyOf(freeTo, more);
+            }
+            freeFrom[frees] = from;
+            freeTo[frees] = to;
+            frees++;
         }
     }
 
