@@ -12,8 +12,10 @@ use Raoh\Notation199x\Pattern;
  * What a machine keeps changes how fast it walks and no answer. What a walk decides about keeping
  * sets is its own, so no subject leaves a later walk slower: a walk that is frozen goes back to
  * kept steps where it comes to a kept set and keeps nothing more, and the next walk keeps sets
- * again. A set larger than the room is kept alone. Sets that share a hash are told apart, and the
- * two loops that move states take the same steps.
+ * again. Only makeRoom forgets the kept sets, a step that finds no room is decided there as a set
+ * is, and a set larger than the room is kept beside the one a walk starts in. What is charged is
+ * what PHP holds the kept sets in. Sets that share a hash are told apart, and the two loops that
+ * move states take the same steps.
  */
 final class MachineTest extends TestCase
 {
@@ -104,7 +106,7 @@ final class MachineTest extends TestCase
             }
         }
         sort($names);
-        $kept = ['bytes', 'first', 'keptAccepts', 'keptHashes', 'keptLoop', 'keptNext', 'keptStates', 'slots'];
+        $kept = ['bytes', 'first', 'floor', 'keptAccepts', 'keptHashes', 'keptLoop', 'keptNext', 'keptStates', 'slots'];
         $machine = ['accept', 'freeStart', 'freeTo', 'setRanges', 'setStart', 'sets', 'stepOver', 'stepStart', 'stepTo'];
         $all = array_merge($kept, $machine);
         sort($all);
@@ -237,6 +239,116 @@ final class MachineTest extends TestCase
         self::assertFalse($m->matches(str_repeat('x', 1000) . 'y'));
         self::assertSame(0, self::get($m, 'first'));
         self::assertTrue($m->matches(str_repeat('x', 1000)));
+    }
+
+    /**
+     * The kept sets are forgotten in one place, where a walk decides what to do with no room
+     * (makeRoom), which counts every forgetting a walk causes. A forget called anywhere else would
+     * be one the walk does not count, and nothing would bound what the walk spends keeping sets.
+     */
+    public function testOnlyMakeRoomForgetsTheKeptSets(): void
+    {
+        $forgetting = [];
+        foreach ((new \ReflectionClass(Machine::class))->getMethods() as $method) {
+            $file = $method->getFileName();
+            $start = $method->getStartLine();
+            $end = $method->getEndLine();
+            self::assertIsString($file);
+            self::assertIsInt($start);
+            self::assertIsInt($end);
+            $lines = file($file);
+            self::assertIsArray($lines);
+            $body = implode('', array_slice($lines, $start, $end - $start));
+            if (str_contains($body, '$this->forget()')) {
+                $forgetting[] = $method->getName();
+            }
+        }
+        self::assertSame(['makeRoom'], $forgetting);
+    }
+
+    /**
+     * A step that finds no room is decided as a set that finds none is: the walk forgets the kept
+     * sets, the first time, and keeps the step after, so the same subject read again goes by kept
+     * steps over every character. Before, a step over a character past ASCII that found no room
+     * was left out without the walk knowing, and every walk after worked it out again, a state at a
+     * time, for as long as the room stayed full.
+     */
+    public function testAStepThatFindsNoRoomIsDecidedAsASetIs(): void
+    {
+        $was = Machine::$knownBytes;
+        Machine::$knownBytes = 1 << 30;
+        try {
+            $m = self::machineOf('(?:a|é)*');
+            $subject = 'aéaéé';
+            self::assertTrue($m->matches($subject));
+            // The sets the subject comes to are kept and their steps are not, and the room is full.
+            $next = self::get($m, 'keptNext');
+            $loops = self::get($m, 'keptLoop');
+            self::assertIsArray($next);
+            self::assertIsArray($loops);
+            (new \ReflectionProperty(Machine::class, 'keptNext'))->setValue($m, array_fill(0, count($next), []));
+            (new \ReflectionProperty(Machine::class, 'keptLoop'))->setValue($m, array_fill(0, count($loops), ''));
+            $bytes = self::get($m, 'bytes');
+            self::assertIsInt($bytes);
+            Machine::$knownBytes = $bytes;
+            for ($i = 0; $i < 3; $i++) {
+                self::assertTrue($m->matches($subject));
+            }
+            $in = self::get($m, 'first');
+            $next = self::get($m, 'keptNext');
+            self::assertIsArray($next);
+            foreach (['a', 'é', 'a', 'é', 'é'] as $at => $character) {
+                self::assertIsInt($in);
+                self::assertIsArray($next[$in]);
+                self::assertArrayHasKey($character, $next[$in], "character $at, $character, is not read by a kept step");
+                $in = $next[$in][$character];
+            }
+        } finally {
+            Machine::$knownBytes = $was;
+        }
+    }
+
+    /**
+     * What the kept sets are charged is what PHP holds them in, as memory_get_usage() counts it,
+     * and no less: sets of many states and of few, steps over ASCII and past it, tables of steps
+     * that double, and the slots and lists that grow with the sets kept. What they hold is what
+     * PHP gives back when they are let go. What is charged is more only by what is charged once at
+     * the most it grows to, a set's loop, or before it is made, the table of the steps of a set no
+     * step has been taken from yet, which holds it to at most a tenth more than what is held.
+     */
+    public function testWhatIsChargedIsWhatPhpHoldsTheKeptSetsIn(): void
+    {
+        $was = Machine::$knownBytes;
+        Machine::$knownBytes = 1 << 30;
+        $distinct = '';
+        for ($c = 0x100; $c < 0x300; $c++) {
+            $distinct .= chr(0xC0 | ($c >> 6)) . chr(0x80 | ($c & 0x3F));
+        }
+        $cases = [
+            '(?:a|b)*a(?:a|b){10}' => $this->random(2_000),
+            'a{0,3000}' => str_repeat('a', 2_000),
+            '(?:.)*' => $distinct . $distinct,
+            '(?:[a-z]|é|ü)*a(?:[a-z]|é){3}' => str_repeat('abéüxyz', 300),
+        ];
+        try {
+            foreach ($cases as $pattern => $subject) {
+                $m = self::machineOf($pattern);
+                $m->matches($subject);
+                $charged = self::get($m, 'bytes');
+                self::assertIsInt($charged);
+                gc_collect_cycles();
+                $before = memory_get_usage();
+                foreach (['slots', 'keptStates', 'keptHashes', 'keptAccepts', 'keptNext', 'keptLoop'] as $name) {
+                    (new \ReflectionProperty(Machine::class, $name))->setValue($m, []);
+                }
+                $held = $before - memory_get_usage();
+                self::assertGreaterThan(0, $held, $pattern);
+                self::assertGreaterThanOrEqual($held, $charged, "$pattern holds more than it was charged");
+                self::assertLessThanOrEqual(intdiv(11 * $held, 10), $charged, "$pattern was charged more than it holds");
+            }
+        } finally {
+            Machine::$knownBytes = $was;
+        }
     }
 
     /**

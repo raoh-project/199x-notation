@@ -22,14 +22,23 @@ use Raoh\Notation199x\Internal\Utf8;
  * worked out are held the same way, by number, so no set holds another and forgetting them is
  * letting go of a few lists.
  *
+ * What the sets kept do to how fast a walk goes is held to three promises. A walk spends on keeping
+ * sets no more than what fills the room twice, unless keeping them pays for itself: the kept sets
+ * are forgotten in one place, makeRoom, which counts each forgetting a walk causes, and nothing of
+ * what one walk decided is held for the next. Whatever does not fit, a set or a step, is decided
+ * there, and is never left out without the walk knowing. The sets every walk needs, the set it
+ * starts in and the set it is in, are kept whatever they take (force). And what is kept is held
+ * to the room by charging, as it is made, what PHP takes to hold it (charge), which MachineTest
+ * holds to what memory_get_usage() counts.
+ *
  * @internal
  */
 final class Machine
 {
     /**
-     * About how much the sets a machine has worked out may take, in bytes, before they are
-     * forgotten and worked out again as they are come to. One set that alone takes more is kept
-     * all the same, with no other but the set a walk starts in (keep).
+     * How much the sets a machine has worked out, and the steps between them, may take, in bytes,
+     * before a walk that comes to one more forgets them or keeps no more (makeRoom). The sets every
+     * walk needs are kept whatever they take, with STEP_ROOM for steps from them (force).
      */
     public static int $knownBytes = 2 << 20;
 
@@ -40,10 +49,42 @@ final class Machine
     /** A walk keeps no more sets, and looks up among those kept each set it comes to. */
     private const FROZEN = 2;
 
-    /** About what one number in a list takes. */
-    private const NUMBER_BYTES = 16;
-    /** About what one step a kept set holds takes. */
-    private const STEP_BYTES = 48;
+    // What PHP 8 takes on a 64-bit platform for what the kept sets are held in, charged as it is
+    // made (charge). An array is a zend_array of 56 bytes and room for a power of two of places,
+    // eight at least, which it doubles into as it fills. A list's place is a zval of 16 bytes, with
+    // 8 bytes of hash for the list as a whole; a table keyed by strings has a bucket of 32 bytes and
+    // two 4-byte hash slots for each place. A key of more than one byte is a string of its own, of
+    // 24 bytes and the key and its end; a one-byte key is one PHP holds once for every program.
+    // PHP's allocator gives each of these the least of its sizes that holds it (bin), and that is
+    // what is charged. MachineTest holds what is charged to what PHP says it took.
+
+    /** The zend_array an array is before it holds anything. */
+    private const ARRAY_BYTES = 56;
+    /** What a list takes for each place, and what it takes besides its places. */
+    private const LIST_PLACE_BYTES = 16;
+    private const LIST_HASH_BYTES = 8;
+    /** What a table keyed by strings takes for each place. */
+    private const TABLE_PLACE_BYTES = 40;
+    /**
+     * What a set's table of steps takes once its first step is kept: eight places, 320 bytes, one
+     * of the allocator's sizes. It is charged with the set (keep), since every set a walk keeps
+     * but the last it comes to has a step taken from it.
+     */
+    private const TABLE_BYTES = self::ARRAY_BYTES + self::TABLE_PLACE_BYTES * self::SMALLEST;
+    /** What a key of two to four bytes takes: a string of 24 bytes, the key and its end, in the 32-byte bin. */
+    private const KEY_BYTES = 32;
+    /** The most a set's loop takes: each ASCII character once in a string, 153 bytes in the 160-byte bin. */
+    private const LOOP_BYTES = 160;
+    /** The fewest places PHP makes an array with. */
+    private const SMALLEST = 8;
+    /** How many lists have one place for each kept set: its states, hash, whether it accepts, next and loop. */
+    private const LISTS = 5;
+    /**
+     * The room for steps the kept sets are given beyond the sets every walk needs, where those
+     * take more than $knownBytes (force): room for some hundreds of steps from them, so that a
+     * walk that goes round a set larger than the room goes round it by kept steps.
+     */
+    private const STEP_ROOM = 64 << 10;
 
     private int $accept = 0;
     /** @var array<int, int> where each state's steps over a symbol begin in $stepTo, and one more where the last one's end */
@@ -86,7 +127,13 @@ final class Machine
     private array $keptLoop = [];
     /** The kept set a walk starts in, or -1 where it is not known. */
     private int $first = -1;
+    /** What the kept sets and the steps between them take, as charge() charges it. */
     private int $bytes = 0;
+    /**
+     * The room the sets kept whatever they take need, with STEP_ROOM for steps from them, where
+     * that is more than $knownBytes; otherwise 0 (force).
+     */
+    private int $floor = 0;
 
     private function __construct()
     {
@@ -170,7 +217,7 @@ final class Machine
         $mode = self::KEEPING;
         $made = 0;
         $read = 0;
-        $in = $this->begin($now, $mode, $made, $read);
+        $in = $this->begin($now);
         $length = strlen($subject);
         for ($at = 0; $at < $length;) {
             if ($in >= 0) {
@@ -213,20 +260,25 @@ final class Machine
 
     /**
      * Puts the walk in the state it starts in, with every state the steps for nothing reach from
-     * it: the kept set it starts in, kept now where it was not.
+     * it: the kept set it starts in, kept now where it was not. Forgetting the kept sets keeps
+     * this one (forget), so it is kept here only by the first walk of a machine, and is kept
+     * whatever it takes, as one of the sets every walk needs: this is not a walk deciding to
+     * forget anything, and is not counted as one.
      *
      * @param array<int, true> $now
      */
-    private function begin(array &$now, int &$mode, int &$made, int &$read): int
+    private function begin(array &$now): int
     {
         if ($this->first >= 0) {
             return $this->first;
         }
         $now = [];
         $this->enter($now, 0);
-        // A walk that starts keeps the set it starts in, forgetting the others where there is no
-        // room, so it is never frozen here.
-        [$this->first] = $this->settle($now, $mode, $made, $read);
+        $hash = $this->hashOf($now);
+        $this->first = $this->find($now, $hash);
+        if ($this->first < 0) {
+            $this->first = $this->keep($now, $hash, true);
+        }
         return $this->first;
     }
 
@@ -267,13 +319,33 @@ final class Machine
         $now = $this->advanceStates($this->keptStates[$from], $symbol);
         [$next, $forgot] = $this->settle($now, $mode, $made, $read);
         // $from was forgotten to make room where $forgot, and is not looked up again. A frozen
-        // walk adds no step to the kept sets. Where an ASCII character leads is room every set is
-        // charged for when it is kept; where another leads is kept only where there is room for
-        // it.
-        if ($next >= 0 && !$forgot && $mode !== self::FROZEN && ($width === 1 || $this->charge(self::STEP_BYTES))) {
-            $this->keptNext[$from][$character] = $next;
-            if ($next === $from && $width === 1) {
-                $this->keptLoop[$from] .= $character;
+        // walk adds no step to the kept sets. A step is kept where there is room for it, and where
+        // there is none the walk decides as it does for a set (makeRoom): it forgets the kept sets,
+        // $from with them, and keeps the set it came to again, or it keeps no more.
+        if ($next >= 0 && !$forgot && $mode !== self::FROZEN) {
+            // What keeping the step makes past the table $from was charged with (TABLE_BYTES): twice
+            // the table's places, where it is full; the key, where it is more than a byte; and the
+            // loop of $from, where this is the first character found to lead $from back to itself,
+            // charged once at the most it grows to. It is worked out here and not in a call of its
+            // own, since a step is kept at nearly every character of a walk that keeps new sets.
+            $steps = count($this->keptNext[$from]);
+            $cost = 0;
+            if ($steps >= self::SMALLEST && ($steps & ($steps - 1)) === 0) {
+                $cost = self::bin(self::TABLE_PLACE_BYTES * 2 * $steps) - self::bin(self::TABLE_PLACE_BYTES * $steps);
+            }
+            $loop = $width === 1 && $next === $from;
+            if ($width > 1) {
+                $cost += self::KEY_BYTES;
+            } elseif ($loop && $this->keptLoop[$from] === '') {
+                $cost += self::LOOP_BYTES;
+            }
+            if ($cost === 0 || $this->charge($cost)) {
+                $this->keptNext[$from][$character] = $next;
+                if ($loop) {
+                    $this->keptLoop[$from] .= $character;
+                }
+            } elseif ($this->makeRoom($mode, $made, $read)) {
+                $next = $this->keepAgain($now, $this->hashOf($now), $made);
             }
         }
         $in = $next;
@@ -286,21 +358,9 @@ final class Machine
     /**
      * The kept set $now holds, and whether the sets kept before were forgotten to make room for
      * it: found among those kept, or kept now, or -1 where the walk is frozen and it is not kept.
-     * This is where a walk decides what to do when there is no room for a set, and keep() only
-     * says so.
-     *
-     * The first time in a walk, the sets kept before are forgotten, but the one a walk starts in
-     * (forget), and the set is kept anew: they were kept by walks before this one, and what they
-     * cost says nothing about the subject read now. A set larger than the room is kept so beside the
-     * set a walk starts in (keep), and (?:x*){124998} goes round the set every x leads to by its
-     * kept step. After that, where the walk read by kept steps at least ten characters for each set
-     * it made since it last forgot them, the sets were worth keeping and are forgotten again.
-     * Otherwise keeping them saves nothing, and the walk is frozen for the rest of the subject: it
-     * keeps no more sets and no more steps, so what it holds grows no further, and it goes a state
-     * at a time, looking up each set it comes to among those kept, so that it takes kept steps
-     * again where it comes to one. A walk that keeps coming to new sets is so walked a state at a
-     * time, but for the sets it made before it was frozen, at most twice the room. The next walk
-     * starts keeping sets again.
+     * Where there is no room for it, the walk decides what to do (makeRoom), and keep() only says
+     * so. A frozen walk looks each set it comes to up among those kept, so that it takes kept
+     * steps again where it comes to one.
      *
      * @param array<int, true> $now
      * @return array{int, bool}
@@ -317,15 +377,58 @@ final class Machine
             $made++;
             return [$set, false];
         }
+        if (!$this->makeRoom($mode, $made, $read)) {
+            return [-1, false];
+        }
+        return [$this->keepAgain($now, $hash, $made), true];
+    }
+
+    /**
+     * What a walk does where there is no room for a set or a step it comes to: it forgets the
+     * kept sets (forget), and is true, or it keeps no more for the rest of the subject, and is
+     * false. This is the one place the kept sets are forgotten and the one place a walk is frozen,
+     * and every forgetting a walk causes is counted here, so that what a walk spends keeping sets
+     * is bounded whatever it reads.
+     *
+     * The first time in a walk, the sets are forgotten without asking anything: they were kept by
+     * walks before this one, and what they cost says nothing about the subject read now. After
+     * that, they are forgotten again only where the walk read by kept steps at least ten characters
+     * for each set it made since it last forgot them, so that keeping them paid for itself.
+     * Otherwise keeping them saves nothing, and the walk is frozen: it keeps no more sets and no
+     * more steps, so what it holds grows no further, and it goes a state at a time, looking up each
+     * set it comes to among those kept. A walk that keeps coming to new sets so spends on keeping
+     * them at most what fills the room twice. The next walk starts keeping sets again: nothing of
+     * what a walk decided is held by the machine.
+     */
+    private function makeRoom(int &$mode, int &$made, int &$read): bool
+    {
         if ($mode === self::KEEPING_AGAIN && $read < 10 * $made) {
             $mode = self::FROZEN;
-            return [-1, false];
+            return false;
         }
         $this->forget();
         $mode = self::KEEPING_AGAIN;
-        $made = 1;
+        $made = 0;
         $read = 0;
-        return [$this->keep($now, $hash, true), true];
+        return true;
+    }
+
+    /**
+     * The set $now holds, whose hash is $hash, just after the kept sets were forgotten for it: the
+     * set a walk starts in, which forgetting keeps, or kept now whatever it takes. It is the set
+     * the walk is in, which with the set a walk starts in is the least a walk needs kept to go on
+     * by kept steps (force), and is counted among those the walk made.
+     *
+     * @param array<int, true> $now
+     */
+    private function keepAgain(array $now, int $hash, int &$made): int
+    {
+        $set = $this->find($now, $hash);
+        if ($set < 0) {
+            $set = $this->keep($now, $hash, true);
+            $made++;
+        }
+        return $set;
     }
 
     /**
@@ -424,28 +527,38 @@ final class Machine
      * The set $now holds, whose hash is $hash and which is not kept, kept now; or -1 where there is
      * no room for it, and nothing is kept. Which sets are kept, and whether any are, changes how
      * fast a walk is and no answer. What to do where there is no room is the walk's to decide
-     * (settle); this only holds the sets to about $knownBytes.
+     * (makeRoom); this only holds the sets to the room. What is charged is what keeping it makes:
+     * the list of its states, the table of its steps (TABLE_BYTES), a place in each of the lists
+     * that hold one for every kept set, as they double, and twice the slots, where they double.
      *
-     * With $always, the set is kept whatever room it takes. It is asked only just after the sets
-     * were forgotten, so that a set that alone takes more than $knownBytes is kept, beside the set
-     * a walk starts in and no other, and is not walked a state at a time at every character that
-     * comes to it again, as (?:x*){124998} comes to the same set of nearly the whole machine at
-     * every x. What the two take is bounded by twice the machine's states, and no step is kept
-     * beside them but those the room of each set pays for, its ASCII characters.
+     * With $always, the set is kept whatever room it takes (force). It is asked only for the sets
+     * every walk needs: the set a walk starts in, and the set a walk is in just after the others
+     * were forgotten for it. So a set that alone takes more than $knownBytes is kept beside the
+     * one a walk starts in, and is not walked a state at a time at every character that comes to
+     * it again, as (?:x*){124998} comes to the same set of nearly the whole machine at every x.
      *
      * @param array<int, true> $now
      */
     private function keep(array $now, int $hash, bool $always): int
     {
-        $cost = self::cost(count($now));
-        if (!$this->charge($cost)) {
-            if (!$always) {
-                return -1;
-            }
-            $this->bytes += $cost;
-        }
         $set = count($this->keptStates);
-        if (($set + 1) * 2 > count($this->slots)) {
+        $cost = self::listBytes(count($now)) + self::TABLE_BYTES;
+        // The lists with a place for each kept set are made with the first and double when full.
+        if ($set === 0) {
+            $cost += self::LISTS * self::listBytes(1);
+        } elseif ($set >= self::SMALLEST && ($set & ($set - 1)) === 0) {
+            $cost += self::LISTS * (self::listBytes(2 * $set) - self::listBytes($set));
+        }
+        $grow = ($set + 1) * 2 > count($this->slots);
+        if ($grow) {
+            $cost += self::listBytes(max(16, 2 * count($this->slots))) - self::listBytes(count($this->slots));
+        }
+        if ($always) {
+            $this->force($cost);
+        } elseif (!$this->charge($cost)) {
+            return -1;
+        }
+        if ($grow) {
             $this->grow();
         }
         $states = [];
@@ -549,16 +662,32 @@ final class Machine
 
     /**
      * Takes $bytes of the room the kept sets have, and is false, taking nothing, where there is
-     * not that much left. Every set and every step the kept sets hold is charged here, which is
-     * what holds them to the room.
+     * not that much left. Every set and every step the kept sets hold is charged here or in force,
+     * as it is made, which is what holds them to the room. The room is $knownBytes, or more where
+     * the sets every walk needs take more (force).
      */
     private function charge(int $bytes): bool
     {
-        if ($this->bytes + $bytes > self::$knownBytes) {
+        if ($this->bytes + $bytes > max(self::$knownBytes, $this->floor)) {
             return false;
         }
         $this->bytes += $bytes;
         return true;
+    }
+
+    /**
+     * Takes $bytes of the room for one of the sets every walk needs, whatever is left: the set a
+     * walk starts in, and the set a walk is in just after the others were forgotten for it. Where
+     * they take more than $knownBytes, the room is what they take and STEP_ROOM for steps from
+     * them, so that a walk goes round them by kept steps; the next set that does not fit leads the
+     * walk to decide, as any does (makeRoom). The two are bounded by twice the machine's states.
+     */
+    private function force(int $bytes): void
+    {
+        if (!$this->charge($bytes)) {
+            $this->bytes += $bytes;
+            $this->floor = $this->bytes + self::STEP_ROOM;
+        }
     }
 
     /**
@@ -586,6 +715,7 @@ final class Machine
         $this->keptLoop = [];
         $this->first = -1;
         $this->bytes = 0;
+        $this->floor = 0;
         if ($first < 0) {
             return;
         }
@@ -597,15 +727,63 @@ final class Machine
         $this->grow();
         $this->slots[$this->free($hash)] = 0;
         $this->first = 0;
-        $this->bytes = self::cost(count($states));
+        $this->force(self::listBytes(count($states)) + self::TABLE_BYTES + self::LISTS * self::listBytes(1) + self::listBytes(count($this->slots)));
     }
 
     /**
-     * What a kept set of $states states takes: its states, its hash, where it leads for each
-     * ASCII character, and its part of the slots.
+     * What a list of $n numbers takes, or a list of $n places PHP makes at once: the zend_array,
+     * and its hash and a place for each of the power of two it is made with or doubles to, eight at
+     * least, as bin() gives them; nothing for an empty one, which PHP holds once for every program.
+     *
+     * The places are a power of two of bytes, and the hash puts them a little past it, so bin()
+     * gives a quarter more for them up to 3072 bytes, and a page more past that. It is worked out
+     * so here, without the calls, since a list of states is made for every set kept.
      */
-    private static function cost(int $states): int
+    private static function listBytes(int $n): int
     {
-        return self::NUMBER_BYTES * ($states + 3) + 128 * self::STEP_BYTES + 128;
+        if ($n === 0) {
+            return 0;
+        }
+        $p = max($n, self::SMALLEST) - 1;
+        $p |= $p >> 1;
+        $p |= $p >> 2;
+        $p |= $p >> 4;
+        $p |= $p >> 8;
+        $p |= $p >> 16;
+        $places = self::LIST_PLACE_BYTES * ($p + 1);
+        return self::ARRAY_BYTES + ($places + self::LIST_HASH_BYTES <= 3072 ? $places + ($places >> 2) : $places + 4096);
+    }
+
+    /**
+     * What PHP's allocator gives for $bytes: the least of its small sizes that holds them, which
+     * go by eight up to 64 and then by four steps between each power of two and the next, up to
+     * 3072; and past that, whole pages of 4096 bytes.
+     */
+    private static function bin(int $bytes): int
+    {
+        if ($bytes <= 64) {
+            return ($bytes + 7) & ~7;
+        }
+        if ($bytes > 3072) {
+            return ($bytes + 4095) & ~4095;
+        }
+        $step = self::places($bytes) >> 3;
+        return ($bytes + $step - 1) & ~($step - 1);
+    }
+
+    /**
+     * The places PHP makes an array of $n with, or has doubled it to once it holds $n: the least
+     * power of two that is $n or more, and eight at least. $n is below 2^32, as many states as a
+     * machine has or as many sets as are kept.
+     */
+    private static function places(int $n): int
+    {
+        $n = max($n, self::SMALLEST) - 1;
+        $n |= $n >> 1;
+        $n |= $n >> 2;
+        $n |= $n >> 4;
+        $n |= $n >> 8;
+        $n |= $n >> 16;
+        return $n + 1;
     }
 }
