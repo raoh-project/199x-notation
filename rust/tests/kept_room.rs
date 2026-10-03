@@ -72,9 +72,19 @@ fn either(a: char, b: char, n: usize, seed: &mut u64) -> String {
 /// a table grown by doubling.
 #[test]
 fn a_matcher_holds_no_more_than_the_room_it_is_given() {
+    // A branch no subject here takes, of more classes than a row holds every one of, so that the
+    // steps over α and β are kept past the rows.
+    let mut many = String::from("(?:α|β)*α(?:α|β){16}|z(?:");
+    for c in 0x400..0x600u32 {
+        if c > 0x400 {
+            many.push('|');
+        }
+        many.push(char::from_u32(c).expect("a scalar value"));
+    }
+    many.push(')');
     for (text, a, b) in [
         ("(?:a|b)*a(?:a|b){16}", 'a', 'b'),
-        ("(?:α|β)*α(?:α|β){16}", 'α', 'β'),
+        (many.as_str(), 'α', 'β'),
     ] {
         let PatternRead::Pattern(pattern) = read_pattern(text) else {
             panic!("{text} is a pattern");

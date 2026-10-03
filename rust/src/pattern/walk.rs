@@ -8,6 +8,24 @@ use super::subject::read_classes;
 /// them, counted by the room each list holds and not by how much of it is in use, as [`Cache`] says.
 const KNOWN_BYTES: usize = 2 << 20;
 
+/// The most classes a row holds every one of: as many as let the room hold the rows of 2,048 sets,
+/// the sets Java's budget keeps, at four bytes a place. A machine with more holds in a row the
+/// classes ASCII is in, and the others in `cold`, so that what a set costs is bounded by the room
+/// and not by the machine, while a machine of few classes, which most are, takes a step over any
+/// character as one lookup.
+const MOST_ROW: usize = KNOWN_BYTES / (4 * 2048);
+
+/// How many classes a row holds for a machine of these `classes`: every one where they are at most
+/// [`MOST_ROW`], and otherwise those ASCII is in, which come first.
+fn row_width(classes: &Classes) -> usize {
+    let all = classes.count();
+    if all <= MOST_ROW {
+        all
+    } else {
+        classes.of_ascii()
+    }
+}
+
 /// Where a class leads from a kept set before that has been worked out.
 const UNKNOWN: u32 = u32::MAX;
 /// The kept set no state is in, from which no string is accepted.
@@ -69,15 +87,16 @@ pub(crate) struct Cache {
     /// The kept sets by their hashes, each slot a set's place in `sets` or [`EMPTY`], looked for
     /// from the slot the hash names to the first empty one. Never more than half full.
     slots: Vec<u32>,
-    /// Where class `k` leads from the kept set whose row begins at `s` is `next[s + k]`, for each of
-    /// the classes an ASCII character is in: the place the row of the set it leads to begins,
-    /// [`NONE`], or [`UNKNOWN`]. The set whose row begins at `s` is `sets[s / width]`, `width` being
-    /// how many those classes are ([`walk_with`]). Where the other classes lead is in `cold`.
+    /// Where class `k` leads from the kept set whose row begins at `s` is `next[s + k]`, for each
+    /// class the row holds: the place the row of the set it leads to begins, [`NONE`], or
+    /// [`UNKNOWN`]. The set whose row begins at `s` is `sets[s / width]`, `width` being how many
+    /// classes a row holds ([`row_width`]). Where the other classes lead is in `cold`.
     ///
-    /// A row is as wide as the classes ASCII is in, at most 128, and not as wide as every class of
-    /// the machine, which no limit on a pattern bounds: a set of 100,000 runs cuts the scalar values
-    /// into 200,001 classes, and a row of each would make what a set costs that many times four
-    /// bytes, for the classes past ASCII that most sets are never left by.
+    /// A row holds every class of the machine where those are at most [`MOST_ROW`], so that a step
+    /// over any character is one lookup; and otherwise the classes ASCII is in, at most 128, since
+    /// no limit on a pattern bounds the classes: a set of 100,000 runs cuts the scalar values into
+    /// 200,001 classes, and a row of each would make what a set costs that many times four bytes,
+    /// for the classes past ASCII that most sets are never left by.
     next: Vec<u32>,
     cold: Cold,
     /// The kept set a walk starts in, where it is kept.
@@ -772,7 +791,7 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
 
 /// [`matches`], with what the match decides about keeping sets held in `keeping`.
 fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut Keeping) -> bool {
-    let width = machine.classes.of_ascii();
+    let width = row_width(&machine.classes);
     let mut i = 0;
     let mut at = match cache.start {
         Some(start) => start,
@@ -846,17 +865,32 @@ fn run_known(
     at: &mut u32,
 ) -> Option<(usize, char)> {
     let mut row = *at;
-    // A kept set is the place its row begins, below both of the values that are not one.
-    let stopped = read_classes(
-        subject,
-        i,
-        classes.ascii(),
-        |c| classes.class_of(c),
-        &mut row,
-        |row, class| cache.next[row as usize + class],
-        |row, class| cache.step(width, row, class),
-        |known| known >= NONE,
-    );
+    // A kept set is the place its row begins, below both of the values that are not one. Where the
+    // row holds every class, every character is one lookup in it, and none asks whether its class
+    // is past the row.
+    let stopped = if width == classes.count() {
+        read_classes(
+            subject,
+            i,
+            classes.ascii(),
+            |c| classes.class_of(c),
+            &mut row,
+            |row, class| cache.next[row as usize + class],
+            |row, class| cache.next[row as usize + class],
+            |known| known >= NONE,
+        )
+    } else {
+        read_classes(
+            subject,
+            i,
+            classes.ascii(),
+            |c| classes.class_of(c),
+            &mut row,
+            |row, class| cache.next[row as usize + class],
+            |row, class| cache.step(width, row, class),
+            |known| known >= NONE,
+        )
+    };
     *at = row;
     stopped.map(|class| {
         (
@@ -916,7 +950,7 @@ mod tests {
         let mut cache = Cache::new();
         cache.walk.begin(machine);
         let mut i = 0;
-        match cache.walk_alone(machine, machine.classes.of_ascii(), subject, &mut i) {
+        match cache.walk_alone(machine, row_width(&machine.classes), subject, &mut i) {
             Alone::Ended(answer) => answer,
             Alone::Rejoined(_) => unreachable!("nothing is kept"),
         }
@@ -1372,7 +1406,7 @@ mod tests {
     fn keeping_a_set_takes_no_room_from_the_walk() {
         let pattern = pattern("(?:a|b)*a(?:a|b){8}");
         let machine = machine(&pattern);
-        let width = machine.classes.of_ascii();
+        let width = row_width(&machine.classes);
         let mut matcher = pattern.matcher();
         let subject = Numbers(7).ab(400);
         matcher.matches(&subject);
@@ -1431,7 +1465,7 @@ mod tests {
             .cache
             .start
             .expect("the set a walk starts in is kept");
-        let width = machine(&pattern).classes.of_ascii();
+        let width = row_width(&machine(&pattern).classes);
         assert!(
             (start as usize) < matcher.cache.sets.len() * width,
             "the set a walk starts in is one of those kept"
@@ -1517,7 +1551,7 @@ mod tests {
     }
 
     /// A set of 100,000 runs cuts the scalar values into 200,001 classes, and a kept set costs as
-    /// much as it would were they a few: its row is as wide as the classes ASCII is in, and where
+    /// much as it would were they a few: its row holds the classes ASCII is in, and where
     /// the others lead is kept as each is read. The steps past the row are kept and read again by
     /// the next match as those in it are.
     #[test]
@@ -1562,7 +1596,43 @@ mod tests {
     /// The ninth character from the end is α: a pattern of many sets, every step between them past
     /// the row.
     fn greek() -> crate::Pattern {
-        pattern("(?:α|β)*α(?:α|β){8}")
+        pattern(&format!("(?:α|β)*α(?:α|β){{8}}|{}", many_classes()))
+    }
+
+    /// A branch no subject here takes, of more classes than a row holds every one of
+    /// ([`MOST_ROW`]), so that the steps over α and β are kept past the row.
+    fn many_classes() -> String {
+        let mut text = String::from("z(?:");
+        for c in 0x400..0x400 + MOST_ROW as u32 + 1 {
+            if c > 0x400 {
+                text.push('|');
+            }
+            text.push(char::from_u32(c).expect("a scalar value"));
+        }
+        text.push(')');
+        text
+    }
+
+    /// A machine of a few classes holds every one of them in a row, so a step over a character past
+    /// ASCII is one lookup, as one over ASCII is, and nothing is kept past the row; one of more than
+    /// [`MOST_ROW`] holds the classes ASCII is in, and the steps over α and β past the row.
+    #[test]
+    fn a_machine_of_few_classes_holds_every_class_in_a_row() {
+        let few = pattern("(?:α|β)*α(?:α|β){8}");
+        let mut matcher = few.matcher();
+        let subject = alpha_beta(&mut Numbers(3), 400);
+        matcher.matches(&subject);
+        let classes = &machine(&few).classes;
+        assert_eq!(row_width(classes), classes.count());
+        assert_eq!(matcher.cache.cold.held(), 0, "a step kept past the row");
+
+        let many = greek();
+        let mut matcher = many.matcher();
+        matcher.matches(&subject);
+        let classes = &machine(&many).classes;
+        assert!(classes.count() > MOST_ROW);
+        assert_eq!(row_width(classes), classes.of_ascii());
+        assert!(matcher.cache.cold.held() > 0, "no step kept past the row");
     }
 
     /// Where there is no room to keep a step past the row, the match is told and decides, as for a

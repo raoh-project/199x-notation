@@ -114,7 +114,7 @@ impl Classes {
         &self.ascii
     }
 
-    #[cfg(test)]
+    /// How many classes there are.
     pub(crate) fn count(&self) -> usize {
         self.starts.len()
     }
