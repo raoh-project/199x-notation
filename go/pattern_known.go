@@ -49,7 +49,10 @@ const knownSetBytes = 8*utf8RuneSelf + 64
 //
 // The sets every walk needs, the set it starts in and the set it is in when the others are
 // forgotten for it, are kept whatever they take, and so is the step between them; and they are
-// not charged against knownBytes, but counted apart, in needed. knownBytes bounds everything else:
+// not charged against knownBytes, but counted apart, in needed. One method keeps them, afresh,
+// which forgets everything else first, and nothing else keeps anything beside knownBytes: so what
+// is beside it is those two sets and that step, whoever calls afresh and however often, and not
+// something its callers keep to by the order they call it in. knownBytes bounds everything else:
 // the other sets, the steps, and the slots and table that hold them. So a walk goes on by kept
 // steps however large its sets are, a step from a set larger than knownBytes is kept in knownBytes
 // as any is, and what is kept is at most knownBytes and those two sets, at most twice the
@@ -78,22 +81,52 @@ type knownSets struct {
 	kept, bytes, needed int
 }
 
-// forget forgets every set kept but the one a walk starts in, and every step. Every match needs
-// that set, whatever it reads, so no match forgets the others to make room for it, and the set a
-// match forgets them for is kept beside it. A set held across it is still the set it was, and is
-// no longer looked up. Only machine.forgets calls it.
-func (k *knownSets) forget() {
+// afresh starts the kept sets again from what every walk needs, and is the set now holds, whose
+// hash is hash, with whether it was made here. It forgets every set but the one a walk starts in,
+// and every step, and keeps now beside that one, whatever it takes, with the step over r to it
+// where from is the set a walk starts in; a walk that has kept nothing keeps now as the set it
+// starts in. Every match needs the set it starts in, whatever it reads, so no match forgets the
+// others to make room for it. A set held across it is still the set it was, and is no longer
+// looked up but for that one. It is the one way anything is kept beside knownBytes, and only
+// machine.forgets and machine.begin call it.
+func (k *knownSets) afresh(m *machine, now *stateSet, hash uint32, from *knownSet, r rune) (set *knownSet, made bool) {
 	first := k.first
 	k.slots = nil
 	k.first = nil
 	k.others.forget()
 	k.kept, k.bytes, k.needed = 0, 0, 0
 	if first == nil {
-		return
+		set = k.made(m, now, hash)
+		k.put(set, true)
+		k.first = set
+		return set, true
 	}
 	first.ascii = [utf8RuneSelf]*knownSet{}
 	k.put(first, true)
 	k.first = first
+	if set = k.find(now, hash); set == nil {
+		set, made = k.made(m, now, hash), true
+		k.put(set, true)
+	}
+	if from == first {
+		if r < utf8RuneSelf {
+			first.ascii[r] = set
+		} else {
+			more := k.others.growth()
+			k.others.put(first.id, r, set)
+			k.charge(more, true)
+		}
+	}
+	return set, made
+}
+
+// made is a new set of the states now holds, whose hash is hash, kept nowhere yet.
+func (k *knownSets) made(m *machine, now *stateSet, hash uint32) *knownSet {
+	states := make([]int32, len(now.states()))
+	for i, q := range now.states() {
+		states[i] = q
+	}
+	return &knownSet{states: states, hash: hash, accepts: now.has(m.accept), none: len(states) == 0}
 }
 
 // charge counts more bytes of room made: beside knownBytes, in needed, where it is made for what
@@ -124,22 +157,17 @@ func (k *knownSets) fits(more int) bool {
 	return k.bytes+more <= knownBytes
 }
 
-// keep is the set now holds, whose hash is hash: found where it is kept, and otherwise kept, made
-// reporting so. It is nil where it does not fit beside the sets kept, unless always, which keeps it
-// whatever it takes, beside knownBytes: always is asked only for the sets every walk needs.
-func (k *knownSets) keep(m *machine, now *stateSet, hash uint32, always bool) (set *knownSet, made bool) {
+// keep is the set now holds, whose hash is hash: found where it is kept, and otherwise kept in
+// knownBytes, made reporting so. It is nil where it does not fit beside the sets kept.
+func (k *knownSets) keep(m *machine, now *stateSet, hash uint32) (set *knownSet, made bool) {
 	if set := k.find(now, hash); set != nil {
 		return set, false
 	}
-	if !always && !k.fits(setBytes(len(now.states()))+k.slotsGrowth()) {
+	if !k.fits(setBytes(len(now.states())) + k.slotsGrowth()) {
 		return nil, false
 	}
-	states := make([]int32, len(now.states()))
-	for i, q := range now.states() {
-		states[i] = q
-	}
-	set = &knownSet{states: states, hash: hash, accepts: now.has(m.accept), none: len(states) == 0}
-	k.put(set, always)
+	set = k.made(m, now, hash)
+	k.put(set, false)
 	return set, true
 }
 
@@ -164,20 +192,19 @@ func (k *knownSets) step(from *knownSet, r rune) *knownSet {
 }
 
 // lead keeps that r leads from from to to, both kept, and is whether it did: a step over ASCII has
-// its room in from, and another is kept where what the table of other steps grows by fits, or
-// always, beside knownBytes: always is asked only for the step from the set a walk starts in to the
-// set it is in when the others were just forgotten for it.
-func (k *knownSets) lead(from *knownSet, r rune, to *knownSet, always bool) bool {
+// its room in from, and another is kept where what the table of other steps grows by fits in
+// knownBytes.
+func (k *knownSets) lead(from *knownSet, r rune, to *knownSet) bool {
 	if r < utf8RuneSelf {
 		from.ascii[r] = to
 		return true
 	}
 	more := k.others.growth()
-	if !always && !k.fits(more) {
+	if !k.fits(more) {
 		return false
 	}
 	k.others.put(from.id, r, to)
-	k.charge(more, always)
+	k.charge(more, false)
 	return true
 }
 

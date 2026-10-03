@@ -420,9 +420,9 @@ func TestASetPutInInAnotherOrderIsTheSetKept(t *testing.T) {
 		}
 	}
 	put(1, 2, 3)
-	first, _ := w.known.keep(m, w.now, hashOf(w.now), false)
+	first, _ := w.known.keep(m, w.now, hashOf(w.now))
 	put(3, 1, 2)
-	again, made := w.known.keep(m, w.now, hashOf(w.now), false)
+	again, made := w.known.keep(m, w.now, hashOf(w.now))
 	if again != first || made || w.known.kept != 1 {
 		t.Fatalf("{3, 1, 2} was kept apart from {1, 2, 3}: %d sets kept", w.known.kept)
 	}
@@ -436,7 +436,7 @@ func TestSetsWithTheSameHashAreToldApart(t *testing.T) {
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(3)
-	held, _ := w.known.keep(m, w.now, hashOf(w.now), false)
+	held, _ := w.known.keep(m, w.now, hashOf(w.now))
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(2)
@@ -480,6 +480,12 @@ func slotsHold(w *walk, set *knownSet) bool {
 		}
 	}
 	return false
+}
+
+// isOthers is whether sel is a call on the table of other steps, k.others.
+func isOthers(sel *ast.SelectorExpr) bool {
+	inner, ok := sel.X.(*ast.SelectorExpr)
+	return ok && inner.Sel.Name == "others"
 }
 
 // randomAB is n characters of a and b at random, the same for the same seed.
@@ -721,8 +727,9 @@ func TestKeptSetsChargeWhatTheyTake(t *testing.T) {
 	}
 }
 
-// Nothing forgets the kept sets but machine.forgets, which is where a match decides what to do
-// when something does not fit, and knownSets.forget itself, which forgets its table of steps.
+// Nothing starts the kept sets again but machine.forgets, which is where a match decides what to
+// do when something does not fit, and machine.begin, for a walk that has kept nothing; and nothing
+// but knownSets.afresh, which they call, keeps anything beside knownBytes.
 func TestOnlyTheMatchsDecisionForgetsTheKeptSets(t *testing.T) {
 	fset := token.NewFileSet()
 	for _, name := range []string{"pattern_machine.go", "pattern_known.go"} {
@@ -735,14 +742,35 @@ func TestOnlyTheMatchsDecisionForgetsTheKeptSets(t *testing.T) {
 			if !ok {
 				continue
 			}
+			by := funcName(fn)
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
 					return true
 				}
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "forget" {
-					if by := funcName(fn); by != "machine.forgets" && by != "knownSets.forget" {
-						t.Errorf("%s forgets the kept sets", by)
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				switch sel.Sel.Name {
+				case "afresh":
+					if by != "machine.forgets" && by != "machine.begin" {
+						t.Errorf("%s starts the kept sets again", by)
+					}
+				case "put", "charge", "grow":
+					// Whether something is kept beside knownBytes is its last argument: true only
+					// in afresh, needed only where put and grow pass on what they were asked, and
+					// false everywhere else. otherSteps' put and grow keep nothing of their own.
+					if len(call.Args) == 0 || by == "otherSteps.put" || isOthers(sel) {
+						return true
+					}
+					last, _ := call.Args[len(call.Args)-1].(*ast.Ident)
+					switch {
+					case last != nil && last.Name == "false":
+					case last != nil && last.Name == "true" && by == "knownSets.afresh":
+					case last != nil && last.Name == "needed" && (by == "knownSets.put" || by == "knownSets.grow"):
+					default:
+						t.Errorf("%s keeps something beside knownBytes", by)
 					}
 				}
 				return true
