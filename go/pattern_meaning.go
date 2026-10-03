@@ -50,14 +50,14 @@ const noCeiling = -1
 // of the pattern, which is not known until the whole of it is read. Everything else is already its
 // meaning: a part that holds no anchor is made a meantWritten as it is read (inTurnOf, eitherOfOf,
 // repeatedOf), so a pattern with no anchor is one meantWritten once it is read, and only the parts
-// around an anchor are left as anything else.
+// holding an anchor, and the runs of parts between them (runWritten), are left as anything else.
 //
 // What the anchors around a part ask of it, and the states it is counted at, are worked out as it
 // is made, from its parts', which were made before it: nothing walks the tree to find them, and
 // nothing recurses however deep the text nests.
 //
-// Held as a value, and its parts in a slice of them: a character read is a place in the slice of
-// the sequence it is in, and nothing is made for it but its meaning.
+// Held as a value, and its parts in a slice of them. A character read is a pointer to its meaning
+// in the run of the sequence it is in (open), and nothing is made for it but its meaning.
 type written struct {
 	// meaning is what a meantWritten means.
 	meaning *meaning
@@ -77,6 +77,10 @@ type writtenKind uint8
 const (
 	meantWritten writtenKind = iota
 	anchorWritten
+	// runWritten is two or more parts of a sequence one after another, none of which holds an
+	// anchor, standing among parts that do: its meaning is an inTurnMeaning of what they mean,
+	// which is put in the sequence a part at a time once the anchors are placed (putTogether).
+	runWritten
 	inTurnWritten
 	eitherOfWritten
 	repeatedWritten

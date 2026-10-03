@@ -13,9 +13,11 @@ package notation199x
 // The reader asks this of text nested as deeply as it is long, before any limit says it is too
 // deep, because whether an anchor can be placed is part of whether the text is a pattern. What
 // each part may and must take and whether it holds an anchor are worked out as the part is read
-// (written.facts), and a part that holds none is read as what it means; so what is left is walked
-// once from the root down, with a stack of its own, for where each part around an anchor stands
-// and what it comes to. A pattern with no anchor is its meaning already, and is not walked.
+// (written.facts), and a part that holds none is read as what it means, the parts of a sequence
+// between two that hold one as one part (runWritten); so what is left is walked once from the root
+// down, with a stack of its own, for where each part holding an anchor and each run beside one
+// stands, and what it comes to. A pattern with no anchor is its meaning already, and is not
+// walked.
 
 // where is whether an anchor is at the end it is asking about, as far as the shape says.
 type where uint8
@@ -28,9 +30,11 @@ const (
 
 // facts is what a part is, as far as the anchors around it ask: whether it accepts any string of
 // one symbol or more, whether every string it accepts has a symbol in it, and whether it holds an
-// anchor.
+// anchor. For a runWritten, every is whether each of the parts it stands for must take a symbol,
+// which is what an anchor beside them asks of them one at a time (sidesOf); must is whether any
+// does, as for any sequence.
 type facts struct {
-	may, must, holds bool
+	may, must, holds, every bool
 }
 
 // placement is a part to place, standing where atStart and atEnd say, or, where together, one
@@ -57,7 +61,7 @@ func placeAnchors(w *written) *meaning {
 			continue
 		}
 		switch w := task.w; w.kind {
-		case meantWritten:
+		case meantWritten, runWritten:
 			results = append(results, w.meaning)
 		case anchorWritten:
 			at := task.atStart
@@ -131,10 +135,18 @@ func putTogether(w *written, results []*meaning) []*meaning {
 		return append(results[:cut], &meaning{kind: eitherOfMeaning, parts: arms})
 	case inTurnWritten:
 		cut := len(results) - len(w.parts)
-		// An anchor that asks for nothing leaves nothing in the sequence, so ^abc$ means what abc
-		// means and is the same tree.
-		made := inTurnMeaningOf(results[cut:])
-		return append(results[:cut], made)
+		// A run is the parts it stands for, put in the sequence one by one, so that a sequence
+		// means what it would with each of them a part of its own. An anchor that asks for nothing
+		// leaves nothing in the sequence, so ^abc$ means what abc means and is the same tree.
+		flat := make([]*meaning, 0, len(w.parts))
+		for at, made := range results[cut:] {
+			if w.parts[at].kind == runWritten {
+				flat = append(flat, made.parts...)
+			} else {
+				flat = append(flat, made)
+			}
+		}
+		return append(results[:cut], inTurnMeaningOf(flat))
 	case repeatedWritten:
 		last := len(results) - 1
 		results[last] = &meaning{kind: repeatedMeaning, parts: []*meaning{results[last]}, least: w.least, most: w.most}
@@ -157,14 +169,14 @@ func sidesOf(w *written, atStart, atEnd where) [][2]where {
 	mustBefore[0] = true
 	for at, part := range w.parts {
 		mayBefore[at+1] = mayBefore[at] || part.facts.may
-		mustBefore[at+1] = mustBefore[at] && part.facts.must
+		mustBefore[at+1] = mustBefore[at] && mustEach(&part)
 	}
 	mayAfter := make([]bool, count+1)
 	mustAfter := make([]bool, count+1)
 	mustAfter[count] = true
 	for at := count - 1; at >= 0; at-- {
 		mayAfter[at] = mayAfter[at+1] || w.parts[at].facts.may
-		mustAfter[at] = mustAfter[at+1] && w.parts[at].facts.must
+		mustAfter[at] = mustAfter[at+1] && mustEach(&w.parts[at])
 	}
 	out := make([][2]where, count)
 	for at := range out {
@@ -174,6 +186,15 @@ func sidesOf(w *written, atStart, atEnd where) [][2]where {
 		}
 	}
 	return out
+}
+
+// mustEach is whether every part w stands for must take a symbol: w itself, or for a run each of
+// the parts it holds.
+func mustEach(w *written) bool {
+	if w.kind == runWritten {
+		return w.facts.every
+	}
+	return w.facts.must
 }
 
 // beyond is where a part stands, given what is on that side of it and where they all stand

@@ -819,8 +819,8 @@ func TestOnlyTheMatchsDecisionForgetsTheKeptSets(t *testing.T) {
 }
 
 // A pattern with no anchor is its meaning once it is read, and placing its anchors makes nothing:
-// every part was read as what it means. Around an anchor, only the parts that hold it are left to
-// place, and a part beside it that holds none is its meaning already.
+// every part was read as what it means. Around an anchor, the parts between those holding one are
+// one part, read as what they mean.
 func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
 	for _, text := range []string{strings.Repeat("ab|[c-e]x?", 100) + "(?:f|g)*h{2,3}",
 		strings.Repeat("abc", 100) + "(?:d|e)*"} {
@@ -832,24 +832,24 @@ func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
 			t.Fatalf("placing no anchor made %v allocations", made)
 		}
 	}
-	anchored := (&patternReader{text: "^(?:ab|c)*d$"}).pattern()
-	if anchored.kind != inTurnWritten || len(anchored.parts) != 4 {
-		t.Fatalf("^(?:ab|c)*d$ was read as %+v", anchored)
-	}
-	for _, part := range anchored.parts[1:3] {
-		if part.kind != meantWritten {
-			t.Fatalf("a part holding no anchor beside one was read as a written of kind %d", part.kind)
-		}
+	// The parts between the anchors are one part, a run of what they mean, and placing the
+	// anchors walks three parts however many there are.
+	anchored := (&patternReader{text: "^(?:ab|c)*d" + strings.Repeat("e", 1_000) + "$"}).pattern()
+	if anchored.kind != inTurnWritten || len(anchored.parts) != 3 || anchored.parts[1].kind != runWritten ||
+		len(anchored.parts[1].meaning.parts) != 1_002 {
+		t.Fatalf("^(?:ab|c)*de...$ was read as %d parts", len(anchored.parts))
 	}
 }
 
-// Reading a character makes nothing of its own: it is a place in the slice of the sequence it is
-// in, and an ASCII character written as itself means what every one of it means. So reading a
+// Reading a character makes nothing of its own: it is a pointer in the run of the sequence it is
+// in, and an ASCII character means what every one of it means. So reading a
 // literal ten times as long makes no more than a few more slices.
 func TestReadingALiteralMakesNothingForEachCharacter(t *testing.T) {
-	short := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat("abcdefghij", 1_000)) })
-	long := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat("abcdefghij", 10_000)) })
-	if long > short+10 {
-		t.Fatalf("a literal of 10,000 characters made %v allocations and one of 100,000 made %v", short, long)
+	for _, written := range []string{"abcdefghij", `a\|b\x{64}\.\n`} {
+		short := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat(written, 1_000)) })
+		long := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat(written, 10_000)) })
+		if long > short+10 {
+			t.Fatalf("%q a thousand times made %v allocations and ten thousand times %v", written, short, long)
+		}
 	}
 }
