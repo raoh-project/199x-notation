@@ -1169,7 +1169,8 @@ public final class Automaton {
      * <p>Beside {@link #shortest}, and a different question. That one answers with what the
      * language holds and prefers a written string at the price of nothing; this one is asked by a
      * caller writing a value into a model, where a string nobody can paste is not an answer at all.
-     * A pattern admitting only control characters has a shortest string and no value to offer.
+     * A pattern admitting only characters a source cannot carry, such as {@code [\x{1}-\x{2}]+},
+     * has a shortest string and no value to offer; one admitting only TAB has both.
      *
      * @return the shortest string it accepts that a source can carry, or null where there is
      *         none
@@ -1181,9 +1182,10 @@ public final class Automaton {
     /**
      * The symbols a value can be written out of and read back.
      *
-     * <p>A control character other than the three a literal spells reaches a source as itself, so
-     * what a person pastes is not what was chosen. Nothing about the language: a rule admitting one
-     * of these admits it, and this is only which of them a value is preferably built from.
+     * <p>Everything but the C0 controls other than TAB, LF and CR, and DEL. Those reach a source as
+     * themselves, since no literal spells them, so what a person pastes is not what was chosen;
+     * TAB, LF and CR a literal spells. Nothing about the language: a rule admitting one of these
+     * admits it, and this is only which of them a value is preferably built from.
      */
     private static final CodePoints WRITABLE = CodePoints.EVERYTHING
             .less(CodePoints.between(0, 8))
