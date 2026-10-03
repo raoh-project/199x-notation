@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -221,6 +222,78 @@ class WhatAMatchDecidesGoesNoFurtherThanTheMatchTest {
         int kept = pattern.setsKept();
         assertTrue(kept > walks && kept <= within + 2,
                 "the other walks kept their sets within the budget, " + kept + " kept of " + within);
+    }
+
+    /**
+     * A machine whose sets cut the symbols into tens of thousands of classes keeps its sets with a
+     * row only as wide as the classes ASCII is in, and the steps past the row as they are found:
+     * what the set a walk starts in holds is its states and that row, and not a place for every
+     * class. Matched again, a subject of characters past ASCII goes by the steps kept, making no
+     * set and no step. Before, each set held a place for every class, tens of thousands for a set
+     * of a few states.
+     */
+    @Test
+    void aSetHoldsARowAsWideAsTheClassesAsciiIsIn() {
+        // Twenty thousand characters one after another, each a set of its own, so each is a class,
+        // and each set of states a walk is in is one state.
+        StringBuilder text = new StringBuilder();
+        for (int c = 0x100; c < 0x100 + 2 * 20_000; c += 2) {
+            text.appendCodePoint(c);
+        }
+        StringPattern pattern = StringPattern.of(shaped(text.toString()));
+        assertEquals(StringPattern.Way.SETS_KEPT, pattern.way());
+        long[] beside = pattern.keptBeside();
+        assertEquals(1, beside[0], "the set a walk starts in");
+        assertTrue(beside[1] <= 1 + 128, "the set a walk starts in holds " + beside[1]);
+        String once = text.substring(0, 300);
+        assertFalse(pattern.matches(once));
+        int sets = pattern.setsKept();
+        int steps = pattern.stepsKnown();
+        assertEquals(301, sets, "a set for each character, and the one a walk starts in");
+        assertEquals(300, steps, "a step for each character");
+        assertFalse(pattern.matches(once));
+        assertEquals(sets, pattern.setsKept(), "no set made matched again");
+        assertEquals(steps, pattern.stepsKnown(), "no step made matched again");
+        assertTrue(pattern.matches(text.toString()));
+    }
+
+    /**
+     * Walks on many threads at once keep steps past the rows in one table, which they grow in each
+     * other's place, and each answers what a walk that keeps nothing does.
+     */
+    @Test
+    void walksOnManyThreadsKeepingStepsPastTheRowsAnswerTheSame() throws Exception {
+        String text = "(?:[\\x{100}-\\x{1FF}]|\\x{300}|\\x{302}|\\x{304}|\\x{306}|b)*a(?:[\\x{100}-\\x{1FF}]|\\x{300}|b){6}";
+        StringPattern pattern = StringPattern.of(shaped(text));
+        StringPattern none = StringPattern.of(shaped(text), StringPattern.Budget.DEFAULT.keeping(0));
+        assertEquals(StringPattern.Way.EVERY_STATE, none.way());
+        int[] symbols = {0x100, 0x150, 0x300, 0x302, 0x304, 0x306, 'a', 'b'};
+        List<Thread> threads = new ArrayList<>();
+        List<Throwable> failed = java.util.Collections.synchronizedList(new ArrayList<>());
+        for (int t = 0; t < 8; t++) {
+            int seed = 500 + t;
+            Thread thread = new Thread(() -> {
+                int at = seed;
+                for (int round = 0; round < 40; round++) {
+                    StringBuilder subject = new StringBuilder();
+                    for (int i = 0; i < 200; i++) {
+                        at = at * 1_664_525 + 1_013_904_223;
+                        subject.appendCodePoint(symbols[(at >>> 16) % symbols.length]);
+                    }
+                    String each = subject.toString();
+                    if (pattern.matches(each) != none.matches(each)) {
+                        failed.add(new AssertionError(each));
+                    }
+                }
+            });
+            thread.setUncaughtExceptionHandler((th, e) -> failed.add(e));
+            threads.add(thread);
+            thread.start();
+        }
+        for (Thread thread : threads) {
+            thread.join();
+        }
+        assertEquals(List.of(), failed);
     }
 
     /** How many times a match of {@code subject}, which ends in b and is not accepted, asks. */

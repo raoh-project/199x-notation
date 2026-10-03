@@ -249,7 +249,9 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
      * room for is kept beside two it has none for. Every character from U+0100 to U+03FF leads the
      * set a walk goes round back to itself, and z leads it to a set of one state: the set a walk
      * starts in and the one gone round each hold more than the budget, the one z leads to little.
-     * The match after the first goes by kept steps alone, asking once a character. Before, the two
+     * The match after the first goes by kept steps alone, asking once a character and once more
+     * for each character past ASCII, whose step is found at the first place it is looked for in the
+     * table of steps past the rows. Before, the two
      * were counted in the budget, so the third found no room and the walk went into a generation
      * for it, losing the one gone round, which every match after worked out again.
      */
@@ -274,7 +276,8 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
         long[] asked = {0};
         Checkpoint counting = () -> ++asked[0] > 0;
         assertEquals(new Outcome.Answered<>(true), run.matches(text, counting));
-        assertEquals(text.length(), asked[0], "once a character");
+        assertEquals(2L * (text.length() - 1) + 1, asked[0],
+                "once a character, and once for the place each step past the rows is found in");
         assertEquals(3, run.setsKept());
     }
 
