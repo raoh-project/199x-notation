@@ -126,8 +126,14 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      * @param longestDecomposition the most code points one code point decomposes into fully, by the
      *                     canonical and the compatibility mappings followed as far as they go, or by
      *                     Hangul's arithmetic: what an implementation makes room for once
+     * @param mostMarksComposed the most marks one starter composes with, one after another: the
+     *                     longest chain of {@code compositions} each of whose second members is a
+     *                     mark, starting from any starter. In a composing form, of the marks held
+     *                     after a starter no more than this many are gone from the answer, so a
+     *                     bounded normalization knows from what it holds that the answer is past the
+     *                     bound before it holds more than the bound and this many marks
      */
-    record NormalizationDerived(CodePointMapping compositions, int longestDecomposition) {}
+    record NormalizationDerived(CodePointMapping compositions, int longestDecomposition, int mostMarksComposed) {}
 
     // Hangul's jamo that compose with a starter before them, by arithmetic rather than by a table
     // (UAX #15, the Hangul section): the vowels and the trailing consonants. The trailing
@@ -321,8 +327,18 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
             }
         }
 
-        return new Casing(merge(simpleLower, fullLower), merge(simpleUpper, fullUpper),
+        Casing read = new Casing(merge(simpleLower, fullLower), merge(simpleUpper, fullUpper),
                 new CodePointMapping(finalSigma), new RangeSet(cased), new RangeSet(caseIgnorable));
+        // A bounded conversion counts each code point it reads as at least one of the answer.
+        for (CodePointMapping mapping : List.of(read.lower(), read.upper(), read.finalSigma())) {
+            mapping.entries().forEach((cp, mapped) -> {
+                if (mapped.length == 0) {
+                    throw new IllegalStateException("U+" + hex(cp) + " maps to nothing, where a bounded case"
+                            + " conversion takes every code point to be at least one of the answer");
+                }
+            });
+        }
+        return read;
     }
 
     /** Condition lists checked to be locale tailoring rather than merely unrecognized.
@@ -524,7 +540,48 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
                 longest = Math.max(longest, fullDecomposition(decomposition, cp).size());
             }
         }
-        return new NormalizationDerived(new CodePointMapping(compositions), longest);
+        return new NormalizationDerived(new CodePointMapping(compositions), longest,
+                mostMarksComposed(compositions, ccc));
+    }
+
+    /** The longest chain of {@code compositions} each of whose second members is a mark: a starter
+     *  that composes with a mark is the first member of the next, by the composite. Hangul's compose
+     *  only with jamo, which are starters, so none is in a chain. A chain that comes back to where
+     *  it was would let one starter take in any number of marks, and stops the generator. */
+    private static int mostMarksComposed(SortedMap<Integer, int[]> compositions, SortedMap<Integer, Integer> ccc) {
+        Map<Integer, List<Integer>> byMark = new TreeMap<>();
+        compositions.forEach((cp, pair) -> {
+            if (ccc.getOrDefault(pair[1], 0) != 0) {
+                byMark.computeIfAbsent(pair[0], first -> new ArrayList<>()).add(cp);
+            }
+        });
+        Map<Integer, Integer> longest = new TreeMap<>();
+        int most = 0;
+        for (int first : byMark.keySet()) {
+            most = Math.max(most, marksComposedFrom(first, byMark, longest, new TreeSet<>()));
+        }
+        return most;
+    }
+
+    /** The most marks {@code starter} composes with one after another, by {@code byMark}, what each
+     *  composes into with a mark; {@code longest} holds what is worked out, and {@code on} the
+     *  starters of the chain this is in. */
+    private static int marksComposedFrom(int starter, Map<Integer, List<Integer>> byMark,
+                                         Map<Integer, Integer> longest, Set<Integer> on) {
+        Integer known = longest.get(starter);
+        if (known != null) {
+            return known;
+        }
+        if (!on.add(starter)) {
+            throw new IllegalStateException("U+" + hex(starter) + " composes with marks back into itself");
+        }
+        int most = 0;
+        for (int composite : byMark.getOrDefault(starter, List.of())) {
+            most = Math.max(most, 1 + marksComposedFrom(composite, byMark, longest, on));
+        }
+        on.remove(starter);
+        longest.put(starter, most);
+        return most;
     }
 
     /** {@code cp}'s decomposition by the canonical and the compatibility mappings, followed as far as

@@ -273,6 +273,11 @@ final class JavaEmitter {
         out.append("    static final int LONGEST_DECOMPOSITION = ")
                 .append(model.normalizationDerived().longestDecomposition()).append(";\n");
 
+        out.append("\n    /** The most marks one starter composes with, one after another, in a composing form: of")
+                .append(" the marks held after a starter, no more than this many are gone from the answer. */\n");
+        out.append("    static final int MOST_MARKS_COMPOSED = ")
+                .append(model.normalizationDerived().mostMarksComposed()).append(";\n");
+
         out.append("}\n");
         return out.toString();
     }

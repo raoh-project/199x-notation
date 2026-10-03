@@ -107,6 +107,11 @@ final class RustEmitter {
         out.append("/// decomposition is written into.\n");
         out.append("pub(crate) const LONGEST_DECOMPOSITION: usize = ")
                 .append(model.normalizationDerived().longestDecomposition()).append(";\n\n");
+
+        out.append("/// The most marks one starter composes with, one after another, in a composing form: of the\n");
+        out.append("/// marks held after a starter, no more than this many are gone from the answer.\n");
+        out.append("pub(crate) const MOST_MARKS_COMPOSED: usize = ")
+                .append(model.normalizationDerived().mostMarksComposed()).append(";\n\n");
         return out.toString();
     }
 

@@ -110,6 +110,12 @@ final class GoEmitter {
         out.append("// form: the room a decomposition is written into.\n");
         out.append("const longestDecomposition = ").append(model.normalizationDerived().longestDecomposition())
                 .append('\n');
+        out.append('\n');
+        out.append("// mostMarksComposed is the most marks one starter composes with, one after another, in a\n");
+        out.append("// composing form: of the marks held after a starter, no more than this many are gone from the\n");
+        out.append("// answer.\n");
+        out.append("const mostMarksComposed = ").append(model.normalizationDerived().mostMarksComposed())
+                .append('\n');
         return out.toString();
     }
 

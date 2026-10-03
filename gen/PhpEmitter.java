@@ -126,6 +126,13 @@ final class PhpEmitter {
             out.append("    public const ").append(form.toUpperCase(Locale.ROOT)).append("_TRIVIAL_LIMIT = ")
                     .append(code(limit)).append(";\n\n");
         }
+
+        out.append("    /**\n");
+        out.append("     * The most marks one starter composes with, one after another, in a composing form: of the\n");
+        out.append("     * marks held after a starter, no more than this many are gone from the answer.\n");
+        out.append("     */\n");
+        out.append("    public const MOST_MARKS_COMPOSED = ")
+                .append(model.normalizationDerived().mostMarksComposed()).append(";\n\n");
         return footer(out);
     }
 

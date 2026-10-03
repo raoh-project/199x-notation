@@ -9490,3 +9490,7 @@ pub(crate) const NFKD_TRIVIAL_LIMIT: char = '\u{00A0}';
 /// The most code points one code point decomposes into fully, in any form: the room a
 /// decomposition is written into.
 pub(crate) const LONGEST_DECOMPOSITION: usize = 18;
+
+/// The most marks one starter composes with, one after another, in a composing form: of the
+/// marks held after a starter, no more than this many are gone from the answer.
+pub(crate) const MOST_MARKS_COMPOSED: usize = 3;

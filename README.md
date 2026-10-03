@@ -42,11 +42,14 @@ implementation's own.
 Every implementation has an entry point for each rule above, and a bounded case conversion and a
 bounded normalization besides. A bounded case conversion or normalization takes the most scalar
 values its answer may hold, answers what the unbounded one does where that answer is no longer than
-the bound, and answers nothing where it is longer. Each of the other entry points described below is
-in an implementation whose callers need that one, apart from the others: the operations on the
-machine a pattern means, writing a machine as an image, running a match from an image, and running a
-match, a bounded normalization or a bounded case conversion with a checkpoint. Where an
-implementation has one, it holds to the contract every other implementation that has it holds to.
+the bound, and answers nothing where it is longer. The bound is on the work as well as on the
+answer: what one holds and how much of the text it reads turn on the bound and not on the length of
+the text, so it reads no further once what it has read shows the answer to be longer than the bound.
+Each of the other entry points described below is in an implementation whose callers need that
+one, apart from the others: the operations on the machine a pattern means, writing a machine as an
+image, running a match from an image, and running a match, a bounded normalization or a bounded case
+conversion with a checkpoint. Where an implementation has one, it holds to the contract every other
+implementation that has it holds to.
 
 ## What does not belong here
 

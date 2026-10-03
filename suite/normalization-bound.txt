@@ -63,6 +63,21 @@
 0112 0300 ; NFKD ; 3 ; NORMALIZED ; 0045 0304 0300
 0112 0300 ; NFKD ; 4 ; NORMALIZED ; 0045 0304 0300
 
+# A starter and three marks that compose into it one after another, the most of them one starter
+# composes with: the bound is on the answer, however many marks are held before they compose.
+0391 0313 0300 0345 ; NFC ; 0 ; PAST ;
+0391 0313 0300 0345 ; NFC ; 1 ; NORMALIZED ; 1F8A
+0391 0313 0300 0345 ; NFC ; 2 ; NORMALIZED ; 1F8A
+0391 0313 0300 0345 ; NFD ; 3 ; PAST ;
+0391 0313 0300 0345 ; NFD ; 4 ; NORMALIZED ; 0391 0313 0300 0345
+0391 0313 0300 0345 ; NFD ; 5 ; NORMALIZED ; 0391 0313 0300 0345
+0391 0313 0300 0345 ; NFKC ; 0 ; PAST ;
+0391 0313 0300 0345 ; NFKC ; 1 ; NORMALIZED ; 1F8A
+0391 0313 0300 0345 ; NFKC ; 2 ; NORMALIZED ; 1F8A
+0391 0313 0300 0345 ; NFKD ; 3 ; PAST ;
+0391 0313 0300 0345 ; NFKD ; 4 ; NORMALIZED ; 0391 0313 0300 0345
+0391 0313 0300 0345 ; NFKD ; 5 ; NORMALIZED ; 0391 0313 0300 0345
+
 # A character whose compatibility forms are other characters than its canonical ones.
 1E9B ; NFC ; 0 ; PAST ;
 1E9B ; NFC ; 1 ; NORMALIZED ; 1E9B

@@ -9486,3 +9486,8 @@ const (
 // longestDecomposition is the most code points one code point decomposes into fully, in any
 // form: the room a decomposition is written into.
 const longestDecomposition = 18
+
+// mostMarksComposed is the most marks one starter composes with, one after another, in a
+// composing form: of the marks held after a starter, no more than this many are gone from the
+// answer.
+const mostMarksComposed = 3
