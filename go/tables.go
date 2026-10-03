@@ -55,12 +55,6 @@ func inRanges(ranges []runeRange, r rune) bool {
 	return low < len(ranges) && ranges[low].first <= r
 }
 
-// combining is a code point and its canonical combining class.
-type combining struct {
-	r     rune
-	class uint8
-}
-
 // room is the bytes to make at first for an answer read from text of length bytes, held to
 // longest scalar values where longest is not negative: the text's length, or the bound where that
 // is less, since an answer past the bound is never written.

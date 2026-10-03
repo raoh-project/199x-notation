@@ -3,7 +3,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.SortedMap;
 
 /**
  * Writes a {@link UcdModel} as the Go sources {@code go/} reads.
@@ -52,6 +51,11 @@ final class GoEmitter {
                 casing.finalSigma());
         ranges(out, "casedRanges", "Cased", casing.cased());
         ranges(out, "caseIgnorableRanges", "Case_Ignorable", casing.caseIgnorable());
+        paged(out, "lowerPosition", "for each code point, 0 where lowerMapping maps it to itself, and otherwise one"
+                + " more than where it is in lowerMapping. No code point finalSigmaMapping names is 0.",
+                model.byCodePoint().lower(), "uint16");
+        paged(out, "upperPosition", "for each code point, 0 where upperMapping maps it to itself, and otherwise one"
+                + " more than where it is in upperMapping.", model.byCodePoint().upper(), "uint16");
         return out.toString();
     }
 
@@ -72,13 +76,14 @@ final class GoEmitter {
                         + " in canonicalDecomposition or in neither",
                 decomposition.compatibility());
 
-        SortedMap<Integer, Integer> ccc = decomposition.combiningClass().entries();
-        out.append("// combiningClasses is the non-zero canonical combining classes, by code point; every\n");
-        out.append("// other code point's is 0.\n");
-        out.append("var combiningClasses = []combining{\n");
-        ccc.forEach((cp, value) ->
-                out.append("\t{").append(code(cp)).append(", ").append(value).append("},\n"));
-        out.append("}\n\n");
+        paged(out, "combiningClass", "each code point's canonical combining class, 0 for a starter.",
+                model.byCodePoint().combiningClass(), "uint8");
+        paged(out, "stable", "for each code point, the forms it is a stable starter in, a bit each: NFC 1, NFD 2,"
+                + " NFKC 4 and NFKD 8. A stable starter is a starter whose quick check for the form is Yes. Text"
+                + " made only of them is its own normalization in the form, and one of them ends what comes"
+                + " before it: no mark after it is put in order before it or composes with a starter before it,"
+                + " and it composes with nothing before it, since what does is Maybe, which the generator"
+                + " checks.", model.byCodePoint().stableStarters(), "uint8");
 
         out.append("// scriptSpecificExclusions is CompositionExclusions.txt's script-specific exclusions, the\n");
         out.append("// composition eligibility UnicodeData.txt alone does not decide.\n");
@@ -165,6 +170,42 @@ final class GoEmitter {
             out.append("\t{").append(code(r[0])).append(", ").append(code(r[1])).append("},\n");
         }
         out.append("}\n\n");
+    }
+
+    /**
+     * {@code table} as two arrays, {@code <name>Blocks} and {@code <name>Pages}, the pages' values
+     * of type {@code type}: the value of {@code r} is at
+     * {@code <name>Pages[int(<name>Blocks[r>>8])<<8|int(r&0xFF)]}.
+     */
+    private static void paged(StringBuilder out, String name, String what, PagedTable table, String type) {
+        long most = type.equals("uint8") ? 0xFF : 0xFFFF;
+        if (table.pages().size() > 0x100 || table.greatest() > most) {
+            throw new IllegalStateException(name + " does not fit the arrays it is written as");
+        }
+        comment(out, name + "Blocks and " + name + "Pages are " + what + " The value of r is at "
+                + name + "Pages[int(" + name + "Blocks[r>>" + PagedTable.SHIFT + "])<<" + PagedTable.SHIFT
+                + "|int(r&0x" + UcdModel.hex(PagedTable.PAGE - 1) + ")]: each block of " + PagedTable.PAGE
+                + " code points has the page of its values, and blocks that hold the same values share one ("
+                + table.pages().size() + " pages).");
+        out.append("var ").append(name).append("Blocks = [").append(table.blocks().length).append("]uint8{\n");
+        values(out, table.blocks(), 2);
+        out.append("}\n\n");
+        int[] values = table.values();
+        out.append("var ").append(name).append("Pages = [").append(values.length).append(']').append(type)
+                .append("{\n");
+        values(out, values, type.equals("uint8") ? 2 : 4);
+        out.append("}\n\n");
+    }
+
+    /** {@code values} as hex literals of {@code digits} digits, sixteen to a line. */
+    private static void values(StringBuilder out, int[] values, int digits) {
+        for (int i = 0; i < values.length; i += 16) {
+            out.append('\t');
+            for (int j = i; j < Math.min(i + 16, values.length); j++) {
+                out.append(j > i ? " " : "").append(String.format("0x%0" + digits + "X,", values[j]));
+            }
+            out.append('\n');
+        }
     }
 
     /** {@code text} as line comments, broken between words before the hundredth column. */

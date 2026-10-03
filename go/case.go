@@ -58,11 +58,13 @@ func UppercaseWithin(s string, longest int) (string, bool) {
 // holds more than longest, nor part of a mapping that would take it past.
 //
 // Text that maps to itself is answered with itself. Otherwise what maps to itself is copied a run
-// at a time, from kept, and the answer is made only once a code point that changes is met.
+// at a time, from kept, and the answer is made only once a code point that changes is met. Whether
+// one does is read off lowerPositionPages or upperPositionPages, which say where its mapping is as
+// well, and for ASCII off caseOfASCII.
 func mapCase(s string, lower bool, longest int) (string, bool) {
-	table, ascii := upperMapping, &caseOfASCII[1]
+	table, ascii, blocks, pages := upperMapping, &caseOfASCII[1], &upperPositionBlocks, upperPositionPages[:]
 	if lower {
-		table, ascii = lowerMapping, &caseOfASCII[0]
+		table, ascii, blocks, pages = lowerMapping, &caseOfASCII[0], &lowerPositionBlocks, lowerPositionPages[:]
 	}
 	var out strings.Builder
 	// changed is whether a code point that changes has been met, and out holds the answer up to
@@ -70,53 +72,57 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 	changed := false
 	kept, written := 0, 0
 	for at := 0; at < len(s); {
-		if c := s[at]; c < utf8.RuneSelf && ascii[c] >= 0 {
-			if longest >= 0 && written >= longest {
+		if end, count := sameUpTo(s, at, ascii, blocks, pages); end > at {
+			written += count
+			if longest >= 0 && written > longest {
 				return "", false
 			}
-			written++
-			if mapped := byte(ascii[c]); mapped != c {
-				if !changed {
-					out.Grow(room(len(s), longest))
-					changed = true
-				}
-				out.WriteString(s[kept:at])
-				out.WriteByte(mapped)
-				kept = at + 1
+			at = end
+			if at == len(s) {
+				break
 			}
-			at++
+		}
+		if !changed {
+			out.Grow(room(len(s), longest))
+			changed = true
+		}
+		if c := s[at]; c < utf8.RuneSelf && ascii[c] >= 0 {
+			out.WriteString(s[kept:at])
+			// The ASCII from here that changes is written as it is mapped, a byte at a time.
+			for {
+				if longest >= 0 && written >= longest {
+					return "", false
+				}
+				written++
+				out.WriteByte(byte(ascii[s[at]]))
+				at++
+				if at == len(s) {
+					break
+				}
+				if c := s[at]; c >= utf8.RuneSelf || ascii[c] < 0 || ascii[c] == int16(c) {
+					break
+				}
+			}
+			kept = at
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(s[at:])
 		after := at + size
-		var to []rune
+		to := table[pages[int(blocks[r>>8])<<8|int(r&0xFF)]-1].to
 		if lower {
 			if final := finalSigmaMapping.of(r); final != nil && isFinalSigma(s, at, after) {
 				to = final
 			}
 		}
-		if to == nil {
-			to = table.of(r)
-		}
-		adding := len(to)
-		if to == nil {
-			adding = 1
-		}
-		if longest >= 0 && adding > longest-written {
+		if longest >= 0 && len(to) > longest-written {
 			return "", false
 		}
-		written += adding
-		if to != nil {
-			if !changed {
-				out.Grow(room(len(s), longest))
-				changed = true
-			}
-			out.WriteString(s[kept:at])
-			for _, each := range to {
-				out.WriteRune(each)
-			}
-			kept = after
+		written += len(to)
+		out.WriteString(s[kept:at])
+		for _, each := range to {
+			out.WriteRune(each)
 		}
+		kept = after
 		at = after
 	}
 	if !changed {
@@ -124,6 +130,30 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 	}
 	out.WriteString(s[kept:])
 	return out.String(), true
+}
+
+// sameUpTo is where the code points s has from at that the mapping leaves as they are end: the
+// first one from there that it changes, or the end of the text; and how many code points it went
+// past.
+func sameUpTo(s string, at int, ascii *[utf8.RuneSelf]int16, blocks *[4352]uint8, pages []uint16) (int, int) {
+	count := 0
+	for at < len(s) {
+		if c := s[at]; c < utf8.RuneSelf {
+			if ascii[c] != int16(c) {
+				break
+			}
+			at++
+			count++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[at:])
+		if pages[int(blocks[r>>8])<<8|int(r&0xFF)] != 0 {
+			break
+		}
+		at += size
+		count++
+	}
+	return at, count
 }
 
 // caseOfASCII is, for the lowercase and the uppercase mapping, what each ASCII character maps to
