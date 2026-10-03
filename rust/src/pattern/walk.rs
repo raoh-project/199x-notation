@@ -14,6 +14,11 @@ const UNKNOWN: u32 = u32::MAX;
 const NONE: u32 = u32::MAX - 1;
 /// A slot of [`Cache::slots`] no kept set is in.
 const EMPTY: u32 = u32::MAX;
+/// A slot of [`Cold`] no step is in. No row begins at `u32::MAX`, so no step's key is this.
+const NO_STEP: u64 = u64::MAX;
+/// What one step [`Cold`] holds is counted as against [`KNOWN_BYTES`]: its key and where it leads,
+/// in a table at most half full.
+const COLD_STEP: usize = 24;
 
 /// What matches against one machine keep between them: the sets of states a walk has been in, and
 /// where each class of characters leads from them. These are the sets a deterministic machine would
@@ -40,10 +45,17 @@ pub(crate) struct Cache {
     /// The kept sets by their hashes, each slot a set's place in `sets` or [`EMPTY`], looked for
     /// from the slot the hash names to the first empty one. Never more than half full.
     slots: Vec<u32>,
-    /// Where class `k` leads from the kept set whose row begins at `s` is `next[s + k]`: the place
-    /// the row of the set it leads to begins, [`NONE`], or [`UNKNOWN`]. The set whose row begins at
-    /// `s` is `sets[s / classes]`.
+    /// Where class `k` leads from the kept set whose row begins at `s` is `next[s + k]`, for each of
+    /// the classes an ASCII character is in: the place the row of the set it leads to begins,
+    /// [`NONE`], or [`UNKNOWN`]. The set whose row begins at `s` is `sets[s / width]`, `width` being
+    /// how many those classes are ([`walk_with`]). Where the other classes lead is in `cold`.
+    ///
+    /// A row is as wide as the classes ASCII is in, at most 128, and not as wide as every class of
+    /// the machine, which no limit on a pattern bounds: a set of 100,000 runs cuts the scalar values
+    /// into 200,001 classes, and a row of each would make what a set costs that many times four
+    /// bytes, for the classes past ASCII that most sets are never left by.
     next: Vec<u32>,
+    cold: Cold,
     /// The kept set a walk starts in, where it is kept.
     start: Option<u32>,
     bytes: usize,
@@ -115,6 +127,7 @@ impl Cache {
             accepting: Vec::new(),
             slots: Vec::new(),
             next: Vec::new(),
+            cold: Cold::new(),
             start: None,
             bytes: 0,
             walk: Walk {
@@ -135,8 +148,31 @@ impl Cache {
         self.accepting.clear();
         self.slots.clear();
         self.next.clear();
+        self.cold.clear();
         self.start = None;
         self.bytes = 0;
+    }
+
+    /// Where class `class` leads from the kept set whose row begins at `row`: the place the row of
+    /// the set it leads to begins, [`NONE`], or [`UNKNOWN`].
+    fn step(&self, width: usize, row: u32, class: usize) -> u32 {
+        if class < width {
+            self.next[row as usize + class]
+        } else {
+            self.cold.get(row, class)
+        }
+    }
+
+    /// Keeps that class `class` leads from the kept set whose row begins at `row` to `to`, which
+    /// was not known. A class past the row is kept where there is room for it, and otherwise
+    /// worked out again each time it is read.
+    fn learn(&mut self, width: usize, row: u32, class: usize, to: u32) {
+        if class < width {
+            self.next[row as usize + class] = to;
+        } else if self.bytes + COLD_STEP <= KNOWN_BYTES {
+            self.bytes += COLD_STEP;
+            self.cold.insert(row, class, to);
+        }
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins, as
@@ -146,13 +182,13 @@ impl Cache {
     fn come_to(
         &mut self,
         machine: &Machine,
-        classes: usize,
+        width: usize,
         keeping: &mut Keeping,
     ) -> Option<(u32, bool)> {
         if keeping.frozen {
-            return self.find(classes);
+            return self.find(width);
         }
-        match self.keep(machine, classes) {
+        match self.keep(machine, width) {
             Kept::Found(row) => Some((row, false)),
             Kept::Added(row) => {
                 keeping.made += 1;
@@ -167,24 +203,24 @@ impl Cache {
                 keeping.restarted = true;
                 keeping.made = 1;
                 keeping.read = 0;
-                Some((self.admit(machine, classes, hash_of(&self.walk.next)), true))
+                Some((self.admit(machine, width, hash_of(&self.walk.next)), true))
             }
         }
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins, or
     /// `None` where it is not kept.
-    fn find(&self, classes: usize) -> Option<(u32, bool)> {
+    fn find(&self, width: usize) -> Option<(u32, bool)> {
         if self.walk.next.is_empty() {
             return Some((NONE, false));
         }
-        self.found(hash_of(&self.walk.next), classes)
+        self.found(hash_of(&self.walk.next), width)
             .map(|row| (row, false))
     }
 
     /// The kept set whose hash is `hash` and that is the set in `walk.next`, as the place its row
     /// begins, looked for from the slot the hash names to the first empty one.
-    fn found(&self, hash: u32, classes: usize) -> Option<u32> {
+    fn found(&self, hash: u32, width: usize) -> Option<u32> {
         if self.slots.is_empty() {
             return None;
         }
@@ -193,7 +229,7 @@ impl Cache {
         while self.slots[at] != EMPTY {
             let kept = self.slots[at] as usize;
             if self.hashes[kept] == hash && Cache::same(&self.sets[kept], &self.walk) {
-                return Some((kept * classes) as u32);
+                return Some((kept * width) as u32);
             }
             at = (at + 1) & mask;
         }
@@ -202,18 +238,18 @@ impl Cache {
 
     /// The kept set the walk has just come to, in `walk.next`: found where it is kept, kept now where
     /// there is room for it, and otherwise [`Kept::Full`].
-    fn keep(&mut self, machine: &Machine, classes: usize) -> Kept {
+    fn keep(&mut self, machine: &Machine, width: usize) -> Kept {
         if self.walk.next.is_empty() {
             return Kept::Found(NONE);
         }
         let hash = hash_of(&self.walk.next);
-        if let Some(row) = self.found(hash, classes) {
+        if let Some(row) = self.found(hash, width) {
             return Kept::Found(row);
         }
-        if self.bytes + cost(classes, self.walk.next.len()) > KNOWN_BYTES {
+        if self.bytes + cost(width, self.walk.next.len()) > KNOWN_BYTES {
             return Kept::Full;
         }
-        Kept::Added(self.admit(machine, classes, hash))
+        Kept::Added(self.admit(machine, width, hash))
     }
 
     /// Keeps the set in `walk.next`, which is not kept, whose hash is `hash`, as a copy of its
@@ -225,7 +261,7 @@ impl Cache {
     /// room, to be grown again for each set after it, and it would keep the room `walk.next` had
     /// grown to, up to twice its states. The copy asks for room for its states, the four bytes a
     /// state that [`KNOWN_BYTES`] counts.
-    fn admit(&mut self, machine: &Machine, classes: usize, hash: u32) -> u32 {
+    fn admit(&mut self, machine: &Machine, width: usize, hash: u32) -> u32 {
         if self.walk.next.is_empty() {
             return NONE;
         }
@@ -243,14 +279,14 @@ impl Cache {
         // A kept set is named by where its row of `next` begins, so a step is one lookup and no
         // product.
         let row = self.next.len() as u32;
-        for _ in 0..classes {
+        for _ in 0..width {
             self.next.push(UNKNOWN);
         }
         let mut states = Vec::with_capacity(self.walk.next.len());
         for &q in &self.walk.next {
             states.push(q);
         }
-        self.bytes += cost(classes, states.len());
+        self.bytes += cost(width, states.len());
         self.sets.push(states);
         self.hashes.push(hash);
         self.accepting.push(accepting);
@@ -296,7 +332,7 @@ impl Cache {
     fn walk_alone(
         &mut self,
         machine: &Machine,
-        classes: usize,
+        width: usize,
         subject: &str,
         i: &mut usize,
     ) -> Alone {
@@ -310,7 +346,7 @@ impl Cache {
             if walk.next.is_empty() {
                 return Alone::Ended(false);
             }
-            if let Some(row) = self.found(hash_of(&self.walk.next), classes) {
+            if let Some(row) = self.found(hash_of(&self.walk.next), width) {
                 return Alone::Rejoined(row);
             }
         }
@@ -319,8 +355,98 @@ impl Cache {
 }
 
 /// What a kept set is counted as against [`KNOWN_BYTES`]: its row, its states, and what holds them.
-fn cost(classes: usize, states: usize) -> usize {
-    classes * 4 + states * 4 + 64
+fn cost(width: usize, states: usize) -> usize {
+    width * 4 + states * 4 + 64
+}
+
+/// Where the classes past a row lead from the kept sets that have been left by them: one table for
+/// every kept set, looked up by the place a set's row begins and the class, so what it holds is the
+/// steps worked out and no more. A slot is a key, the row above the class, or [`NO_STEP`], and the
+/// place the row of the set the step leads to begins, or [`NONE`]; a step is looked for from the
+/// slot its key names to the first empty one. Never more than half full.
+struct Cold {
+    keys: Vec<u64>,
+    to: Vec<u32>,
+    count: usize,
+}
+
+impl Cold {
+    fn new() -> Cold {
+        Cold {
+            keys: Vec::new(),
+            to: Vec::new(),
+            count: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.keys.clear();
+        self.to.clear();
+        self.count = 0;
+    }
+
+    /// The slot a key is looked for from, of `size` slots.
+    fn slot(key: u64, size: usize) -> usize {
+        (key.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize & (size - 1)
+    }
+
+    /// Where class `class` leads from the kept set whose row begins at `row`, or [`UNKNOWN`].
+    fn get(&self, row: u32, class: usize) -> u32 {
+        if self.keys.is_empty() {
+            return UNKNOWN;
+        }
+        let key = (u64::from(row) << 32) | class as u64;
+        let mask = self.keys.len() - 1;
+        let mut at = Cold::slot(key, self.keys.len());
+        while self.keys[at] != NO_STEP {
+            if self.keys[at] == key {
+                return self.to[at];
+            }
+            at = (at + 1) & mask;
+        }
+        UNKNOWN
+    }
+
+    /// Keeps that class `class` leads from the kept set whose row begins at `row` to `to`, which is
+    /// not kept.
+    fn insert(&mut self, row: u32, class: usize, to: u32) {
+        if (self.count + 1) * 2 > self.keys.len() {
+            self.grow();
+        }
+        let key = (u64::from(row) << 32) | class as u64;
+        let mask = self.keys.len() - 1;
+        let mut at = Cold::slot(key, self.keys.len());
+        while self.keys[at] != NO_STEP {
+            at = (at + 1) & mask;
+        }
+        self.keys[at] = key;
+        self.to[at] = to;
+        self.count += 1;
+    }
+
+    /// Twice the slots, or sixteen, each step put in again by its key. What is gone over is the
+    /// steps kept, at most what [`KNOWN_BYTES`] holds.
+    fn grow(&mut self) {
+        let size = (self.keys.len() * 2).max(16);
+        let keys = core::mem::take(&mut self.keys);
+        let to = core::mem::take(&mut self.to);
+        for _ in 0..size {
+            self.keys.push(NO_STEP);
+            self.to.push(UNKNOWN);
+        }
+        let mask = size - 1;
+        for each in 0..keys.len() {
+            if keys[each] == NO_STEP {
+                continue;
+            }
+            let mut at = Cold::slot(keys[each], size);
+            while self.keys[at] != NO_STEP {
+                at = (at + 1) & mask;
+            }
+            self.keys[at] = keys[each];
+            self.to[at] = to[each];
+        }
+    }
 }
 
 /// The sum of [`scatter`] over `states`, the same in whatever order they are in. It is summed where
@@ -452,7 +578,8 @@ impl Walk {
 /// [`Walk::enter`] over the steps and free steps of the states they move; [`hash_of`] and
 /// [`accepts`] over a set; [`Cache::found`] over the slots it looks in, [`Cache::admit`] over the
 /// slots it looks in, the set it copies and the row it makes, [`Cache::same`] over a kept set, and
-/// [`Cache::grow`] over the kept sets; and [`Walk::next_set`], over every state, once in four
+/// [`Cache::grow`] over the kept sets; [`Cold::get`] and [`Cold::insert`] over the slots they look
+/// in, and [`Cold::grow`] over the steps kept; and [`Walk::next_set`], over every state, once in four
 /// billion sets. Making room is not a loop here: `vec!` makes `entered` once, and a list grows in
 /// `push` by doubling, as far as the most states the walk has held in it at once, as `Walk` says.
 /// The test `the_walk_names_every_loop_it_has` holds this list to the functions with a loop in them.
@@ -462,18 +589,18 @@ pub(crate) fn matches(machine: &Machine, cache: &mut Cache, subject: &str) -> bo
 
 /// [`matches`], with what the match decides about keeping sets held in `keeping`.
 fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut Keeping) -> bool {
-    let classes = machine.classes.count();
+    let width = machine.classes.of_ascii();
     let mut i = 0;
     let mut at = match cache.start {
         Some(start) => start,
         None => {
             cache.walk.begin(machine);
-            match cache.come_to(machine, classes, keeping) {
+            match cache.come_to(machine, width, keeping) {
                 Some((start, _)) => {
                     cache.start = Some(start);
                     start
                 }
-                None => match cache.walk_alone(machine, classes, subject, &mut i) {
+                None => match cache.walk_alone(machine, width, subject, &mut i) {
                     Alone::Ended(answer) => return answer,
                     Alone::Rejoined(row) => row,
                 },
@@ -485,29 +612,30 @@ fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut 
             return false;
         }
         let from = i;
-        let stop = run_known(&cache.next, &machine.classes, subject, &mut i, &mut at);
+        let stop = run_known(cache, width, &machine.classes, subject, &mut i, &mut at);
         // What is read is counted in bytes, which is all the choice to keep sets asks of it.
         keeping.read += i - from;
-        let Some((slot, c)) = stop else {
-            return cache.accepting[at as usize / classes];
+        let Some((class, c)) = stop else {
+            return cache.accepting[at as usize / width];
         };
-        if cache.next[slot] == NONE {
+        if cache.step(width, at, class) == NONE {
             return false;
         }
         cache
             .walk
-            .advance(machine, &cache.sets[at as usize / classes], c);
+            .advance(machine, &cache.sets[at as usize / width], c);
         i += c.len_utf8();
-        at = match cache.come_to(machine, classes, keeping) {
+        let row = at;
+        at = match cache.come_to(machine, width, keeping) {
             Some((next, forgot)) => {
                 // A frozen match writes no step, and one that forgot has no row to write it in.
                 if !forgot && !keeping.frozen {
-                    cache.next[slot] = next;
+                    cache.learn(width, row, class, next);
                 }
                 next
             }
             // The walk goes on a state at a time from the set it came to, in `next`.
-            None => match cache.walk_alone(machine, classes, subject, &mut i) {
+            None => match cache.walk_alone(machine, width, subject, &mut i) {
                 Alone::Ended(answer) => return answer,
                 Alone::Rejoined(row) => row,
             },
@@ -515,12 +643,14 @@ fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut 
     }
 }
 
-/// Reads `subject` from byte `i` by the steps kept in `next`, from the kept set whose row begins at
+/// Reads `subject` from byte `i` by the steps `cache` keeps, from the kept set whose row begins at
 /// `at`, moving both, until the end, where it answers `None`, or until a character whose step from
-/// where it is is not one to a kept set, where it answers the slot of `next` that step is in and the
-/// character, neither read. The subject is read as every walk reads one ([`read_classes`]).
+/// where it is is not one to a kept set, where it answers the character's class and the character,
+/// neither read. The subject is read as every walk reads one ([`read_classes`]): an ASCII character
+/// is a lookup of its class and one of its row's `next`, and only a class past the row asks `cold`.
 fn run_known(
-    next: &[u32],
+    cache: &Cache,
+    width: usize,
     classes: &Classes,
     subject: &str,
     i: &mut usize,
@@ -534,13 +664,14 @@ fn run_known(
         classes.ascii(),
         |c| classes.class_of(c),
         &mut row,
-        |row, class| next[row as usize + class],
+        |row, class| cache.next[row as usize + class],
+        |row, class| cache.step(width, row, class),
         |known| known >= NONE,
     );
     *at = row;
     stopped.map(|class| {
         (
-            row as usize + class,
+            class,
             subject[*i..]
                 .chars()
                 .next()
@@ -596,7 +727,7 @@ mod tests {
         let mut cache = Cache::new();
         cache.walk.begin(machine);
         let mut i = 0;
-        match cache.walk_alone(machine, machine.classes.count(), subject, &mut i) {
+        match cache.walk_alone(machine, machine.classes.of_ascii(), subject, &mut i) {
             Alone::Ended(answer) => answer,
             Alone::Rejoined(_) => unreachable!("nothing is kept"),
         }
@@ -699,6 +830,7 @@ mod tests {
         /// works out each step again, and finds the set it comes to among those kept by its hash.
         pub(super) fn forget_steps(cache: &mut Cache) {
             cache.next.fill(UNKNOWN);
+            cache.cold = Cold::new();
         }
     }
 
@@ -948,7 +1080,7 @@ mod tests {
     fn keeping_a_set_takes_no_room_from_the_walk() {
         let pattern = pattern("(?:a|b)*a(?:a|b){8}");
         let machine = machine(&pattern);
-        let classes = machine.classes.count();
+        let width = machine.classes.of_ascii();
         let mut matcher = pattern.matcher();
         let subject = Numbers(7).ab(400);
         matcher.matches(&subject);
@@ -962,7 +1094,7 @@ mod tests {
                 cache.walk.enter(machine, q);
             }
             let room = cache.walk.next.capacity();
-            let kept = cache.keep(machine, classes);
+            let kept = cache.keep(machine, width);
             assert!(matches!(kept, Kept::Added(0)), "set {at} is kept anew");
             assert_eq!(
                 cache.walk.next.capacity(),
@@ -1071,6 +1203,41 @@ mod tests {
             !keeping.frozen,
             "made {}, read {}",
             keeping.made, keeping.read
+        );
+    }
+
+    /// A set of 100,000 runs cuts the scalar values into 200,001 classes, and a kept set costs as
+    /// much as it would were they a few: its row is as wide as the classes ASCII is in, and where
+    /// the others lead is kept as each is read. The steps past the row are kept and read again by
+    /// the next match as those in it are.
+    #[test]
+    fn what_a_kept_set_costs_does_not_grow_with_the_classes() {
+        let mut text = String::from("[");
+        for each in 0..100_000u32 {
+            text.push(char::from_u32(0x10000 + 2 * each).expect("past the surrogates"));
+        }
+        text.push_str("]+");
+        let pattern = pattern(&text);
+        assert!(machine(&pattern).classes.count() > 200_000);
+        let mut matcher = pattern.matcher();
+        let subject: String = (0..50u32)
+            .map(|each| char::from_u32(0x10000 + 2 * (each * 997 % 100_000)).expect("a scalar"))
+            .collect();
+        assert!(matcher.matches(&subject));
+        assert!(!matcher.matches(&format!("{subject}a")));
+        assert!(!matcher.matches("\u{10001}"));
+        assert!(
+            matcher.cache.bytes < 4 << 10,
+            "{} bytes kept",
+            matcher.cache.bytes
+        );
+        let (answer, keeping) = decided(&mut matcher, &subject);
+        assert!(answer);
+        assert_eq!(keeping.made, 0);
+        assert_eq!(
+            keeping.read,
+            subject.len(),
+            "every character read by kept steps"
         );
     }
 }

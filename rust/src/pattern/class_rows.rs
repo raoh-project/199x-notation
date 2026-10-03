@@ -117,17 +117,19 @@ impl ClassRows {
         let mut at = 0;
         if self.table.is_empty() {
             let mut q = 0;
+            let next = |q: u32, class| {
+                let (from, to) = (self.starts[q as usize], self.starts[q as usize + 1]);
+                let span = self.ends[from..to].partition_point(|&end| (end as usize) < class);
+                self.to[from + span]
+            };
             let stopped = read_classes(
                 subject,
                 &mut at,
                 &self.ascii,
                 |c| self.class_of(c),
                 &mut q,
-                |q, class| {
-                    let (from, to) = (self.starts[q as usize], self.starts[q as usize + 1]);
-                    let span = self.ends[from..to].partition_point(|&end| (end as usize) < class);
-                    self.to[from + span]
-                },
+                next,
+                next,
                 |q| !self.live[q as usize],
             );
             return stopped.is_none() && self.accepting[q as usize];
@@ -140,6 +142,7 @@ impl ClassRows {
             &self.ascii,
             |c| self.class_of(c),
             &mut row,
+            |row, class| table[row as usize + class],
             |row, class| table[row as usize + class],
             |row| row == DEAD,
         );
