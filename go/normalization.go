@@ -52,19 +52,13 @@ func (f *formFacts) stable(r rune) bool {
 }
 
 // stableUpTo is where the stable starters s has from at end: the first code point from there that
-// is not one, or the end of the text, or where it has gone past most of them where most is not
-// negative; how many code points it went past; and where the last of them begins, which is at
-// where it went past none.
-func (f *formFacts) stableUpTo(s string, at, most int) (end, count, last int) {
+// is not one, or the end of the text, or, where left is not negative, where it has gone past one
+// more than left of them; how many code points it went past; and where the last of them begins,
+// which is at where it went past none.
+func (f *formFacts) stableUpTo(s string, at, left int) (end, count, last int) {
 	last = at
-	for at < len(s) && count != most {
-		// A code point is a byte or more, so going up to stop goes past no more than most of them,
-		// with no count kept against most at each; a code point past ASCII can leave it short, and
-		// it goes on from there.
-		stop := len(s)
-		if most >= 0 {
-			stop = min(stop, at+most-count)
-		}
+	for at < len(s) && (left < 0 || count <= left) {
+		stop := scanStop(s, at, left, count)
 		for at < stop {
 			if c := s[at]; c < utf8.RuneSelf {
 				last = at
@@ -82,6 +76,18 @@ func (f *formFacts) stableUpTo(s string, at, most int) (end, count, last int) {
 		}
 	}
 	return at, count, last
+}
+
+// scanStop is how far a scan of s from at, which may go past one more than left code points and
+// has gone past count, can go without counting them: a code point is a byte or more, so up to
+// there it goes past no more than that, and a code point past ASCII can leave it short, where the
+// scan goes on from there. What is left is held against the bytes left before anything is added
+// to at, so that no bound, however large, takes it past the end. A negative left is no bound.
+func scanStop(s string, at, left, count int) int {
+	if left < 0 || left-count >= len(s)-at {
+		return len(s)
+	}
+	return at + left - count + 1
 }
 
 // facts is what the algorithm asks of f, which panics where f is none of the four forms.
@@ -153,11 +159,12 @@ func normalize(form Form, s string, longest int) (string, bool) {
 	before, read := 0, 0
 	var c *composing
 	for at := 0; at < len(s); {
-		most := -1
+		// What is written and read is never more than longest, so what is left is never negative.
+		left := -1
 		if longest >= 0 {
-			most = longest - before - read + 1
+			left = longest - before - read
 		}
-		if end, count, last := facts.stableUpTo(s, at, most); end > at {
+		if end, count, last := facts.stableUpTo(s, at, left); end > at {
 			read += count
 			if longest >= 0 && before+read > longest {
 				return "", false
@@ -277,7 +284,7 @@ func (c *composing) run(s string, start, at int, before int) (int, bool) {
 // longest.
 func (c *composing) take(r rune) bool {
 	if combiningClass(r) != 0 {
-		if c.longest >= 0 && c.written+c.leastHeld(len(c.marks)+1) > c.longest {
+		if c.longest >= 0 && c.leastHeld(len(c.marks)+1) > c.longest-c.written {
 			return false
 		}
 		c.marks = append(c.marks, r)

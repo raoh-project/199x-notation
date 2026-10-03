@@ -7,6 +7,7 @@ namespace Raoh\Notation199x\Tests;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
+use Raoh\Notation199x\CaseConversion;
 use Raoh\Notation199x\Internal\Composing;
 use Raoh\Notation199x\Internal\FormFacts;
 use Raoh\Notation199x\Internal\NormalizationTables;
@@ -95,6 +96,28 @@ final class NormalizationTest extends TestCase
                 }
                 self::assertNull(Normalization::normalizeWithin($form, $text, -1));
             }
+        }
+    }
+
+    /**
+     * A bound at either end of int is a bound like any other: the greatest holds every answer and
+     * the least none, the empty text among them. The texts go in and out of the algorithm more
+     * than once, and a case conversion looks past a sigma, so what is left of the bound is worked
+     * out again after something has been written.
+     */
+    public function testABoundAtEitherEndOfItsTypeIsABound(): void
+    {
+        foreach (['', 'a', "a\u{0301}b\u{0301}c", "\u{0301}\u{0301}a", "AΣ\u{0301} bΣ", "straße\u{0301}"] as $text) {
+            foreach (NormalizationForm::cases() as $form) {
+                self::assertSame(Normalization::normalize($form, $text),
+                    Normalization::normalizeWithin($form, $text, PHP_INT_MAX), $form->name);
+                self::assertNull(Normalization::normalizeWithin($form, $text, -1));
+                self::assertNull(Normalization::normalizeWithin($form, $text, PHP_INT_MIN));
+            }
+            self::assertSame(CaseConversion::lowercase($text), CaseConversion::lowercaseWithin($text, PHP_INT_MAX));
+            self::assertSame(CaseConversion::uppercase($text), CaseConversion::uppercaseWithin($text, PHP_INT_MAX));
+            self::assertNull(CaseConversion::lowercaseWithin($text, PHP_INT_MIN));
+            self::assertNull(CaseConversion::uppercaseWithin($text, PHP_INT_MIN));
         }
     }
 

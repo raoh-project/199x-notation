@@ -7,7 +7,9 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use notation199x::{Form, normalize, normalize_within};
+use notation199x::{
+    Form, lowercase, lowercase_within, normalize, normalize_within, uppercase, uppercase_within,
+};
 
 struct Counting;
 
@@ -58,5 +60,39 @@ fn a_bounded_normalization_holds_no_more_than_its_bound() {
         let made = made_by(|| within = normalize_within(form, &text, 10));
         assert_eq!(within, None, "{form:?} of the run is within 10");
         assert!(made <= 64 << 10, "{form:?} made {made} bytes");
+    }
+}
+
+/// The greatest bound holds every answer. The texts go in and out of the algorithm more than once,
+/// and a case conversion looks past a sigma, so what is left of the bound is worked out again after
+/// something has been written.
+#[test]
+fn the_greatest_bound_is_a_bound_like_any_other() {
+    let texts = [
+        "",
+        "a",
+        "a\u{0301}b\u{0301}c",
+        "\u{0301}\u{0301}a",
+        "A\u{03A3}\u{0301} b\u{03A3}",
+        "stra\u{00DF}e\u{0301}",
+    ];
+    for text in texts {
+        for form in [Form::Nfc, Form::Nfd, Form::Nfkc, Form::Nfkd] {
+            assert_eq!(
+                normalize_within(form, text, usize::MAX),
+                Some(normalize(form, text)),
+                "{form:?} of {text:?}"
+            );
+        }
+        assert_eq!(
+            lowercase_within(text, usize::MAX),
+            Some(lowercase(text)),
+            "{text:?}"
+        );
+        assert_eq!(
+            uppercase_within(text, usize::MAX),
+            Some(uppercase(text)),
+            "{text:?}"
+        );
     }
 }

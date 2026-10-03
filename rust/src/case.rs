@@ -4,6 +4,7 @@ use crate::case_tables::{
     CASE_IGNORABLE, CASED, FINAL_SIGMA, LOWER, LOWER_POSITION_BLOCKS, LOWER_POSITION_PAGES, UPPER,
     UPPER_POSITION_BLOCKS, UPPER_POSITION_PAGES,
 };
+use crate::normalization::scan_stop;
 use crate::tables::{mapped, within};
 
 /// `text` in lowercase: Unicode 18.0.0's untailored full mapping, from `UnicodeData.txt` and
@@ -87,8 +88,8 @@ fn map_case(text: &str, lower: bool, longest: usize) -> Option<String> {
     let mut written: usize = 0;
     let mut at = 0;
     while at < bytes.len() {
-        let most = (longest - written).saturating_add(1);
-        let (same, count) = same_up_to(text, at, most, ascii, blocks, pages);
+        // What is written is never more than `longest`, so this does not wrap.
+        let (same, count) = same_up_to(text, at, longest - written, ascii, blocks, pages);
         written += count;
         if written > longest {
             return None;
@@ -153,22 +154,19 @@ fn map_case(text: &str, lower: bool, longest: usize) -> Option<String> {
 }
 
 /// Where the code points `text` has from byte `at` that the mapping leaves as they are end: the
-/// first one from there that it changes, or the end of the text, or where it has gone past `most`
-/// of them; and how many it went past.
+/// first one from there that it changes, or the end of the text, or where it has gone past one more
+/// than `left` of them; and how many it went past.
 fn same_up_to(
     text: &str,
     mut at: usize,
-    most: usize,
+    left: usize,
     ascii: &[i16; 128],
     blocks: &[u8; 4352],
     pages: &[u16],
 ) -> (usize, usize) {
     let mut count = 0;
-    while at < text.len() && count < most {
-        // A code point is a byte or more, so going up to the end of `bytes` goes past no more than
-        // `most` of them, with no count kept against `most` at each; a code point past ASCII can
-        // leave it short, and it goes on from there.
-        let bytes = &text.as_bytes()[..at + (text.len() - at).min(most - count)];
+    while at < text.len() && count <= left {
+        let bytes = &text.as_bytes()[..scan_stop(text, at, left, count)];
         while at < bytes.len() {
             let byte = bytes[at];
             if byte < 0x80 {

@@ -115,7 +115,10 @@ final class CaseConversion
         for ($at = 0; $at < $length;) {
             // As many bytes as the answer has room for and one more, which each is at least one
             // scalar value of.
-            $most = $longest < 0 || $longest - $written + 1 >= $length - $at ? $length - $at : $longest - $written + 1;
+            // What is written is never more than $longest, so what is left is never negative, and
+            // it is held against the bytes left before one is added to it.
+            $left = $longest - $written;
+            $most = $longest < 0 || $left >= $length - $at ? $length - $at : $left + 1;
             // A run of ASCII the mapping leaves as it is: one scalar value a byte. A checkpoint
             // added later bounds the run by strcspn's length.
             $run = strcspn($s, $stops, $at, $most);

@@ -77,11 +77,12 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 	changed := false
 	kept, written := 0, 0
 	for at := 0; at < len(s); {
-		most := -1
+		// What is written is never more than longest, so what is left is never negative.
+		left := -1
 		if longest >= 0 {
-			most = longest - written + 1
+			left = longest - written
 		}
-		if end, count := sameUpTo(s, at, most, ascii, blocks, pages); end > at {
+		if end, count := sameUpTo(s, at, left, ascii, blocks, pages); end > at {
 			written += count
 			if longest >= 0 && written > longest {
 				return "", false
@@ -157,18 +158,12 @@ func mapCase(s string, lower bool, longest int) (string, bool) {
 }
 
 // sameUpTo is where the code points s has from at that the mapping leaves as they are end: the
-// first one from there that it changes, or the end of the text, or where it has gone past most of
-// them where most is not negative; and how many code points it went past.
-func sameUpTo(s string, at, most int, ascii *[utf8.RuneSelf]int16, blocks *[4352]uint8, pages []uint16) (int, int) {
+// first one from there that it changes, or the end of the text, or, where left is not negative,
+// where it has gone past one more than left of them; and how many code points it went past.
+func sameUpTo(s string, at, left int, ascii *[utf8.RuneSelf]int16, blocks *[4352]uint8, pages []uint16) (int, int) {
 	count := 0
-	for at < len(s) && count != most {
-		// A code point is a byte or more, so going up to stop goes past no more than most of them,
-		// with no count kept against most at each; a code point past ASCII can leave it short, and
-		// it goes on from there.
-		stop := len(s)
-		if most >= 0 {
-			stop = min(stop, at+most-count)
-		}
+	for at < len(s) && (left < 0 || count <= left) {
+		stop := scanStop(s, at, left, count)
 		for at < stop {
 			if c := s[at]; c < utf8.RuneSelf {
 				if ascii[c] != int16(c) {

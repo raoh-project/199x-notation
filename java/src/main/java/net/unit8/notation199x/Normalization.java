@@ -143,6 +143,11 @@ public final class Normalization {
      * them are more than {@code longest}.
      */
     private static @Nullable String within(Form form, String s, long longest, @Nullable Checkpoint checkpoint) {
+        // Even the empty text is longer than a negative bound. From here, what is written and read
+        // is never more than longest, so what is left of it is never negative.
+        if (longest < 0) {
+            return null;
+        }
         // The answer up to kept, where a run has changed what it went over.
         StringBuilder out = null;
         int kept = 0;

@@ -2,6 +2,7 @@ package notation199x
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"strconv"
@@ -139,6 +140,40 @@ func TestABoundedNormalizationHoldsNoMoreThanItsBound(t *testing.T) {
 		}
 		if made := after.TotalAlloc - before.TotalAlloc; made > 64<<10 {
 			t.Errorf("%v made %d bytes", form, made)
+		}
+	}
+}
+
+// A bound at either end of int is a bound like any other: the greatest holds every answer and
+// the least none, the empty text among them. The texts go in and out of the algorithm more than
+// once, and a case conversion looks past a sigma, so the room left is worked out again after
+// something has been written.
+func TestABoundAtEitherEndOfItsTypeIsABound(t *testing.T) {
+	texts := []string{"", "a", "a\u0301b\u0301c", "\u0301\u0301a", "AΣ\u0301 bΣ", "straße\u0301"}
+	for _, text := range texts {
+		for _, form := range []Form{NFC, NFD, NFKC, NFKD} {
+			if got, ok := NormalizeWithin(form, text, math.MaxInt); !ok || got != Normalize(form, text) {
+				t.Errorf("%v of %s within MaxInt is %s, %v", form, shown(text), shown(got), ok)
+			}
+			for _, least := range []int{-1, math.MinInt} {
+				if _, ok := NormalizeWithin(form, text, least); ok {
+					t.Errorf("%v of %s is within %d", form, shown(text), least)
+				}
+			}
+		}
+		for _, lower := range []bool{true, false} {
+			whole, within := Uppercase, UppercaseWithin
+			if lower {
+				whole, within = Lowercase, LowercaseWithin
+			}
+			if got, ok := within(text, math.MaxInt); !ok || got != whole(text) {
+				t.Errorf("%s mapped within MaxInt is %s, %v", shown(text), shown(got), ok)
+			}
+			for _, least := range []int{-1, math.MinInt} {
+				if _, ok := within(text, least); ok {
+					t.Errorf("%s mapped is within %d", shown(text), least)
+				}
+			}
 		}
 	}
 }

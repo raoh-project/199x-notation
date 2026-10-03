@@ -94,8 +94,10 @@ final class Normalization
         $read = 0;
         $composing = null;
         for ($at = 0; $at < $length;) {
-            $most = $longest < 0 ? -1 : $longest - $before - $read + 1;
-            $stable = self::stableUpTo($s, $at, $length, $most, $facts->limit, $facts->bit, $read, $start);
+            // What is written and read is never more than $longest, so what is left is never
+            // negative, and nothing is added to it.
+            $left = $longest < 0 ? -1 : $longest - $before - $read;
+            $stable = self::stableUpTo($s, $at, $length, $left, $facts->limit, $facts->bit, $read, $start);
             if ($longest >= 0 && $before + $read > $longest) {
                 return null;
             }
@@ -127,24 +129,25 @@ final class Normalization
 
     /**
      * Where the stable starters of the form that $s has from $at end: the first character from
-     * there that is not one, or the end of the text, or where it has gone past $most of them where
-     * $most is not negative. Adds how many it read to $read, and sets $last to where the last of
-     * them begins where it read any.
+     * there that is not one, or the end of the text, or, where $left is not negative, where it has
+     * gone past one more than $left of them. Adds how many it read to $read, and sets $last to
+     * where the last of them begins where it read any.
      *
      * A step of its loop is a run of ASCII, which is below every form's limit (NormalizationTest
      * holds the tables to that), gone past whole, or one character. A character is decoded from
      * its bytes where it is, and not taken out of the text first. A character is a byte or more,
-     * so going up to $stop goes past no more than $most of them, with no count kept against $most
-     * at each step; a character past ASCII can leave it short, and it goes on from there.
+     * so going up to $stop goes past no more than one more than $left of them, with no count kept
+     * against $left at each step; a character past ASCII can leave it short, and it goes on from
+     * there. What is left is held against the bytes left before anything is added to $at, so that
+     * no bound, however large, takes it past the end or out of int.
      */
-    private static function stableUpTo(string $s, int $at, int $length, int $most, int $limit, int $bit, int &$read, int &$last): int
+    private static function stableUpTo(string $s, int $at, int $length, int $left, int $limit, int $bit, int &$read, int &$last): int
     {
         $blocks = NormalizationTables::STABLE_BLOCKS;
         $pages = NormalizationTables::STABLE_PAGES;
-        // What $read comes to where it has gone past $most.
-        $readTo = $most < 0 ? -1 : $read + $most;
-        while ($at < $length && $read !== $readTo) {
-            $stop = $readTo < 0 || $readTo - $read >= $length - $at ? $length : $at + $readTo - $read;
+        $from = $read;
+        while ($at < $length && ($left < 0 || $read - $from <= $left)) {
+            $stop = $left < 0 || $left - ($read - $from) >= $length - $at ? $length : $at + $left - ($read - $from) + 1;
             while ($at < $stop) {
                 $b0 = ord($s[$at]);
                 if ($b0 < 0x80) {

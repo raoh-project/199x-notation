@@ -109,8 +109,8 @@ fn normalized<const BOUNDED: bool>(form: Form, text: &str, longest: usize) -> Op
     let mut composing: Option<Composing<BOUNDED>> = None;
     let mut at = 0;
     while at < text.len() {
-        let most = (longest - before - read).saturating_add(1);
-        let (stable, count, last) = stable_up_to(form, text, at, most);
+        // What is written and read is never more than `longest`, so this does not wrap.
+        let (stable, count, last) = stable_up_to(form, text, at, longest - before - read);
         if stable > at {
             read += count;
             if before + read > longest {
@@ -148,18 +148,16 @@ fn normalized<const BOUNDED: bool>(form: Form, text: &str, longest: usize) -> Op
 }
 
 /// Where the stable starters of `form` that `text` has from byte `at` end: the first code point from
-/// there that is not one, or the end of the text, or where it has gone past `most` of them; how many
-/// it went past; and where the last of them begins, which is `at` where there are none.
-fn stable_up_to(form: Form, text: &str, mut at: usize, most: usize) -> (usize, usize, usize) {
+/// there that is not one, or the end of the text, or where it has gone past one more than `left` of
+/// them; how many it went past; and where the last of them begins, which is `at` where there are
+/// none.
+fn stable_up_to(form: Form, text: &str, mut at: usize, left: usize) -> (usize, usize, usize) {
     let limit = form.trivial_limit();
     let bit = form.stable_bit();
     let mut count = 0;
     let mut last = at;
-    while at < text.len() && count < most {
-        // A code point is a byte or more, so going up to the end of `bytes` goes past no more than
-        // `most` of them, with no count kept against `most` at each; a code point past ASCII can
-        // leave it short, and it goes on from there.
-        let bytes = &text.as_bytes()[..at + (text.len() - at).min(most - count)];
+    while at < text.len() && count <= left {
+        let bytes = &text.as_bytes()[..scan_stop(text, at, left, count)];
         while at < bytes.len() {
             // Every form's trivial limit is past ASCII, so a byte below 0x80 is a stable starter.
             if bytes[at] < 0x80 {
@@ -181,6 +179,19 @@ fn stable_up_to(form: Form, text: &str, mut at: usize, most: usize) -> (usize, u
         }
     }
     (at, count, last)
+}
+
+/// How far a scan of `text` from byte `at`, which may go past one more than `left` code points and
+/// has gone past `count`, can go without counting them: a code point is a byte or more, so up to
+/// there it goes past no more than that, and a code point past ASCII can leave it short, where the
+/// scan goes on from there. What is left is held against the bytes left before anything is added
+/// to `at`, so that no bound, however large, takes it past the end.
+pub(crate) fn scan_stop(text: &str, at: usize, left: usize, count: usize) -> usize {
+    if left - count >= text.len() - at {
+        text.len()
+    } else {
+        at + left - count + 1
+    }
 }
 
 /// Whether `c` is a stable starter of the form whose bit of [`STABLE_PAGES`] is `bit`.
