@@ -63,12 +63,14 @@ func readPattern(text string) (read PatternRead) {
 // the one being read.
 //
 // The parts read since the last that holds an anchor hold none, and are held in run as what they
-// mean, with what they are together: a character read is a pointer to its meaning and nothing
-// else. Where a part holding an anchor comes, they go into parts as one (flush), so the parts of a
-// sequence are the ones holding an anchor and the runs between them.
+// mean, with what they are together. Characters of one symbol each read one after another are
+// held in chars, a run of one apiece, and go into run as one meaning when a part of another kind
+// comes (settle). Where a part holding an anchor comes, the run goes into parts as one (flush), so
+// the parts of a sequence are the ones holding an anchor and the runs between them.
 type open struct {
 	arms, parts []written
 	run         []*meaning
+	chars       []runeRange
 	// runFacts is what the run is as a sequence, and every whether each of its parts must take a
 	// symbol; runStates the states they come to together.
 	runFacts  facts
@@ -78,6 +80,7 @@ type open struct {
 // arm is the arm being read: an arm of one part is that part, and an arm of none is nothing. One
 // with no part holding an anchor is what its run means.
 func (o *open) arm() written {
+	o.settle()
 	if len(o.parts) == 0 {
 		switch len(o.run) {
 		case 0:
@@ -103,6 +106,7 @@ func (o *open) runPart() written {
 
 // flush puts the run into the parts, as the one part it is or as a runWritten, and starts another.
 func (o *open) flush() {
+	o.settle()
 	switch len(o.run) {
 	case 0:
 		return
@@ -121,6 +125,7 @@ func (o *open) flush() {
 func (o *open) next() {
 	o.parts = nil
 	o.run = nil
+	o.chars = nil
 	o.runFacts = facts{}
 	o.runStates = 0
 }
@@ -148,7 +153,7 @@ func (r *patternReader) pattern() written {
 				around = append(around, reading)
 				reading = &open{}
 			} else {
-				reading.part(r.quantified(r.atom()))
+				r.atom(reading)
 			}
 			continue
 		}
@@ -185,6 +190,13 @@ func (o *open) part(w written) {
 	if w.kind == meantWritten && w.meaning.kind == nothingMeaning {
 		return
 	}
+	if w.kind == meantWritten && w.meaning.kind == symbolsMeaning {
+		if set := w.meaning.set(); set.size() == 1 {
+			// One symbol, however written, as \x{3042} or [a] is, is one of the characters.
+			o.character(set[0].first)
+			return
+		}
+	}
 	if w.facts.holds {
 		o.flush()
 		o.parts = appended(o.parts, w)
@@ -192,12 +204,33 @@ func (o *open) part(w written) {
 	}
 	// A part holding no anchor is a meantWritten as it is made, and joins the run as a sequence
 	// part does ([inTurnOf]); every is held only while each part so far must take a symbol.
+	o.settle()
 	first := len(o.run) == 0
 	o.run = appended(o.run, w.meaning)
 	o.runFacts.may = o.runFacts.may || w.facts.may
 	o.runFacts.must = o.runFacts.must || w.facts.must
 	o.runFacts.every = (first || o.runFacts.every) && w.facts.must
 	o.runStates = plusStates(o.runStates, w.states)
+}
+
+// character puts the one symbol c at the end of the arm being read, among the characters.
+func (o *open) character(c rune) {
+	first := len(o.run) == 0 && len(o.chars) == 0
+	o.chars = appended(o.chars, runeRange{c, c})
+	o.runFacts.may = true
+	o.runFacts.must = true
+	o.runFacts.every = first || o.runFacts.every
+	o.runStates = plusStates(o.runStates, 1)
+}
+
+// settle puts the characters into the run as what they mean ([charactersMeaning]), which holds
+// the list they were read into.
+func (o *open) settle() {
+	if len(o.chars) == 0 {
+		return
+	}
+	o.run = appended(o.run, charactersMeaning(o.chars))
+	o.chars = nil
 }
 
 // appended is s with v after it. A slice is made twice as large each time it fills, so that a
@@ -234,7 +267,25 @@ func (r *patternReader) opened() {
 
 // quantified is one with the count written after it, if any.
 func (r *patternReader) quantified(one written) written {
-	var least, most int
+	if !r.countHere() {
+		return one
+	}
+	least, most := r.counted()
+	return repeatedOf(one, least, most)
+}
+
+// countHere is whether a count is written here: whether what was read before is repeated. The
+// one place that says what begins a count, and counted the one that reads it.
+func (r *patternReader) countHere() bool {
+	return !r.done() && countBegins[r.text[r.at]]
+}
+
+// countBegins is whether a count begins with the byte.
+var countBegins = [256]bool{'?': true, '*': true, '+': true, '{': true}
+
+// counted reads the count written here, where countHere says one is: the fewest and the most
+// times.
+func (r *patternReader) counted() (least, most int) {
 	r.construct = r.at
 	switch r.peek() {
 	case '?':
@@ -246,8 +297,8 @@ func (r *patternReader) quantified(one written) written {
 	case '+':
 		r.take()
 		least, most = 1, noCeiling
-	case '{':
-		r.take()
+	default:
+		r.expect('{')
 		floor := r.count()
 		ceiling := &floor
 		if r.peek() == ',' {
@@ -268,8 +319,6 @@ func (r *patternReader) quantified(one written) written {
 		if ceiling != nil {
 			most = ceiling.held
 		}
-	default:
-		return one
 	}
 	// Reluctant says how a matcher walks and not which strings are accepted, so the marker is
 	// read and left out. Possessive is not one of those: it takes what it can and gives none of it
@@ -280,28 +329,35 @@ func (r *patternReader) quantified(one written) written {
 		r.take()
 		r.refuse(APossessiveRepetition)
 	}
-	return repeatedOf(one, least, most)
+	return least, most
 }
 
-// atom is one thing written, other than a group.
-func (r *patternReader) atom() written {
+// atom reads one thing written other than a group, with the count written after it, and puts it at
+// the end of the arm being read. The one place that tells a character written as itself from the
+// rest of the grammar. Such a character with no count is one of the arm's characters and is made
+// no meaning of its own; with a count, it is what the count repeats.
+func (r *patternReader) atom(reading *open) {
 	switch r.peek() {
 	case '[':
 		r.take()
-		return symbolsWritten(r.characterClass())
+		reading.part(r.quantified(symbolsWritten(r.characterClass())))
+		return
 	case '\\':
 		r.take()
-		return symbolsWritten(r.escaped())
+		reading.part(r.quantified(symbolsWritten(r.escaped())))
+		return
 	case '.':
 		r.take()
 		// Every symbol but the line terminators, written as a difference, so that a negated
 		// class, which does not leave them out, is the same algebra with a different set taken
 		// away.
-		return symbolsWritten(dotSymbols)
+		reading.part(r.quantified(symbolsWritten(dotSymbols)))
+		return
 	case '^', '$':
 		end := r.peek() == '$'
 		r.take()
-		return anchorOf(end)
+		reading.part(r.quantified(anchorOf(end)))
+		return
 	case '{':
 		// A brace that begins no count. Read as an ordinary character it would be a pattern
 		// meaning one thing here and a count wherever a digit followed it.
@@ -313,7 +369,12 @@ func (r *patternReader) atom() written {
 	case endOfText:
 		r.refuse(SomethingUnclosed)
 	}
-	return meant(literalMeaning(r.literal()))
+	c := r.literal()
+	if !r.countHere() {
+		reading.character(c)
+		return
+	}
+	reading.part(r.quantified(meant(literalMeaning(c))))
 }
 
 // symbolsWritten is held as what it means. One ASCII character, however written, as \| or [a] is,
@@ -322,7 +383,7 @@ func symbolsWritten(held symbols) written {
 	if len(held) == 1 && held[0].first == held[0].last && held[0].first < utf8.RuneSelf {
 		return meant(asciiLiterals[held[0].first])
 	}
-	return meant(&meaning{kind: symbolsMeaning, held: held})
+	return meant(&meaning{kind: symbolsMeaning, ranges: held})
 }
 
 // characterClass is what is between [ and ], as the symbols it holds. The [ is already taken.

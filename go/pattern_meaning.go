@@ -8,14 +8,18 @@ import "unicode/utf8"
 //
 // What is kept is what the language depends on and nothing else. One written character is one
 // symbol, a set of one, and a literal, a class, a negated class, a shorthand and . all arrive as
-// symbols, told apart only by the set. An anchor is gone: whole-string matching settles what each
+// symbols, told apart only by the set. Characters of one symbol each, one after another, are one
+// literalRunMeaning: the machine takes a step for each of them, and the meaning holds them in one
+// list rather than a meaning for each. An anchor is gone: whole-string matching settles what each
 // comes to where the pattern is read. Whether a repetition is greedy or reluctant and whether a
 // group captures say what an engine does on the way and not which strings come out, so none of
 // them is here either.
 type meaning struct {
 	kind meaningKind
-	// held is the set of a symbolsMeaning.
-	held symbols
+	// ranges is the set of a symbolsMeaning, as symbols hold one, or the characters of a
+	// literalRunMeaning in order, a run of one apiece, which is no set: read through set and
+	// characters, which say which of the two it is.
+	ranges []runeRange
 	// parts is what an inTurnMeaning has one after another, the arms of an eitherOfMeaning, two
 	// or more, and what a repeatedMeaning repeats, alone.
 	parts []*meaning
@@ -33,6 +37,10 @@ const (
 	neverMeaning
 	// symbolsMeaning is one symbol out of a set of them.
 	symbolsMeaning
+	// literalRunMeaning is its characters one after another, two or more: what an inTurnMeaning of
+	// a symbolsMeaning for each would be. One character is a symbolsMeaning and nothing else, so
+	// that a pattern has one meaning.
+	literalRunMeaning
 	// inTurnMeaning is its parts one after another.
 	inTurnMeaning
 	// eitherOfMeaning is any one of its arms, every arm and not the first.
@@ -56,8 +64,8 @@ const noCeiling = -1
 // is made, from its parts', which were made before it: nothing walks the tree to find them, and
 // nothing recurses however deep the text nests.
 //
-// Held as a value, and its parts in a slice of them. A character read is a pointer to its meaning
-// in the run of the sequence it is in (open), and nothing is made for it but its meaning.
+// Held as a value, and its parts in a slice of them. A character read is a run of one in the
+// characters of the sequence it is in (open), and nothing is made for it.
 type written struct {
 	// meaning is what a meantWritten means.
 	meaning *meaning
@@ -122,8 +130,38 @@ type literal struct {
 
 func newLiteral(r rune) *meaning {
 	l := &literal{run: [1]runeRange{{r, r}}}
-	l.meaning = meaning{kind: symbolsMeaning, held: l.run[:]}
+	l.meaning = meaning{kind: symbolsMeaning, ranges: l.run[:]}
 	return &l.meaning
+}
+
+// charactersMeaning is chars one after another, each a run of one: one character is a
+// symbolsMeaning, and two or more a literalRunMeaning holding chars, which is its own from here.
+func charactersMeaning(chars []runeRange) *meaning {
+	switch len(chars) {
+	case 0:
+		unreachable("characters", 0)
+		return nil
+	case 1:
+		return literalMeaning(chars[0].first)
+	default:
+		return &meaning{kind: literalRunMeaning, ranges: chars}
+	}
+}
+
+// set is the set of a symbolsMeaning.
+func (m *meaning) set() symbols {
+	if m.kind != symbolsMeaning {
+		unreachable("meaning holding a set", uint8(m.kind))
+	}
+	return symbols(m.ranges)
+}
+
+// characters is the characters of a literalRunMeaning in order, a run of one apiece.
+func (m *meaning) characters() []runeRange {
+	if m.kind != literalRunMeaning {
+		unreachable("meaning holding characters", uint8(m.kind))
+	}
+	return m.ranges
 }
 
 // asciiLiterals is the meaning of each ASCII character written as itself.
@@ -200,9 +238,10 @@ func meaningsOf(ws []written) []*meaning {
 }
 
 // inTurnMeaningOf is parts one after another, with every part that is nothing left out: no part
-// is nothing, nothing alone, and one part itself.
+// is nothing, nothing alone, and one part itself. made is the sequence's own from here: the parts
+// kept are moved down in it, and it is what the sequence holds.
 func inTurnMeaningOf(made []*meaning) *meaning {
-	parts := make([]*meaning, 0, len(made))
+	parts := made[:0]
 	for _, one := range made {
 		if one.kind != nothingMeaning {
 			parts = append(parts, one)

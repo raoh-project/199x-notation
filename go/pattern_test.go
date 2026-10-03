@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -833,23 +835,131 @@ func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
 		}
 	}
 	// The parts between the anchors are one part, a run of what they mean, and placing the
-	// anchors walks three parts however many there are.
+	// anchors walks three parts however many there are. The characters in it are one part of it.
 	anchored := (&patternReader{text: "^(?:ab|c)*d" + strings.Repeat("e", 1_000) + "$"}).pattern()
 	if anchored.kind != inTurnWritten || len(anchored.parts) != 3 || anchored.parts[1].kind != runWritten ||
-		len(anchored.parts[1].meaning.parts) != 1_002 {
+		len(anchored.parts[1].meaning.parts) != 2 || len(anchored.parts[1].meaning.parts[1].characters()) != 1_001 {
 		t.Fatalf("^(?:ab|c)*de...$ was read as %d parts", len(anchored.parts))
 	}
 }
 
-// Reading a character makes nothing of its own: it is a pointer in the run of the sequence it is
-// in, and an ASCII character means what every one of it means. So reading a
-// literal ten times as long makes no more than a few more slices.
+// Where the anchors come to nothing, the part left alone between them is what the sequence means
+// as it was read, the characters or a run holding them, and putting it together makes nothing
+// for its parts. Beside other parts, a run is put in the sequence a part at a time, its
+// characters as the one part they are, in one list of as many parts as the sequence comes to.
+func TestARunTheAnchorsLeaveIsTakenAsItIs(t *testing.T) {
+	for _, after := range []string{"$", "[xy]$"} {
+		var walked [2]float64
+		for at, length := range []int{1_000, 100_000} {
+			anchored := (&patternReader{text: "^" + strings.Repeat("e", length) + after}).pattern()
+			if anchored.kind != inTurnWritten || len(anchored.parts) != 3 {
+				t.Fatalf("^e...%s was read as %d parts", after, len(anchored.parts))
+			}
+			if made := placeAnchors(&anchored); made != anchored.parts[1].meaning {
+				t.Fatalf("^e...%s means something other than what it was read as", after)
+			}
+			walked[at] = testing.AllocsPerRun(10, func() { placeAnchors(&anchored) })
+		}
+		// What is left is the walk's own, three parts long however many characters there are.
+		if walked[0] != walked[1] {
+			t.Fatalf("placing the anchors of ^e...%s made %v allocations, and %v for a hundred times as many",
+				after, walked[0], walked[1])
+		}
+	}
+	mixed := (&patternReader{text: "(?:^ab|^c)" + strings.Repeat("e", 1_000) + "[xy]$"}).pattern()
+	made := placeAnchors(&mixed)
+	if made.kind != inTurnMeaning || len(made.parts) != 3 || cap(made.parts) != 3 ||
+		made.parts[1].kind != literalRunMeaning || len(made.parts[1].characters()) != 1_000 {
+		t.Fatalf("(?:^ab|^c)e...[xy]$ means a sequence of %d parts held in %d", len(made.parts), cap(made.parts))
+	}
+}
+
+// Characters one after another are one meaning however each is written, and one character is a
+// set of one, so a pattern has one meaning: an escape, a class of one and a group of one character
+// are the characters as written as themselves.
+func TestCharactersOneAfterAnotherAreOneMeaning(t *testing.T) {
+	meaningOf := func(text string) *meaning {
+		w := (&patternReader{text: text}).pattern()
+		return placeAnchors(&w)
+	}
+	want := meaningOf("aあ😀b")
+	if want.kind != literalRunMeaning || len(want.characters()) != 4 {
+		t.Fatalf("aあ😀b means a meaning of kind %d", want.kind)
+	}
+	for _, text := range []string{`a\x{3042}[😀]b`, `(?:a)[あ](?:😀)\x62`, "^aあ😀b$", "a(?:)あ😀b"} {
+		if got := meaningOf(text); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s means something other than aあ😀b", text)
+		}
+	}
+	for _, text := range []string{"あ", "[あ]", `\x{3042}`, "(?:あ)"} {
+		if got := meaningOf(text); got.kind != symbolsMeaning {
+			t.Errorf("%s means a meaning of kind %d, not one symbol", text, got.kind)
+		}
+	}
+	// A count is of the one character before it.
+	counted := meaningOf("あい*う")
+	if counted.kind != inTurnMeaning || len(counted.parts) != 3 || counted.parts[1].kind != repeatedMeaning {
+		t.Fatalf("あい*う means a meaning of kind %d", counted.kind)
+	}
+	p := ReadPattern("あい*う{2}").(*Pattern)
+	for subject, matches := range map[string]bool{"あうう": true, "あいいうう": true, "あう": false, "いうう": false} {
+		if p.Matches(subject) != matches {
+			t.Errorf("あい*う{2} matches %s: %v", subject, !matches)
+		}
+	}
+}
+
+// A meaning's ranges are a set for a symbolsMeaning and characters in order for a
+// literalRunMeaning, and only meaning.set and meaning.characters read them, each for its own kind:
+// a list of characters is never taken for a set, which symbols always are.
+func TestOnlySetAndCharactersReadAMeaningsRanges(t *testing.T) {
+	names, err := filepath.Glob("pattern*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			by := funcName(fn)
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "ranges" &&
+					by != "meaning.set" && by != "meaning.characters" {
+					t.Errorf("%s reads a meaning's ranges", by)
+				}
+				return true
+			})
+		}
+	}
+}
+
+// Reading a character makes nothing of its own: it is a run of one in the list of characters it
+// is among, whatever character it is, and building the machine steps over it in that list. So
+// reading a literal ten times as long, and building its machine, makes no more than a few more
+// slices.
 func TestReadingALiteralMakesNothingForEachCharacter(t *testing.T) {
-	for _, written := range []string{"abcdefghij", `a\|b\x{64}\.\n`} {
+	for _, written := range []string{"abcdefghij", `a\|b\x{64}\.\n`, "あいうえおかきくけこ", "aあ😀bcdefgh"} {
 		short := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat(written, 1_000)) })
 		long := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat(written, 10_000)) })
 		if long > short+10 {
 			t.Fatalf("%q a thousand times made %v allocations and ten thousand times %v", written, short, long)
+		}
+		shortMeaning := ReadPattern(strings.Repeat(written, 1_000)).(*Pattern).compiled.meaning
+		longMeaning := ReadPattern(strings.Repeat(written, 10_000)).(*Pattern).compiled.meaning
+		short = testing.AllocsPerRun(5, func() { build(shortMeaning) })
+		long = testing.AllocsPerRun(5, func() { build(longMeaning) })
+		if long > short {
+			t.Fatalf("%q a thousand times built in %v allocations and ten thousand times in %v", written, short, long)
 		}
 	}
 }

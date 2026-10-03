@@ -136,17 +136,48 @@ func putTogether(w *written, results []*meaning) []*meaning {
 	case inTurnWritten:
 		cut := len(results) - len(w.parts)
 		// A run is the parts it stands for, put in the sequence one by one, so that a sequence
-		// means what it would with each of them a part of its own. An anchor that asks for nothing
-		// leaves nothing in the sequence, so ^abc$ means what abc means and is the same tree.
-		flat := make([]*meaning, 0, len(w.parts))
-		for at, made := range results[cut:] {
-			if w.parts[at].kind == runWritten {
-				flat = append(flat, made.parts...)
-			} else {
-				flat = append(flat, made)
+		// means what it would with each of them a part of its own; characters one after another are
+		// one of those parts, and stay one. An anchor that asks for nothing leaves nothing in the
+		// sequence, so ^abc$ means what abc means and is the same tree.
+		//
+		// The parts the sequence comes to are counted first and put in one list made to hold
+		// them, which is the sequence's own. Where one part is left, it is what the sequence
+		// means as it is, a run's meaning too: ^abc$ is the meaning abc was read as.
+		made := results[cut:]
+		var left *meaning
+		kept, count := 0, 0
+		for at, one := range made {
+			switch {
+			case w.parts[at].kind == runWritten:
+				// A run is made of two or more parts in turn, and nothing else (open.flush).
+				if one.kind != inTurnMeaning {
+					unreachable("meaning of a run", uint8(one.kind))
+				}
+				count += len(one.parts)
+			case one.kind != nothingMeaning:
+				count++
+			default:
+				continue
 			}
+			kept++
+			left = one
 		}
-		return append(results[:cut], inTurnMeaningOf(flat))
+		switch {
+		case kept == 0:
+			left = nothing
+		case kept > 1:
+			parts := make([]*meaning, 0, count)
+			for at, one := range made {
+				switch {
+				case w.parts[at].kind == runWritten:
+					parts = append(parts, one.parts...)
+				case one.kind != nothingMeaning:
+					parts = append(parts, one)
+				}
+			}
+			left = &meaning{kind: inTurnMeaning, parts: parts}
+		}
+		return append(results[:cut], left)
 	case repeatedWritten:
 		last := len(results) - 1
 		results[last] = &meaning{kind: repeatedMeaning, parts: []*meaning{results[last]}, least: w.least, most: w.most}

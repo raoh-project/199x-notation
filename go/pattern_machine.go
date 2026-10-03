@@ -125,8 +125,22 @@ func (b *laying) build(m *meaning, from int32) int32 {
 		to := b.state()
 		b.stepFrom = append(b.stepFrom, from)
 		b.stepTo = append(b.stepTo, to)
-		b.stepOver = append(b.stepOver, m.held)
+		b.stepOver = append(b.stepOver, m.set())
 		return to
+	case literalRunMeaning:
+		// Each step is over the one character's run in the list the meaning holds, so that
+		// nothing is made for a character here either. A run of one alone is a set as symbols
+		// hold one.
+		chars := m.characters()
+		at := from
+		for i := range chars {
+			to := b.state()
+			b.stepFrom = append(b.stepFrom, at)
+			b.stepTo = append(b.stepTo, to)
+			b.stepOver = append(b.stepOver, symbols(chars[i:i+1:i+1]))
+			at = to
+		}
+		return at
 	case inTurnMeaning:
 		at := from
 		for _, part := range m.parts {
@@ -211,6 +225,9 @@ func sizeOf(m *meaning) laidSize {
 		return laidSize{states: 1}
 	case symbolsMeaning:
 		return laidSize{states: 1, steps: 1}
+	case literalRunMeaning:
+		n := len(m.characters())
+		return laidSize{states: n, steps: n}
 	case inTurnMeaning:
 		var sum laidSize
 		for _, part := range m.parts {
@@ -252,7 +269,7 @@ func buildsNoState(m *meaning) bool {
 			}
 		}
 		return true
-	case neverMeaning, symbolsMeaning, eitherOfMeaning, repeatedMeaning:
+	case neverMeaning, symbolsMeaning, literalRunMeaning, eitherOfMeaning, repeatedMeaning:
 		return false
 	default:
 		unreachable("meaning", uint8(m.kind))
