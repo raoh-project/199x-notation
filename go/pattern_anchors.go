@@ -149,6 +149,10 @@ func putTogether(w *written, results []*meaning) []*meaning {
 		for at, one := range made {
 			switch {
 			case w.parts[at].kind == runWritten:
+				// A run is made of two or more parts in turn, and nothing else (open.flush).
+				if one.kind != inTurnMeaning {
+					unreachable("meaning of a run", uint8(one.kind))
+				}
 				count += len(one.parts)
 			case one.kind != nothingMeaning:
 				count++

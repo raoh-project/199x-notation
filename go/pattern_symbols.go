@@ -59,7 +59,7 @@ var (
 // once it is made.
 func one(r rune) symbols {
 	if r >= 0 && r < utf8.RuneSelf {
-		return asciiLiterals[r].held
+		return asciiLiterals[r].set()
 	}
 	return symbols{{r, r}}
 }

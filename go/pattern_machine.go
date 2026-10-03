@@ -125,17 +125,19 @@ func (b *laying) build(m *meaning, from int32) int32 {
 		to := b.state()
 		b.stepFrom = append(b.stepFrom, from)
 		b.stepTo = append(b.stepTo, to)
-		b.stepOver = append(b.stepOver, m.held)
+		b.stepOver = append(b.stepOver, m.set())
 		return to
 	case literalRunMeaning:
 		// Each step is over the one character's run in the list the meaning holds, so that
-		// nothing is made for a character here either.
+		// nothing is made for a character here either. A run of one alone is a set as symbols
+		// hold one.
+		chars := m.characters()
 		at := from
-		for i := range m.held {
+		for i := range chars {
 			to := b.state()
 			b.stepFrom = append(b.stepFrom, at)
 			b.stepTo = append(b.stepTo, to)
-			b.stepOver = append(b.stepOver, m.held[i:i+1:i+1])
+			b.stepOver = append(b.stepOver, symbols(chars[i:i+1:i+1]))
 			at = to
 		}
 		return at
@@ -224,7 +226,8 @@ func sizeOf(m *meaning) laidSize {
 	case symbolsMeaning:
 		return laidSize{states: 1, steps: 1}
 	case literalRunMeaning:
-		return laidSize{states: len(m.held), steps: len(m.held)}
+		n := len(m.characters())
+		return laidSize{states: n, steps: n}
 	case inTurnMeaning:
 		var sum laidSize
 		for _, part := range m.parts {

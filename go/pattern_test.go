@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
@@ -837,7 +838,7 @@ func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
 	// anchors walks three parts however many there are. The characters in it are one part of it.
 	anchored := (&patternReader{text: "^(?:ab|c)*d" + strings.Repeat("e", 1_000) + "$"}).pattern()
 	if anchored.kind != inTurnWritten || len(anchored.parts) != 3 || anchored.parts[1].kind != runWritten ||
-		len(anchored.parts[1].meaning.parts) != 2 || len(anchored.parts[1].meaning.parts[1].held) != 1_001 {
+		len(anchored.parts[1].meaning.parts) != 2 || len(anchored.parts[1].meaning.parts[1].characters()) != 1_001 {
 		t.Fatalf("^(?:ab|c)*de...$ was read as %d parts", len(anchored.parts))
 	}
 }
@@ -868,7 +869,7 @@ func TestARunTheAnchorsLeaveIsTakenAsItIs(t *testing.T) {
 	mixed := (&patternReader{text: "(?:^ab|^c)" + strings.Repeat("e", 1_000) + "[xy]$"}).pattern()
 	made := placeAnchors(&mixed)
 	if made.kind != inTurnMeaning || len(made.parts) != 3 || cap(made.parts) != 3 ||
-		made.parts[1].kind != literalRunMeaning || len(made.parts[1].held) != 1_000 {
+		made.parts[1].kind != literalRunMeaning || len(made.parts[1].characters()) != 1_000 {
 		t.Fatalf("(?:^ab|^c)e...[xy]$ means a sequence of %d parts held in %d", len(made.parts), cap(made.parts))
 	}
 }
@@ -882,7 +883,7 @@ func TestCharactersOneAfterAnotherAreOneMeaning(t *testing.T) {
 		return placeAnchors(&w)
 	}
 	want := meaningOf("aあ😀b")
-	if want.kind != literalRunMeaning || len(want.held) != 4 {
+	if want.kind != literalRunMeaning || len(want.characters()) != 4 {
 		t.Fatalf("aあ😀b means a meaning of kind %d", want.kind)
 	}
 	for _, text := range []string{`a\x{3042}[😀]b`, `(?:a)[あ](?:😀)\x62`, "^aあ😀b$", "a(?:)あ😀b"} {
@@ -904,6 +905,40 @@ func TestCharactersOneAfterAnotherAreOneMeaning(t *testing.T) {
 	for subject, matches := range map[string]bool{"あうう": true, "あいいうう": true, "あう": false, "いうう": false} {
 		if p.Matches(subject) != matches {
 			t.Errorf("あい*う{2} matches %s: %v", subject, !matches)
+		}
+	}
+}
+
+// A meaning's ranges are a set for a symbolsMeaning and characters in order for a
+// literalRunMeaning, and only meaning.set and meaning.characters read them, each for its own kind:
+// a list of characters is never taken for a set, which symbols always are.
+func TestOnlySetAndCharactersReadAMeaningsRanges(t *testing.T) {
+	names, err := filepath.Glob("pattern*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			by := funcName(fn)
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "ranges" &&
+					by != "meaning.set" && by != "meaning.characters" {
+					t.Errorf("%s reads a meaning's ranges", by)
+				}
+				return true
+			})
 		}
 	}
 }

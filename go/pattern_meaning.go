@@ -16,9 +16,10 @@ import "unicode/utf8"
 // them is here either.
 type meaning struct {
 	kind meaningKind
-	// held is the set of a symbolsMeaning, and for a literalRunMeaning its characters in order,
-	// each a run of one.
-	held symbols
+	// ranges is the set of a symbolsMeaning, as symbols hold one, or the characters of a
+	// literalRunMeaning in order, a run of one apiece, which is no set: read through set and
+	// characters, which say which of the two it is.
+	ranges []runeRange
 	// parts is what an inTurnMeaning has one after another, the arms of an eitherOfMeaning, two
 	// or more, and what a repeatedMeaning repeats, alone.
 	parts []*meaning
@@ -129,8 +130,38 @@ type literal struct {
 
 func newLiteral(r rune) *meaning {
 	l := &literal{run: [1]runeRange{{r, r}}}
-	l.meaning = meaning{kind: symbolsMeaning, held: l.run[:]}
+	l.meaning = meaning{kind: symbolsMeaning, ranges: l.run[:]}
 	return &l.meaning
+}
+
+// charactersMeaning is chars one after another, each a run of one: one character is a
+// symbolsMeaning, and two or more a literalRunMeaning holding chars, which is its own from here.
+func charactersMeaning(chars []runeRange) *meaning {
+	switch len(chars) {
+	case 0:
+		unreachable("characters", 0)
+		return nil
+	case 1:
+		return literalMeaning(chars[0].first)
+	default:
+		return &meaning{kind: literalRunMeaning, ranges: chars}
+	}
+}
+
+// set is the set of a symbolsMeaning.
+func (m *meaning) set() symbols {
+	if m.kind != symbolsMeaning {
+		unreachable("meaning holding a set", uint8(m.kind))
+	}
+	return symbols(m.ranges)
+}
+
+// characters is the characters of a literalRunMeaning in order, a run of one apiece.
+func (m *meaning) characters() []runeRange {
+	if m.kind != literalRunMeaning {
+		unreachable("meaning holding characters", uint8(m.kind))
+	}
+	return m.ranges
 }
 
 // asciiLiterals is the meaning of each ASCII character written as itself.

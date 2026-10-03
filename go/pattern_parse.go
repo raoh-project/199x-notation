@@ -152,10 +152,8 @@ func (r *patternReader) pattern() written {
 				r.opened()
 				around = append(around, reading)
 				reading = &open{}
-			} else if c, ok := r.characterAlone(); ok {
-				reading.character(c)
 			} else {
-				reading.part(r.quantified(r.atom()))
+				r.atom(reading)
 			}
 			continue
 		}
@@ -192,11 +190,12 @@ func (o *open) part(w written) {
 	if w.kind == meantWritten && w.meaning.kind == nothingMeaning {
 		return
 	}
-	if w.kind == meantWritten && w.meaning.kind == symbolsMeaning && len(w.meaning.held) == 1 &&
-		w.meaning.held[0].first == w.meaning.held[0].last {
-		// One symbol, however written, as \x{3042} or [a] is, is one of the characters.
-		o.character(w.meaning.held[0].first)
-		return
+	if w.kind == meantWritten && w.meaning.kind == symbolsMeaning {
+		if set := w.meaning.set(); set.size() == 1 {
+			// One symbol, however written, as \x{3042} or [a] is, is one of the characters.
+			o.character(set[0].first)
+			return
+		}
 	}
 	if w.facts.holds {
 		o.flush()
@@ -224,17 +223,13 @@ func (o *open) character(c rune) {
 	o.runStates = plusStates(o.runStates, 1)
 }
 
-// settle puts the characters into the run as what they mean: one character is a symbolsMeaning,
-// two or more a literalRunMeaning holding the list they were read into.
+// settle puts the characters into the run as what they mean ([charactersMeaning]), which holds
+// the list they were read into.
 func (o *open) settle() {
-	switch len(o.chars) {
-	case 0:
+	if len(o.chars) == 0 {
 		return
-	case 1:
-		o.run = appended(o.run, literalMeaning(o.chars[0].first))
-	default:
-		o.run = appended(o.run, &meaning{kind: literalRunMeaning, held: o.chars})
 	}
+	o.run = appended(o.run, charactersMeaning(o.chars))
 	o.chars = nil
 }
 
@@ -272,7 +267,25 @@ func (r *patternReader) opened() {
 
 // quantified is one with the count written after it, if any.
 func (r *patternReader) quantified(one written) written {
-	var least, most int
+	if !r.countHere() {
+		return one
+	}
+	least, most := r.counted()
+	return repeatedOf(one, least, most)
+}
+
+// countHere is whether a count is written here: whether what was read before is repeated. The
+// one place that says what begins a count, and counted the one that reads it.
+func (r *patternReader) countHere() bool {
+	return !r.done() && countBegins[r.text[r.at]]
+}
+
+// countBegins is whether a count begins with the byte.
+var countBegins = [256]bool{'?': true, '*': true, '+': true, '{': true}
+
+// counted reads the count written here, where countHere says one is: the fewest and the most
+// times.
+func (r *patternReader) counted() (least, most int) {
 	r.construct = r.at
 	switch r.peek() {
 	case '?':
@@ -284,8 +297,8 @@ func (r *patternReader) quantified(one written) written {
 	case '+':
 		r.take()
 		least, most = 1, noCeiling
-	case '{':
-		r.take()
+	default:
+		r.expect('{')
 		floor := r.count()
 		ceiling := &floor
 		if r.peek() == ',' {
@@ -306,8 +319,6 @@ func (r *patternReader) quantified(one written) written {
 		if ceiling != nil {
 			most = ceiling.held
 		}
-	default:
-		return one
 	}
 	// Reluctant says how a matcher walks and not which strings are accepted, so the marker is
 	// read and left out. Possessive is not one of those: it takes what it can and gives none of it
@@ -318,46 +329,35 @@ func (r *patternReader) quantified(one written) written {
 		r.take()
 		r.refuse(APossessiveRepetition)
 	}
-	return repeatedOf(one, least, most)
+	return least, most
 }
 
-// characterAlone reads a character written as itself with no count after it, which is one of the
-// characters of the arm and is made no meaning of its own. Anything else is left where it is, for
-// atom and quantified to read.
-func (r *patternReader) characterAlone() (rune, bool) {
-	switch r.peek() {
-	case '[', '\\', '.', '^', '$', '{', '*', '+', '?', endOfText:
-		return 0, false
-	}
-	from := r.at
-	c := r.literal()
-	switch r.peek() {
-	case '?', '*', '+', '{':
-		r.at = from
-		return 0, false
-	}
-	return c, true
-}
-
-// atom is one thing written, other than a group.
-func (r *patternReader) atom() written {
+// atom reads one thing written other than a group, with the count written after it, and puts it at
+// the end of the arm being read. The one place that tells a character written as itself from the
+// rest of the grammar. Such a character with no count is one of the arm's characters and is made
+// no meaning of its own; with a count, it is what the count repeats.
+func (r *patternReader) atom(reading *open) {
 	switch r.peek() {
 	case '[':
 		r.take()
-		return symbolsWritten(r.characterClass())
+		reading.part(r.quantified(symbolsWritten(r.characterClass())))
+		return
 	case '\\':
 		r.take()
-		return symbolsWritten(r.escaped())
+		reading.part(r.quantified(symbolsWritten(r.escaped())))
+		return
 	case '.':
 		r.take()
 		// Every symbol but the line terminators, written as a difference, so that a negated
 		// class, which does not leave them out, is the same algebra with a different set taken
 		// away.
-		return symbolsWritten(dotSymbols)
+		reading.part(r.quantified(symbolsWritten(dotSymbols)))
+		return
 	case '^', '$':
 		end := r.peek() == '$'
 		r.take()
-		return anchorOf(end)
+		reading.part(r.quantified(anchorOf(end)))
+		return
 	case '{':
 		// A brace that begins no count. Read as an ordinary character it would be a pattern
 		// meaning one thing here and a count wherever a digit followed it.
@@ -369,7 +369,12 @@ func (r *patternReader) atom() written {
 	case endOfText:
 		r.refuse(SomethingUnclosed)
 	}
-	return meant(literalMeaning(r.literal()))
+	c := r.literal()
+	if !r.countHere() {
+		reading.character(c)
+		return
+	}
+	reading.part(r.quantified(meant(literalMeaning(c))))
 }
 
 // symbolsWritten is held as what it means. One ASCII character, however written, as \| or [a] is,
@@ -378,7 +383,7 @@ func symbolsWritten(held symbols) written {
 	if len(held) == 1 && held[0].first == held[0].last && held[0].first < utf8.RuneSelf {
 		return meant(asciiLiterals[held[0].first])
 	}
-	return meant(&meaning{kind: symbolsMeaning, held: held})
+	return meant(&meaning{kind: symbolsMeaning, ranges: held})
 }
 
 // characterClass is what is between [ and ], as the symbols it holds. The [ is already taken.
