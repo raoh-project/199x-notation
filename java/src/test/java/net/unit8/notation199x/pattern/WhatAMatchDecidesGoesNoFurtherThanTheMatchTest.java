@@ -32,7 +32,9 @@ class WhatAMatchDecidesGoesNoFurtherThanTheMatchTest {
         StringPattern pattern = StringPattern.of(shaped(SEVENTEENTH));
         String hostile = random(20_000, 7);
         assertEquals(hostile.charAt(hostile.length() - 17) == 'a', pattern.matches(hostile));
-        assertEquals(StringPattern.Budget.DEFAULT.subsets(), pattern.setsKept(), "the sets were filled");
+        // The budget filled, beside the set a walk starts in and the one kept for the walk that
+        // started the sets again, which are kept whatever they take and counted apart.
+        assertEquals(StringPattern.Budget.DEFAULT.subsets() + 2, pattern.setsKept(), "the sets were filled");
 
         // The first match starts the sets again part of the way through, and the second works out
         // the steps it read before that from the first set of the new ones.
@@ -68,7 +70,7 @@ class WhatAMatchDecidesGoesNoFurtherThanTheMatchTest {
         assertEquals(new Outcome.Answered<>(hostile.charAt(hostile.length() - 17) == 'a'),
                 pattern.matches(hostile, looking));
         long[] last = {pattern.setsKept(), pattern.stepsKnown()};
-        assertEquals(StringPattern.Budget.DEFAULT.subsets(), last[0]);
+        assertEquals(StringPattern.Budget.DEFAULT.subsets() + 2, last[0]);
         int still = 0;
         for (int i = seen.size() - 1; i >= 0 && seen.get(i)[0] == last[0] && seen.get(i)[1] == last[1]; i--) {
             still++;

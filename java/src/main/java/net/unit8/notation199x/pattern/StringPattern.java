@@ -147,7 +147,8 @@ public final class StringPattern implements Predicate<String> {
      * @param remembered   the most states and steps those sets hold between them, each set's states
      *                     and one step for each class; each is an {@code int} or a reference, about
      *                     four bytes. The set a walk starts in, and the one a walk that starts the
-     *                     sets again has come to, are kept past both whatever they take
+     *                     sets again has come to, are kept whatever they take and counted beside
+     *                     both, not in them, so the budget bounds every other set
      *                     ({@link Generation})
      */
     record Budget(long classWork, int tableEntries, int asciiEntries, int runs, int subsets,
@@ -410,7 +411,11 @@ public final class StringPattern implements Predicate<String> {
      *  way a walk went asks, and no walk. */
     int setsKept() {
         Subsets known = subsets;
-        return known == null ? 0 : known.current().count.get();
+        if (known == null) {
+            return 0;
+        }
+        Generation now = known.current();
+        return now.count.get() + now.needed.get();
     }
 
     /** How many steps from the sets kept now, each where one class leads from one set, are worked
@@ -1427,12 +1432,18 @@ public final class StringPattern implements Predicate<String> {
                 }
                 // A step is written only from a set of the generation the set it leads to is in, so a
                 // generation that is let go holds nothing of one after it, and a walk that keeps no
-                // more sets writes none.
-                if (from != null && !keeping.frozen && held == kept) {
-                    if (to == from) {
-                        from.staysOn(classes, each);
+                // more sets writes none. Where the walk has just gone into another generation from
+                // the set a walk starts in, the step is written from that generation's start set,
+                // which is the same set of states, kept whatever it took: so the next walk takes it
+                // as one lookup, as the other implementations keep it when they forget their sets.
+                if (from != null && !keeping.frozen) {
+                    @Nullable Subset source = held == kept ? from : from == held.start ? kept.start : null;
+                    if (source != null) {
+                        if (to == source) {
+                            source.staysOn(classes, each);
+                        }
+                        source.next[each] = to;
                     }
-                    from.next[each] = to;
                 }
                 if (to == from && checkpoint == null) {
                     int was = at;
@@ -1679,11 +1690,14 @@ public final class StringPattern implements Predicate<String> {
      * one for each walk still going on in an older one.
      *
      * <p>What one generation holds is its slots, made with it, four for each set the budget keeps,
-     * and the sets kept in it, each counted in {@link #count} and {@link #remembered} as it is kept,
-     * as many states and steps as its arrays hold. Those are within the budget but for the sets kept
-     * whatever they take: the set a walk starts in, and the set each walk that went into the
-     * generation had come to ({@link Keeping#into}), at most one for each walk. Every walk needs
-     * those to go on by kept steps, so none is turned away for want of room.
+     * and the sets kept in it, each counted as it is kept, as many states and steps as its arrays
+     * hold. The sets every walk needs are kept whatever they take: the set a walk starts in, and the
+     * set each walk that went into the generation had come to ({@link Keeping#into}), at most one
+     * for each walk. Every walk needs those to go on by kept steps, so none is turned away for want
+     * of room; and they are counted apart, in {@link #needed} and {@link #beside}, and not against
+     * the budget, which bounds every other set, in {@link #count} and {@link #remembered}. Counted
+     * in the budget, a set larger than it would leave no room for any other, and a walk that went
+     * on from it to one more would be frozen.
      */
     private static final class Generation {
 
@@ -1694,6 +1708,9 @@ public final class StringPattern implements Predicate<String> {
         private final AtomicReferenceArray<Subset> slots;
         final AtomicInteger count = new AtomicInteger();
         private final AtomicLong remembered = new AtomicLong();
+        /** The sets kept whatever they take, and the states and steps they hold, beside the budget. */
+        final AtomicInteger needed = new AtomicInteger();
+        private final AtomicLong beside = new AtomicLong();
 
         Generation(SymbolClasses classes, Budget budget, Subset start) {
             this.classes = classes;
@@ -1794,18 +1811,27 @@ public final class StringPattern implements Predicate<String> {
         }
 
         /**
-         * Keeps {@code made} at slot {@code at}, counted against the {@link Budget}, and answers
-         * whether it is kept: not where the budget has no room for it, unless {@code always}, nor
+         * Keeps {@code made} at slot {@code at} and answers whether it is kept: counted against the
+         * {@link Budget}, and not kept where the budget has no room for it; or, where
+         * {@code always}, counted beside it, in {@link #needed}, and kept whatever it takes. Never
          * where another set was put there first. The one place a set is kept, so what is kept and
-         * what is counted are one, past the budget too.
+         * what is counted are one.
          */
         private boolean keep(int at, Subset made, boolean always) {
             long holds = (long) made.states.length + made.next.length;
-            if (count.incrementAndGet() > budget.subsets() && !always) {
+            if (always) {
+                if (!slots.compareAndSet(at, null, made)) {
+                    return false;
+                }
+                needed.incrementAndGet();
+                beside.addAndGet(holds);
+                return true;
+            }
+            if (count.incrementAndGet() > budget.subsets()) {
                 count.decrementAndGet();
                 return false;
             }
-            if (remembered.addAndGet(holds) > budget.remembered() && !always) {
+            if (remembered.addAndGet(holds) > budget.remembered()) {
                 count.decrementAndGet();
                 remembered.addAndGet(-holds);
                 return false;
