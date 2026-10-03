@@ -140,16 +140,16 @@ class WhatARunWalksIsWhatThePatternMeansTest {
     }
 
     /**
-     * A pattern whose deterministic machine is past what a class makes deterministic runs as the
-     * machine its shape builds, and answers the same.
+     * A pattern whose deterministic machine is past what a class makes deterministic is written as
+     * the machine its shape builds, and answers the same.
      *
      * <p>{@code .*a.{20}} is a few dozen states as its shape, and deterministic it has to remember
      * where each of the last twenty-one characters was an {@code a}.
      */
     @Test
-    void aPatternTooLargeToMakeDeterministicIsRunAsItsShape() {
+    void aPatternTooLargeToMakeDeterministicIsWrittenAsItsShape() {
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(".*a.{20}")).meaning();
-        assertEquals(null, PatternImages.deterministic(meaning, PatternMachine.deterministicRun()));
+        assertEquals(null, PatternImages.deterministic(meaning, PatternMachine.canonicalImage()));
         PatternImage.Written image = assertInstanceOf(PatternImage.Written.class,
                 PatternMachine.of(meaning).image());
         assertEquals(image.strings(), PatternImages.shaped(meaning, PatternMachine.run()));
@@ -205,7 +205,7 @@ class WhatARunWalksIsWhatThePatternMeansTest {
             regex.append(String.format("(?:\\x{%X}|[a-z])", 0x100 + place));
         }
         PatternMeaning meaning = ((PatternRead.Read) PatternParser.read(regex.toString())).meaning();
-        StringPattern run = PatternMachine.of(meaning).pattern();
+        StringPattern run = StringPattern.of(PatternImages.deterministic(meaning, plenty()));
         assertEquals(StringPattern.Way.ASCII_AND_SPANS, run.way());
 
         assertTrue(run.matches("a".repeat(600)));
@@ -213,6 +213,22 @@ class WhatARunWalksIsWhatThePatternMeansTest {
         assertFalse(run.matches("a".repeat(300) + "\u022D" + "a".repeat(299)));
         assertFalse(run.matches("a".repeat(599)));
         assertFalse(run.matches("a".repeat(599) + "A"));
+    }
+
+    /**
+     * A pattern is run as the machine its shape builds, walked as the sets of states it comes to,
+     * whether or not its image was asked for first: the deterministic machine made for an image of
+     * P2 is the image's and changes nothing a run does.
+     */
+    @Test
+    void askingForAnImageDoesNotChangeHowThePatternIsRun() {
+        PatternMachine machine = PatternMachine.of(((PatternRead.Read) PatternParser.read("(a|b)*a"))
+                .meaning());
+        assertEquals(StringPattern.Way.SETS_KEPT, machine.pattern().way());
+        PatternImage.Written image = assertInstanceOf(PatternImage.Written.class, machine.image());
+        assertTrue(image.strings().get(0).startsWith("P2,"), image.strings().get(0));
+        assertEquals(StringPattern.Way.SETS_KEPT, machine.pattern().way());
+        assertEquals(image.strings(), ((PatternImage.Written) machine.image()).strings());
     }
 
     /**

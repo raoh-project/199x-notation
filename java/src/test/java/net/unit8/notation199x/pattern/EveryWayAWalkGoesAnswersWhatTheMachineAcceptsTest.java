@@ -146,11 +146,11 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
                 new StringPattern.Budget(0, 0, 0, 0, 0, 0)).way());
     }
 
-    /** The deterministic machine {@code machine}'s rows were taken from, made again from its shape
-     *  within what it was made in: a machine runs and keeps only the rows, and the walks over steps
-     *  are held here to the same machine. Null where it has none. */
+    /** The deterministic machine made from {@code machine}'s shape within what an image's is made
+     *  in, so the walks over it are held to the same machine as the walks over the shape. Null where
+     *  making it is past that. */
     private static @Nullable Automaton deterministic(PatternMachine machine) {
-        return machine.rows() == null ? null : machine.shaped().canonical(PatternMachine.deterministicRun());
+        return machine.shaped().canonical(PatternMachine.canonicalImage());
     }
 
     /** {@code machine} run each way a walk may go over it, as budgets that run out where each does

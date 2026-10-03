@@ -95,9 +95,11 @@ class AMatchIsStoppedWhereItIsAskedTest {
         assertTrue(made < 100_000, "made " + made + " bytes");
     }
 
+    /** A walk over a deterministic machine asks once a character, and is stopped where it is asked
+     *  to be. */
     @Test
     void aLongSubjectIsStoppedPartOfTheWayThrough() {
-        StringPattern run = PatternMachine.of(meaning("[a-z]*")).pattern();
+        StringPattern run = StringPattern.of(ClassRows.of(Held.canonical(meaning("[a-z]*"), Held.roomy())));
         String subject = "a".repeat(1_000_000);
         Counting all = Counting.never();
         assertEquals(new Outcome.Answered<>(true), run.matches(subject, all));
