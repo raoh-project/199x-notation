@@ -63,12 +63,14 @@ func readPattern(text string) (read PatternRead) {
 // the one being read.
 //
 // The parts read since the last that holds an anchor hold none, and are held in run as what they
-// mean, with what they are together: a character read is a pointer to its meaning and nothing
-// else. Where a part holding an anchor comes, they go into parts as one (flush), so the parts of a
-// sequence are the ones holding an anchor and the runs between them.
+// mean, with what they are together. Characters of one symbol each read one after another are
+// held in chars, a run of one apiece, and go into run as one meaning when a part of another kind
+// comes (settle). Where a part holding an anchor comes, the run goes into parts as one (flush), so
+// the parts of a sequence are the ones holding an anchor and the runs between them.
 type open struct {
 	arms, parts []written
 	run         []*meaning
+	chars       []runeRange
 	// runFacts is what the run is as a sequence, and every whether each of its parts must take a
 	// symbol; runStates the states they come to together.
 	runFacts  facts
@@ -78,6 +80,7 @@ type open struct {
 // arm is the arm being read: an arm of one part is that part, and an arm of none is nothing. One
 // with no part holding an anchor is what its run means.
 func (o *open) arm() written {
+	o.settle()
 	if len(o.parts) == 0 {
 		switch len(o.run) {
 		case 0:
@@ -103,6 +106,7 @@ func (o *open) runPart() written {
 
 // flush puts the run into the parts, as the one part it is or as a runWritten, and starts another.
 func (o *open) flush() {
+	o.settle()
 	switch len(o.run) {
 	case 0:
 		return
@@ -121,6 +125,7 @@ func (o *open) flush() {
 func (o *open) next() {
 	o.parts = nil
 	o.run = nil
+	o.chars = nil
 	o.runFacts = facts{}
 	o.runStates = 0
 }
@@ -147,6 +152,8 @@ func (r *patternReader) pattern() written {
 				r.opened()
 				around = append(around, reading)
 				reading = &open{}
+			} else if c, ok := r.characterAlone(); ok {
+				reading.character(c)
 			} else {
 				reading.part(r.quantified(r.atom()))
 			}
@@ -185,6 +192,12 @@ func (o *open) part(w written) {
 	if w.kind == meantWritten && w.meaning.kind == nothingMeaning {
 		return
 	}
+	if w.kind == meantWritten && w.meaning.kind == symbolsMeaning && len(w.meaning.held) == 1 &&
+		w.meaning.held[0].first == w.meaning.held[0].last {
+		// One symbol, however written, as \x{3042} or [a] is, is one of the characters.
+		o.character(w.meaning.held[0].first)
+		return
+	}
 	if w.facts.holds {
 		o.flush()
 		o.parts = appended(o.parts, w)
@@ -192,12 +205,37 @@ func (o *open) part(w written) {
 	}
 	// A part holding no anchor is a meantWritten as it is made, and joins the run as a sequence
 	// part does ([inTurnOf]); every is held only while each part so far must take a symbol.
+	o.settle()
 	first := len(o.run) == 0
 	o.run = appended(o.run, w.meaning)
 	o.runFacts.may = o.runFacts.may || w.facts.may
 	o.runFacts.must = o.runFacts.must || w.facts.must
 	o.runFacts.every = (first || o.runFacts.every) && w.facts.must
 	o.runStates = plusStates(o.runStates, w.states)
+}
+
+// character puts the one symbol c at the end of the arm being read, among the characters.
+func (o *open) character(c rune) {
+	first := len(o.run) == 0 && len(o.chars) == 0
+	o.chars = appended(o.chars, runeRange{c, c})
+	o.runFacts.may = true
+	o.runFacts.must = true
+	o.runFacts.every = first || o.runFacts.every
+	o.runStates = plusStates(o.runStates, 1)
+}
+
+// settle puts the characters into the run as what they mean: one character is a symbolsMeaning,
+// two or more a literalRunMeaning holding the list they were read into.
+func (o *open) settle() {
+	switch len(o.chars) {
+	case 0:
+		return
+	case 1:
+		o.run = appended(o.run, literalMeaning(o.chars[0].first))
+	default:
+		o.run = appended(o.run, &meaning{kind: literalRunMeaning, held: o.chars})
+	}
+	o.chars = nil
 }
 
 // appended is s with v after it. A slice is made twice as large each time it fills, so that a
@@ -281,6 +319,24 @@ func (r *patternReader) quantified(one written) written {
 		r.refuse(APossessiveRepetition)
 	}
 	return repeatedOf(one, least, most)
+}
+
+// characterAlone reads a character written as itself with no count after it, which is one of the
+// characters of the arm and is made no meaning of its own. Anything else is left where it is, for
+// atom and quantified to read.
+func (r *patternReader) characterAlone() (rune, bool) {
+	switch r.peek() {
+	case '[', '\\', '.', '^', '$', '{', '*', '+', '?', endOfText:
+		return 0, false
+	}
+	from := r.at
+	c := r.literal()
+	switch r.peek() {
+	case '?', '*', '+', '{':
+		r.at = from
+		return 0, false
+	}
+	return c, true
 }
 
 // atom is one thing written, other than a group.
