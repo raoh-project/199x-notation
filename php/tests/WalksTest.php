@@ -17,17 +17,14 @@ final class WalksTest extends TestCase
     public function testEachCaseTakesThePathItIsNamedFor(): void
     {
         $room = Machine::$knownBytes;
-        $wait = Machine::$retryWork;
         try {
             foreach (Walks::cases() as $name => $setUp) {
                 [, $why] = $setUp();
                 self::assertNull($why(), $name);
                 Machine::$knownBytes = $room;
-                Machine::$retryWork = $wait;
             }
         } finally {
             Machine::$knownBytes = $room;
-            Machine::$retryWork = $wait;
         }
     }
 }

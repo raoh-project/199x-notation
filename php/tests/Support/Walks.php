@@ -19,16 +19,16 @@ use Raoh\Notation199x\Pattern;
  * fails the tests rather than measuring something else under its name.
  *
  * A match has three paths: keeping a set it has not kept, stepping by steps already kept, and
- * walking a state at a time without kept sets. Each is measured with sets as small as a few states
- * and as large as thousands. The rest are the measurements #30 and c8f5f74 gave.
+ * walking a state at a time once it is frozen, looking each set up among those kept. Each is
+ * measured with sets as small as a few states and as large as thousands. The rest are the
+ * measurements #30 and c8f5f74 gave.
  */
 final class Walks
 {
     /**
      * Each case by name: a function that sets it up and answers the run to time and a function
      * that answers why the run did not take its path, or null where it did. Setting a case up may
-     * set Machine's room and how long it waits to try keeping sets again, for the case's runs;
-     * whoever runs one puts them back.
+     * set Machine's room, for the case's runs; whoever runs one puts it back.
      *
      * @return array<string, \Closure(): array{\Closure(): mixed, \Closure(): ?string}>
      */
@@ -44,9 +44,10 @@ final class Walks
             'match: kept steps, email-like' => static fn (): array => self::known(self::machine('[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'), 'someone.else@example.co.jp'),
             'match: an ASCII run gone past at once, 1 KB' => static fn (): array => self::run('[a-z ]*', $ascii),
             'match: an ASCII run gone past at once, 100 KB' => static fn (): array => self::run('[a-z ]*', str_repeat('hello world ', 8600)),
-            'match: without kept sets, sets of a few states' => static fn (): array => self::alone('(?:a|b)*a(?:a|b){12}', self::randomAb(2000)),
-            'match: without kept sets, sets of thousands of states' => static fn (): array => self::alone('(?:[ab]?){20000}', self::randomAb(20)),
-            'match: (?:a?){49998}, 10 characters' => static fn (): array => self::alone('(?:a?){49998}', str_repeat('a', 10)),
+            'match: an ASCII run over one set larger than the room' => static fn (): array => self::run('(?:x*){124998}', str_repeat('x', 1000)),
+            'match: frozen, sets of a few states' => static fn (): array => self::frozen('(?:a|b)*a(?:a|b){12}', self::randomAb(2000), 1 << 15),
+            'match: frozen, sets of thousands of states' => static fn (): array => self::frozen('(?:[ab]?){20000}', self::randomAb(20), 2 << 20),
+            'match: frozen, (?:a?){49998}, 10 characters' => static fn (): array => self::frozen('(?:a?){49998}', str_repeat('a', 10), 4 << 20),
             'NFC: 1 KB of ASCII, below the trivial limit' => static fn (): array => [
                 static fn (): string => Normalization::normalize(NormalizationForm::NFC, $ascii),
                 static fn (): ?string => Normalization::normalize(NormalizationForm::NFC, $ascii) === $ascii ? null : 'it changed',
@@ -67,8 +68,8 @@ final class Walks
 
     /**
      * The match of $subject with room for every set it comes to, the sets forgotten before each
-     * run, so every run keeps each set anew. It shows it took the path where it never gave up and
-     * kept a new set for at least half the characters.
+     * run, so every run keeps each set anew. It shows it took the path where it kept a new set for
+     * at least half the characters.
      *
      * @return array{\Closure(): mixed, \Closure(): ?string}
      */
@@ -85,9 +86,9 @@ final class Walks
             static function () use ($m, $forget, $subject): ?string {
                 $forget();
                 $m->matches($subject);
-                $made = self::get($m, 'made');
-                if (self::get($m, 'off') !== false || !is_int($made) || $made * 2 < strlen($subject)) {
-                    return 'it kept ' . var_export($made, true) . ' sets for ' . strlen($subject) . ' characters';
+                $made = self::kept($m);
+                if ($made * 2 < strlen($subject)) {
+                    return "it kept $made sets for " . strlen($subject) . ' characters';
                 }
                 return null;
             },
@@ -106,9 +107,9 @@ final class Walks
         return [
             static fn (): bool => $m->matches($subject),
             static function () use ($m, $subject): ?string {
-                $before = self::get($m, 'made');
+                $before = self::kept($m);
                 $m->matches($subject);
-                return self::get($m, 'made') === $before && self::get($m, 'off') === false ? null : 'it kept a set, or gave up';
+                return self::kept($m) === $before ? null : 'it kept a set';
             },
         ];
     }
@@ -139,20 +140,32 @@ final class Walks
     }
 
     /**
-     * The match of $subject with no room for a set and no try to keep them again, so every
-     * character is walked a state at a time. It shows it took the path where it gave up.
+     * The match of $subject with room for a few of the sets it comes to, $room, which it comes to
+     * a new one at most characters of: each run fills the room, forgets the sets, fills it again
+     * and is frozen, and walks every character after a state at a time, looking each set up among
+     * those kept. It shows it took the path where the room was filled by two sets or more, which a
+     * run that comes to a new set at most characters leaves so only frozen.
      *
      * @return array{\Closure(): mixed, \Closure(): ?string}
      */
-    private static function alone(string $pattern, string $subject): array
+    private static function frozen(string $pattern, string $subject, int $room): array
     {
-        Machine::$knownBytes = 0;
-        Machine::$retryWork = PHP_INT_MAX;
+        Machine::$knownBytes = $room;
         $m = self::machine($pattern);
         $m->matches($subject);
         return [
             static fn (): bool => $m->matches($subject),
-            static fn (): ?string => self::get($m, 'off') === true && self::get($m, 'made') === 0 ? null : 'it kept sets',
+            static function () use ($m, $subject, $room): ?string {
+                $m->matches($subject);
+                $kept = self::kept($m);
+                $bytes = self::get($m, 'bytes');
+                $states = self::get($m, 'keptStates');
+                $each = is_int($bytes) && $kept > 0 ? intdiv($bytes, $kept) : 0;
+                if ($kept < 2 || !is_int($bytes) || $bytes + 2 * $each <= $room) {
+                    return "it kept $kept sets in " . var_export($bytes, true) . " bytes of $room";
+                }
+                return is_array($states) ? null : 'no sets';
+            },
         ];
     }
 
@@ -225,6 +238,13 @@ final class Walks
     private static function get(Machine $m, string $name): mixed
     {
         return (new \ReflectionProperty(Machine::class, $name))->getValue($m);
+    }
+
+    /** How many sets $m keeps. */
+    private static function kept(Machine $m): int
+    {
+        $states = self::get($m, 'keptStates');
+        return is_array($states) ? count($states) : 0;
     }
 
     private static function randomAb(int $n): string
