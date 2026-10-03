@@ -152,6 +152,77 @@ class WhatAMatchDecidesGoesNoFurtherThanTheMatchTest {
         assertEquals(List.of(), failed);
     }
 
+    /**
+     * Walks on many threads, each in the same full generation and each at a set of its own, go
+     * into a new generation together: one makes it, with the set it has come to, and the others go
+     * into it. What the new generation holds whatever it takes is the set a walk starts in and the
+     * set of the walk that made it, and no more, however many walks went into it; once they end,
+     * that is what it still holds. A generation that kept the set of each walk going into it
+     * whatever it took held one more for each walk, past the budget, long after the walks ended.
+     *
+     * <p>The budget is made exactly as large as the sets the first forty characters of each
+     * subject come to, and those are kept first, so every walk goes by kept steps to a set of its
+     * own and finds the generation full at its forty-first character, past the sets the subjects
+     * share at their start.
+     */
+    @Test
+    void aGenerationHoldsPastTheBudgetOnlyWhatItWasMadeWith() throws Exception {
+        int walks = 8;
+        String[] subjects = new String[walks];
+        for (int t = 0; t < walks; t++) {
+            subjects[t] = random(60, 300 + t);
+        }
+        StringPattern roomy = StringPattern.of(shaped(SEVENTEENTH));
+        for (String subject : subjects) {
+            roomy.matches(subject.substring(0, 40));
+        }
+        // The set a walk starts in is kept beside the budget.
+        int within = roomy.setsKept() - 1;
+        StringPattern pattern = StringPattern.of(shaped(SEVENTEENTH),
+                StringPattern.Budget.DEFAULT.keeping(within));
+        for (String subject : subjects) {
+            pattern.matches(subject.substring(0, 40));
+        }
+        assertEquals(within + 1, pattern.setsKept(), "the budget is full of the sets the walks go by");
+        java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(walks);
+        List<Thread> threads = new ArrayList<>();
+        List<Throwable> failed = java.util.Collections.synchronizedList(new ArrayList<>());
+        for (String subject : subjects) {
+            Thread thread = new Thread(() -> {
+                boolean[] waited = {false};
+                // Every walk has taken up the full generation when it first asks, and waits there
+                // for the others, so that none goes on before all are in it.
+                Checkpoint first = () -> {
+                    if (!waited[0]) {
+                        waited[0] = true;
+                        try {
+                            together.await();
+                        } catch (Exception e) {
+                            throw new IllegalStateException(e);
+                        }
+                    }
+                    return true;
+                };
+                boolean expected = subject.charAt(subject.length() - 17) == 'a';
+                if (!new Outcome.Answered<>(expected).equals(pattern.matches(subject, first))) {
+                    failed.add(new AssertionError(subject));
+                }
+            });
+            thread.setUncaughtExceptionHandler((th, e) -> failed.add(e));
+            threads.add(thread);
+            thread.start();
+        }
+        for (Thread thread : threads) {
+            thread.join();
+        }
+        assertEquals(List.of(), failed);
+        assertEquals(2, pattern.keptBeside()[0],
+                "kept past the budget: the start set and the set of the walk that made the generation");
+        int kept = pattern.setsKept();
+        assertTrue(kept > walks && kept <= within + 2,
+                "the other walks kept their sets within the budget, " + kept + " kept of " + within);
+    }
+
     /** How many times a match of {@code subject}, which ends in b and is not accepted, asks. */
     private static long asks(StringPattern pattern, String subject) {
         long[] asked = {0};

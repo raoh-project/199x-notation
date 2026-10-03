@@ -146,10 +146,10 @@ public final class StringPattern implements Predicate<String> {
      *                     {@link Generation} ({@link #remember})
      * @param remembered   the most states and steps those sets hold between them, each set's states
      *                     and one step for each class; each is an {@code int} or a reference, about
-     *                     four bytes. The set a walk starts in, and the one a walk that starts the
-     *                     sets again has come to, are kept whatever they take and counted beside
-     *                     both, not in them, so the budget bounds every other set
-     *                     ({@link Generation})
+     *                     four bytes. The set a walk starts in, and the one the walk that makes a
+     *                     generation has come to, are kept whatever they take as the generation is
+     *                     made, and counted beside both, not in them, so the budget bounds every
+     *                     other set ({@link Generation})
      */
     record Budget(long classWork, int tableEntries, int asciiEntries, int runs, int subsets,
                   long remembered) {
@@ -415,7 +415,18 @@ public final class StringPattern implements Predicate<String> {
             return 0;
         }
         Generation now = known.current();
-        return now.count.get() + now.needed.get();
+        return now.count.get() + now.needed;
+    }
+
+    /** How many of the sets kept now are kept whatever they take, beside the budget, and the states
+     *  and steps they hold: what a test of what a generation holds asks, and no walk. */
+    long[] keptBeside() {
+        Subsets known = subsets;
+        if (known == null) {
+            return new long[] {0, 0};
+        }
+        Generation now = known.current();
+        return new long[] {now.needed, now.beside};
     }
 
     /** How many steps from the sets kept now, each where one class leads from one set, are worked
@@ -441,7 +452,7 @@ public final class StringPattern implements Predicate<String> {
     void startSetsAgain() {
         Subsets known = subsets;
         if (known != null) {
-            known.restart(known.current());
+            known.restart(known.current(), null);
         }
     }
 
@@ -1327,8 +1338,10 @@ public final class StringPattern implements Predicate<String> {
      * place ({@link Keeping#into}), which counts every generation a walk goes into, whichever walk
      * started it. It goes into one the first time it fills its own, whatever came before it, and
      * again only where it has read ten characters by steps already worked out for each set it made
-     * since it last went into one; there the set it has come to is kept whatever it takes, beside the
-     * set a walk starts in. Otherwise the sets it comes to are too seldom met again to be worth
+     * since it last went into one. Where it makes the generation it goes into, the set it has come to
+     * is kept there whatever it takes, beside the set a walk starts in, as the generation is made;
+     * where another walk made it, the set is kept there within the budget, or the walk keeps no
+     * more. Otherwise the sets it comes to are too seldom met again to be worth
      * keeping, and it keeps no more for the rest of this match: it moves each state for every
      * character, as {@link #spread} does, and looks the set it comes to up among those kept, going
      * on by their steps from one it finds and writing none. So what a match pays for keeping sets is
@@ -1405,16 +1418,19 @@ public final class StringPattern implements Predicate<String> {
                     return false;
                 }
                 Generation held = kept;
-                @Nullable Subset to = kept.held(working, count, accepting,
-                        keeping.frozen ? Admit.NONE : Admit.WITHIN_BUDGET, checkpoint);
+                @Nullable Subset to = kept.held(working, count, accepting, !keeping.frozen,
+                        checkpoint);
                 if (to == null && !keeping.frozen) {
-                    @Nullable Generation into = keeping.into(known, kept, checkpoint);
+                    @Nullable Generation into = keeping.into(known, kept, working, count, accepting,
+                            checkpoint);
                     if (into != null) {
                         kept = into;
-                        to = kept.held(working, count, accepting, Admit.ALWAYS, checkpoint);
+                        // The walk that made the generation finds the set it has come to there;
+                        // one that went into a generation another walk made keeps it within the
+                        // budget, or keeps no more.
+                        to = into.entry != null && into.entry == keeping.entered ? into.entry
+                                : kept.held(working, count, accepting, true, checkpoint);
                         if (to == null) {
-                            // Every slot is taken, by sets other walks kept in it whatever they
-                            // took: this walk keeps no more.
                             keeping.frozen = true;
                         }
                     }
@@ -1480,34 +1496,47 @@ public final class StringPattern implements Predicate<String> {
         long read;
         private boolean changed;
         boolean frozen;
+        /** The set this walk made a generation with, kept there whatever it took, or null. */
+        @Nullable Subset entered;
 
         /**
          * The generation the walk is to keep sets in, now that {@code full} has no room for the set
-         * it has come to: the one kept now, where another walk has started it, and otherwise one
-         * started here in its place. The first time in a match the walk goes into one whatever it
-         * read; after that only where it read ten characters by steps worked out for each set it
-         * made since. Null where it does not, and it keeps no more sets for the rest of the match.
+         * it has come to, the {@code count} states first in {@code room.there}: the one kept now,
+         * where another walk has started it, and otherwise one started here in its place, holding
+         * that set beside the set a walk starts in ({@link #entered}). The first time in a match the
+         * walk goes into one whatever it read; after that only where it read ten characters by steps
+         * worked out for each set it made since. Null where it does not, and it keeps no more sets
+         * for the rest of the match.
          */
-        @Nullable Generation into(Subsets known, Generation full, @Nullable Checkpoint checkpoint) {
+        @Nullable Generation into(Subsets known, Generation full, Room room, int count,
+                                  boolean[] accepting, @Nullable Checkpoint checkpoint) {
             if (changed && read < 10 * made) {
                 frozen = true;
                 return null;
             }
-            Generation now = known.current();
-            if (now == full) {
-                ask(checkpoint);
-                now = known.restart(full);
-            }
             changed = true;
             made = 0;
             read = 0;
+            entered = null;
+            Generation now = known.current();
+            if (now != full) {
+                return now;
+            }
+            ask(checkpoint);
+            @Nullable Subset entry = null;
+            if (!Generation.same(full.start, room, count, checkpoint)) {
+                entry = new Subset(Arrays.copyOf(room.there, count),
+                        acceptsAny(accepting, room.there, count, checkpoint),
+                        hashOf(room.there, count, checkpoint), known.classes.count());
+            }
+            now = known.restart(full, entry);
+            if (entry != null && now.entry == entry) {
+                entered = entry;
+                made = 1;
+            }
             return now;
         }
     }
-
-    /** What {@link Generation#held} may do with a set not kept: nothing, keep it where the
-     *  {@link Budget} has room for it, or keep it whatever it takes. */
-    private enum Admit { NONE, WITHIN_BUDGET, ALWAYS }
 
     /** The states the first {@code count} of {@code from} lead to over {@code symbol}, each with the
      *  live states it reaches for no character, put first in {@code room.there} in a round of their
@@ -1622,8 +1651,8 @@ public final class StringPattern implements Predicate<String> {
 
         /**
          * The sets a pattern keeps, holding the one of the {@code count} states first in
-         * {@code started.there} that a walk starts in, whatever it takes. It is kept as every other
-         * set is ({@link Generation#keep}), so no set is held that is not counted. {@code accepting}
+         * {@code started.there} that a walk starts in, whatever it takes, as every generation is
+         * made ({@link Generation#Generation}), and counted beside the budget. {@code accepting}
          * is the states a walk may stop at.
          */
         static Subsets of(SymbolClasses classes, Budget budget, Room started, int count,
@@ -1633,7 +1662,7 @@ public final class StringPattern implements Predicate<String> {
             Subsets out = new Subsets(classes, budget, nothing, Arrays.copyOf(started.there, count),
                     acceptsAny(accepting, started.there, count, null),
                     hashOf(started.there, count, null));
-            out.current.set(out.generation());
+            out.current.set(out.generation(null));
             return out;
         }
 
@@ -1654,29 +1683,29 @@ public final class StringPattern implements Predicate<String> {
         }
 
         /**
-         * A new generation in place of {@code full}, holding only the set a walk starts in; or, where
-         * another walk has put one in its place first, that one. The full one is let go: a walk in
-         * it goes on in it until it ends, and it is gone once none is.
+         * A new generation in place of {@code full}, holding the set a walk starts in and
+         * {@code entry}, the set the walk making it has come to, where that is not null; or, where
+         * another walk has put one in its place first, that one, which holds nothing of
+         * {@code entry}. The full one is let go: a walk in it goes on in it until it ends, and it is
+         * gone once none is.
          */
-        Generation restart(Generation full) {
-            Generation fresh = generation();
+        Generation restart(Generation full, @Nullable Subset entry) {
+            Generation fresh = generation(entry);
             return current.compareAndSet(full, fresh) ? fresh : current.get();
         }
 
         /**
-         * A generation holding only a set of the states a walk starts in, kept whatever it takes, or
-         * the set with no state in it where there are none. Every match needs that set, so no budget
-         * leaves a pattern walking every state for want of room for it.
+         * A generation holding a set of the states a walk starts in, or the set with no state in it
+         * where there are none, and {@code entry} where it is not null, each kept whatever it takes.
+         * Every match needs the first, so no budget leaves a pattern walking every state for want of
+         * room for it.
          */
-        private Generation generation() {
+        private Generation generation(@Nullable Subset entry) {
             if (start.length == 0) {
-                return new Generation(classes, budget, nothing);
+                return new Generation(classes, budget, nothing, null);
             }
-            Subset first = new Subset(start, startAccepting, startHash, classes.count());
-            Generation out = new Generation(classes, budget, first);
-            // The first set of a generation no walk has seen, so its slot is free.
-            out.keep(out.slot(startHash), first, true);
-            return out;
+            return new Generation(classes, budget,
+                    new Subset(start, startAccepting, startHash, classes.count()), entry);
         }
     }
 
@@ -1691,13 +1720,18 @@ public final class StringPattern implements Predicate<String> {
      *
      * <p>What one generation holds is its slots, made with it, four for each set the budget keeps,
      * and the sets kept in it, each counted as it is kept, as many states and steps as its arrays
-     * hold. The sets every walk needs are kept whatever they take: the set a walk starts in, and the
-     * set each walk that went into the generation had come to ({@link Keeping#into}), at most one
-     * for each walk. Every walk needs those to go on by kept steps, so none is turned away for want
-     * of room; and they are counted apart, in {@link #needed} and {@link #beside}, and not against
-     * the budget, which bounds every other set, in {@link #count} and {@link #remembered}. Counted
-     * in the budget, a set larger than it would leave no room for any other, and a walk that went
-     * on from it to one more would be frozen.
+     * hold. Two sets are kept whatever they take, and only as the generation is made, before any
+     * walk sees it: the set a walk starts in, and the set the walk that made the generation had come
+     * to ({@link #entry}). Every walk needs the first, and the walk that filled the generation before
+     * this one needs the second to go on by kept steps, so neither is turned away for want of room;
+     * they are counted apart, in {@link #needed} and {@link #beside}, which are fixed when the
+     * generation is made, and not against the budget, which bounds every other set, in
+     * {@link #count} and {@link #remembered}. Every set kept after the generation is made is kept
+     * within the budget ({@link #keep}), whichever walk keeps it: a walk that goes into a generation
+     * another walk made keeps the set it has come to there only where the budget has room for it.
+     * So one generation holds at most the budget and those two sets, however many walks go into it.
+     * Counted in the budget, a set larger than it would leave no room for any other, and a walk that
+     * went on from it to one more would be frozen.
      */
     private static final class Generation {
 
@@ -1708,15 +1742,44 @@ public final class StringPattern implements Predicate<String> {
         private final AtomicReferenceArray<Subset> slots;
         final AtomicInteger count = new AtomicInteger();
         private final AtomicLong remembered = new AtomicLong();
-        /** The sets kept whatever they take, and the states and steps they hold, beside the budget. */
-        final AtomicInteger needed = new AtomicInteger();
-        private final AtomicLong beside = new AtomicLong();
+        /** The set the walk that made this generation had come to, kept whatever it takes, or null
+         *  where it was the set a walk starts in or no walk made it so. */
+        final @Nullable Subset entry;
+        /** The sets kept whatever they take, at most {@link #start} and {@link #entry}, and the
+         *  states and steps they hold, beside the budget: fixed as the generation is made. */
+        final int needed;
+        private final long beside;
 
-        Generation(SymbolClasses classes, Budget budget, Subset start) {
+        /**
+         * A generation holding {@code start}, unless it is the set with no state in it, and
+         * {@code entry} where it is not null, each kept whatever it takes. No walk sees it yet, so
+         * the two are put in its slots without asking another walk.
+         */
+        Generation(SymbolClasses classes, Budget budget, Subset start, @Nullable Subset entry) {
             this.classes = classes;
             this.budget = budget;
             this.start = start;
+            this.entry = entry;
             this.slots = new AtomicReferenceArray<>(Integer.highestOneBit(Math.max(budget.subsets(), 1)) * 4);
+            int kept = 0;
+            long holds = 0;
+            if (start.states.length > 0) {
+                slots.set(slot(start.hash), start);
+                kept++;
+                holds += (long) start.states.length + start.next.length;
+            }
+            if (entry != null) {
+                // At most one other slot is taken, so the probe ends within two.
+                int at = slot(entry.hash);
+                while (slots.get(at) != null) {
+                    at = (at + 1) & (slots.length() - 1);
+                }
+                slots.set(at, entry);
+                kept++;
+                holds += (long) entry.states.length + entry.next.length;
+            }
+            this.needed = kept;
+            this.beside = holds;
         }
 
         private int slot(int hash) {
@@ -1725,14 +1788,13 @@ public final class StringPattern implements Predicate<String> {
 
         /**
          * The set of the {@code count} states first in {@code room.there}, which are the ones
-         * {@code room.seen} marks with its round: the one kept where it is kept, and otherwise kept
-         * now as {@code admit} says. Null where it is not kept and is not: where {@code admit} keeps
-         * none, where the budget has no room for it and {@code admit} keeps it only within the
-         * budget, or where every slot is taken. Whether it was made here is left in
+         * {@code room.seen} marks with its round: the one kept where it is kept, and otherwise, where
+         * {@code admit}, kept now within the budget. Null where it is not kept and is not: where not
+         * {@code admit}, where the budget has no room for it, or where every slot is taken. Whether it was made here is left in
          * {@code room.made}. Its hash is summed here to look it up, and whether it accepts, of the
          * states a walk may stop at ({@code accepting}), is asked only where it is kept.
          */
-        @Nullable Subset held(Room room, int count, boolean[] accepting, Admit admit,
+        @Nullable Subset held(Room room, int count, boolean[] accepting, boolean admit,
                               @Nullable Checkpoint checkpoint) {
             room.made = false;
             int hash = hashOf(room.there, count, checkpoint);
@@ -1743,7 +1805,7 @@ public final class StringPattern implements Predicate<String> {
                 ask(checkpoint);
                 Subset held = slots.get(at);
                 if (held == null) {
-                    if (admit == Admit.NONE) {
+                    if (!admit) {
                         return null;
                     }
                     if (made == null) {
@@ -1751,7 +1813,7 @@ public final class StringPattern implements Predicate<String> {
                                 acceptsAny(accepting, room.there, count, checkpoint), hash,
                                 classes.count());
                     }
-                    if (keep(at, made, admit == Admit.ALWAYS)) {
+                    if (keep(at, made)) {
                         room.made = true;
                         return made;
                     }
@@ -1797,7 +1859,7 @@ public final class StringPattern implements Predicate<String> {
         }
 
         /** Whether {@code held} is the set {@code room} marks, asking before each state of it. */
-        private static boolean same(Subset held, Room room, int count, @Nullable Checkpoint checkpoint) {
+        static boolean same(Subset held, Room room, int count, @Nullable Checkpoint checkpoint) {
             if (held.states.length != count) {
                 return false;
             }
@@ -1812,21 +1874,12 @@ public final class StringPattern implements Predicate<String> {
 
         /**
          * Keeps {@code made} at slot {@code at} and answers whether it is kept: counted against the
-         * {@link Budget}, and not kept where the budget has no room for it; or, where
-         * {@code always}, counted beside it, in {@link #needed}, and kept whatever it takes. Never
-         * where another set was put there first. The one place a set is kept, so what is kept and
-         * what is counted are one.
+         * {@link Budget}, and not kept where the budget has no room for it, nor where another set was
+         * put there first. The one place a set is kept once the generation is made, and it keeps
+         * nothing past the budget: only making a generation does ({@link Generation#Generation}).
          */
-        private boolean keep(int at, Subset made, boolean always) {
+        private boolean keep(int at, Subset made) {
             long holds = (long) made.states.length + made.next.length;
-            if (always) {
-                if (!slots.compareAndSet(at, null, made)) {
-                    return false;
-                }
-                needed.incrementAndGet();
-                beside.addAndGet(holds);
-                return true;
-            }
             if (count.incrementAndGet() > budget.subsets()) {
                 count.decrementAndGet();
                 return false;
