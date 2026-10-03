@@ -6,6 +6,7 @@ namespace Raoh\Notation199x\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Raoh\Notation199x\Internal\Pattern\Machine;
+use Raoh\Notation199x\Internal\Utf8;
 use Raoh\Notation199x\Pattern;
 
 /**
@@ -162,11 +163,11 @@ final class MachineTest extends TestCase
             // Frozen, a set not kept is not kept, and its hash is not looked for in vain twice.
             $settle = new \ReflectionMethod(Machine::class, 'settle');
             $mode = self::constant('FROZEN');
-            $made = 0;
+            $worked = 0;
             $read = 0;
             $sets = self::kept($m);
             $none = [999_999 => true];
-            $args = [$none, &$mode, &$made, &$read, 'a', 1, false];
+            $args = [$none, &$mode, &$worked, &$read, 'a', 1, false];
             self::assertSame([-1, false], $settle->invokeArgs($m, $args));
             self::assertSame($sets, self::kept($m));
             self::assertSame(self::constant('FROZEN'), $mode);
@@ -204,10 +205,10 @@ final class MachineTest extends TestCase
         $in = -1;
         $at = 0;
         $mode = self::constant('FROZEN');
-        $made = 0;
+        $worked = 0;
         $read = 0;
         $steps = self::steps($m);
-        $args = [&$in, &$now, 'b', &$at, &$mode, &$made, &$read];
+        $args = [&$in, &$now, 'b', &$at, &$mode, &$worked, &$read];
         self::assertTrue($take->invokeArgs($m, $args));
         self::assertSame($loop, $in, 'the frozen walk did not find the kept set it came to');
         self::assertSame(1, $at);
@@ -277,6 +278,66 @@ final class MachineTest extends TestCase
             self::assertTrue($m->matches($distinct . $distinct));
             self::assertSame($steps, self::steps($m));
             self::assertSame(2, self::kept($m));
+        } finally {
+            Machine::$knownBytes = $was;
+        }
+    }
+
+    /**
+     * A walk whose new steps lead only to sets already kept, and fill the room with steps, is
+     * frozen once it fills the room the second time having read little by kept steps, as a walk
+     * that fills it with sets is: what it worked out is counted step by step, and not set by set.
+     * The y before the thousand and twenty-four characters cuts them into a class each, and every
+     * one of them leads the set a walk goes round back to itself. Counted in sets made, the walk
+     * counted nothing it worked out, was never frozen, and started the kept sets again each time it
+     * filled the room. The walk is taken here as matches() takes it, so that how it ends is seen.
+     */
+    public function testAWalkThatFillsTheRoomWithStepsIsFrozenAsOneThatFillsItWithSets(): void
+    {
+        $text = 'y(?:';
+        for ($c = 0x100; $c < 0x500; $c++) {
+            $text .= ($c > 0x100 ? '|' : '') . Utf8::encode($c);
+        }
+        $text .= ')|[\\x{100}-\\x{4FF}]*';
+        $m = self::machineOf($text);
+        self::assertTrue($m->matches(Utf8::encode(0x100) . Utf8::encode(0x101)));
+        $was = Machine::$knownBytes;
+        $bytes = self::get($m, 'bytes');
+        self::assertIsInt($bytes);
+        // Room for the sets and a few dozen steps past ASCII.
+        Machine::$knownBytes = $bytes + 4096;
+        try {
+            $seed = 11;
+            $subject = '';
+            for ($i = 0; $i < 20_000; $i++) {
+                $seed = ($seed * 1664525 + 1013904223) & 0xFFFFFFFF;
+                $subject .= Utf8::encode(0x100 + ($seed >> 22));
+            }
+            $begin = new \ReflectionMethod(Machine::class, 'begin');
+            $take = new \ReflectionMethod(Machine::class, 'take');
+            $now = [];
+            $in = $begin->invokeArgs($m, [&$now]);
+            self::assertIsInt($in);
+            $mode = self::constant('KEEPING');
+            $worked = 0;
+            $read = 0;
+            $length = strlen($subject);
+            for ($at = 0; $at < $length;) {
+                self::assertIsInt($in);
+                $next = self::get($m, 'keptNext');
+                self::assertIsArray($next);
+                $character = substr($subject, $at, 2);
+                if ($in >= 0 && is_array($next[$in]) && isset($next[$in][$character])) {
+                    $in = $next[$in][$character];
+                    $at += 2;
+                    $read++;
+                    continue;
+                }
+                $args = [&$in, &$now, $subject, &$at, &$mode, &$worked, &$read];
+                self::assertTrue($take->invokeArgs($m, $args));
+            }
+            self::assertLessThanOrEqual(3, self::kept($m));
+            self::assertSame(self::constant('FROZEN'), $mode, "worked $worked, read $read");
         } finally {
             Machine::$knownBytes = $was;
         }
