@@ -39,7 +39,7 @@ mod text;
 mod white_space;
 
 pub use case::{lowercase, lowercase_within, uppercase, uppercase_within};
-pub use normalization::{Form, normalize, normalize_within};
+pub use normalization::{Form, append_normalized, normalize, normalize_within};
 pub use pattern::{
     Matcher, NotAnImage, OwnedMatcher, Pattern, PatternBeyond, PatternLimit, PatternRead,
     PatternRefusal, PatternRefused, read_pattern,
