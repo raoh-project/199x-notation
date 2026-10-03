@@ -1,7 +1,6 @@
 package notation199x
 
 import (
-	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -215,8 +214,9 @@ func pathMachine(pattern string) *machine {
 	return read.compiled.machine
 }
 
-// largePath is a machine whose sets are as large as it, so a walk's first match gives keeping
-// them up and walks every match after it a state at a time, and what it is matched against.
+// largePath is a machine whose sets are as large as it, and what it is matched against: a match
+// comes to a new set at every character, so it soon keeps no more and walks the rest a state at
+// a time, looking each set it comes to up among those it kept.
 func largePath() (*machine, string) {
 	return pathMachine("(?:a?){49998}"), strings.Repeat("a", 100)
 }
@@ -263,36 +263,36 @@ func stepsKnown(w *walk) int {
 
 func TestEachTimedWalkGoesTheWayItIsNamed(t *testing.T) {
 	m, as := largePath()
-	alone := m.newWalk()
-	m.matchesIn(alone, as)
-	if !alone.known.off || alone.known.slots != nil || alone.known.offWork >= alone.known.wait() {
-		t.Fatal("a walk of the large machine keeps sets, or keeps them again at its next match")
+	frozen := m.newWalk()
+	m.matchesIn(frozen, as)
+	if !frozen.frozen || frozen.in != nil || frozen.known.kept*10 > len(as) {
+		t.Fatalf("a match of the large machine kept %d sets and goes on by them", frozen.known.kept)
 	}
 
 	m, subject := tenthPath()
 	w := m.newWalk()
 	m.matchesIn(w, subject)
-	made := w.known.made
-	if made*2 <= len(subject) || w.known.off {
+	made := w.made
+	if made*2 <= len(subject) || w.frozen || w.forgot {
 		t.Fatalf("a new set at %d of %d characters", made, len(subject))
 	}
 
 	steps := stepsKnown(w)
 	m.matchesIn(w, subject)
-	if w.known.made != made || stepsKnown(w) != steps {
+	if w.made != 0 || w.read != len(subject) || stepsKnown(w) != steps {
 		t.Fatal("a match over steps worked out made a set or worked a step out")
 	}
 
 	forgetSteps(w)
 	m.matchesIn(w, subject)
-	if found := stepsKnown(w); w.known.made != made || found*2 <= len(subject) || w.known.off {
-		t.Fatalf("%d sets made, and a kept set found at %d of %d characters",
-			w.known.made-made, found, len(subject))
+	if found := stepsKnown(w); w.made != 0 || found*2 <= len(subject) || w.frozen {
+		t.Fatalf("%d sets made, and a kept set found at %d of %d characters", w.made, found, len(subject))
 	}
 }
 
-// A walk without kept sets: every character moves each state.
-func BenchmarkAWalkWithoutKeptSets(b *testing.B) {
+// A match that keeps no more sets: past the few it keeps, every character moves each state, and
+// the set they come to is looked for among those kept.
+func BenchmarkAMatchThatKeepsNoMoreSets(b *testing.B) {
 	m, as := largePath()
 	w := m.newWalk()
 	m.matchesIn(w, as)
@@ -336,7 +336,8 @@ func BenchmarkAWalkThatFindsKeptSetsByTheirHash(b *testing.B) {
 
 // Which sets a walk keeps, and whether it keeps any, changes how fast it is and no answer: every
 // pattern accepts the same subjects with nothing kept, with so little kept that it is forgotten
-// every few characters, and with the room a walk is given.
+// every few characters, and with the room a walk is given. With no room, a set is kept only where
+// it is the one kept, so a match soon keeps no more and walks a state at a time.
 func TestWhatAWalkKeepsChangesNoAnswer(t *testing.T) {
 	pieces := []string{"a", "b", "é", "😀", ".", "[ab]", "[^a]", "\\w", "(?:a|b)", "(?:ab|a)", "a*", "b+", "(?:a|é)?", "[a-é]{1,3}", "(?:😀|.)*", "^", "$"}
 	letters := []rune{'a', 'b', 'é', '😀', 'c', '\n'}
@@ -393,11 +394,11 @@ func TestASetPutInInAnotherOrderIsTheSetKept(t *testing.T) {
 		}
 	}
 	put(1, 2, 3)
-	first, _ := w.known.keep(m, w)
+	first, _ := w.known.keep(m, w.now, hashOf(w.now))
 	put(3, 1, 2)
-	again, _ := w.known.keep(m, w)
-	if again != first || w.known.made != 1 {
-		t.Fatalf("{3, 1, 2} was kept apart from {1, 2, 3}: %d sets kept", w.known.made)
+	again, made := w.known.keep(m, w.now, hashOf(w.now))
+	if again != first || made || w.known.kept != 1 {
+		t.Fatalf("{3, 1, 2} was kept apart from {1, 2, 3}: %d sets kept", w.known.kept)
 	}
 }
 
@@ -409,7 +410,7 @@ func TestSetsWithTheSameHashAreToldApart(t *testing.T) {
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(3)
-	held, _ := w.known.keep(m, w)
+	held, _ := w.known.keep(m, w.now, hashOf(w.now))
 	w.now.clear()
 	w.now.add(1)
 	w.now.add(2)
@@ -437,147 +438,126 @@ func machineOf(t *testing.T, pattern string) *machine {
 	return read.compiled.machine
 }
 
-// A room that gave up keeping sets tries again once it has read what it waits for, keeps sets for
-// subjects whose sets are looked up again, and waits twice as long after a try that gives up
-// again; the answers are the same throughout. A room is kept between matches in the machine's
-// pool, so one that gave up for good would walk every later subject a state at a time.
-func TestAGivenUpRoomTriesAgainAndWaitsLongerAfterEachTryThatFails(t *testing.T) {
-	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
-	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
-	m := read.compiled.machine
-	w := m.newWalk()
-	rng := uint32(7)
-	random := func(n int) string {
-		var b strings.Builder
-		for range n {
-			rng = rng*1664525 + 1013904223
-			b.WriteByte("ab"[rng>>31])
-		}
-		return b.String()
-	}
-	check := func(subject string) {
-		t.Helper()
-		want := len(subject) >= 17 && subject[len(subject)-17] == 'a'
-		if got := m.matchesIn(w, subject); got != want {
-			t.Fatalf("%q... is %v, not %v", subject[:min(20, len(subject))], got, want)
-		}
-	}
-	for !w.known.off {
-		check(random(20_000))
-	}
-	if w.known.wait() != retryWork {
-		t.Fatalf("the first give-up waits %d, not %d", w.known.wait(), retryWork)
-	}
-	// Waited for, so that the test walks less than the constant says. A walk of 800 bytes walks
-	// 801, as retryWork counts, and what has been walked is asked before a walk.
-	w.known.offFor = 1000
-	// What the walk that gave up walked after is counted too; the count starts from nought here.
-	w.known.offWork = 0
-	check(strings.Repeat("ab", 400))
-	check(strings.Repeat("ab", 400))
-	if !w.known.off {
-		t.Fatal("it tried again before it walked what it waits for")
-	}
-	check(strings.Repeat("ab", 400))
-	if w.known.off {
-		t.Fatal("it did not try again once it had")
-	}
-	for !w.known.off {
-		check(random(20_000))
-	}
-	if w.known.wait() != 2000 {
-		t.Fatalf("a try that gave up again waits %d, not 2000", w.known.wait())
-	}
-	w.known.offWork = w.known.wait()
-	for range 1000 {
-		check(strings.Repeat("ab", 20))
-	}
-	if w.known.off {
-		t.Fatal("subjects whose sets are looked up again made it give up")
+// tenthOf17 is the machine whose seventeenth character from the end is an a, and what it answers
+// for a subject. Its deterministic machine has more sets than a walk keeps.
+func tenthOf17() (*machine, func(string) bool) {
+	return pathMachine("(?:a|b)*a(?:a|b){16}"), func(subject string) bool {
+		return len(subject) >= 17 && subject[len(subject)-17] == 'a'
 	}
 }
 
-// What a walk without kept sets walks is what counts toward trying again: an empty subject counts
-// the set it starts in, so empty subjects alone lead to a try, and a long subject turned away at
-// once counts the little that was walked of it, not its length.
-func TestWhatCountsTowardTryingAgainIsWhatWasWalked(t *testing.T) {
-	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
-	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
-	m := read.compiled.machine
+// randomAB is n characters of a and b at random, the same for the same seed.
+func randomAB(n int, seed uint32) string {
+	var b strings.Builder
+	for range n {
+		seed = seed*1664525 + 1013904223
+		b.WriteByte("ab"[seed>>31])
+	}
+	return b.String()
+}
+
+// A match that comes to a new set at nearly every character fills the kept sets, forgets them,
+// fills them again and keeps no more; the match after it, of a subject whose sets are few, keeps
+// sets again from its first character, and the one after that reads every character by steps
+// already worked out. Before, the first match left the walk keeping no sets for the next 32 MiB
+// it walked, and a match of 800 bytes after it took 150 times as long as on a new walk.
+func TestAMatchThatComesToNewSetsSlowsNoMatchAfterIt(t *testing.T) {
+	m, want := tenthOf17()
 	w := m.newWalk()
-	rng := uint32(7)
-	random := func(n int) string {
-		var b strings.Builder
-		for range n {
-			rng = rng*1664525 + 1013904223
-			b.WriteByte("ab"[rng>>31])
-		}
-		return b.String()
+	hostile := randomAB(200_000, 7)
+	if got := m.matchesIn(w, hostile); got != want(hostile) {
+		t.Fatalf("the random subject is %v", got)
 	}
-	for !w.known.off {
-		m.matchesIn(w, random(20_000))
+	if !w.forgot || !w.frozen {
+		t.Fatalf("a match of new sets forgot %v and kept no more %v", w.forgot, w.frozen)
 	}
-	w.known.offFor = 100
-	w.known.offWork = 0
-	for range 100 {
-		if !w.known.off {
-			t.Fatal("empty subjects led to a try too soon")
-		}
-		if m.matchesIn(w, "") {
-			t.Fatal("the empty subject is accepted")
-		}
+	friendly := strings.Repeat("ab", 400)
+	if got := m.matchesIn(w, friendly); got != want(friendly) {
+		t.Fatalf("%q... is %v", friendly[:20], got)
 	}
-	m.matchesIn(w, "")
-	if w.known.off {
-		t.Fatal("empty subjects alone did not lead to a try")
+	if w.frozen || w.made == 0 {
+		t.Fatalf("the next match kept no more %v, and made %d sets", w.frozen, w.made)
 	}
-	for !w.known.off {
-		m.matchesIn(w, random(20_000))
-	}
-	before := w.known.offWork
-	if m.matchesIn(w, "c"+strings.Repeat("a", 100_000)) {
-		t.Fatal("a subject with a c is accepted")
-	}
-	if counted := w.known.offWork - before; counted > 3 {
-		t.Fatalf("a subject turned away at once counted %d", counted)
+	if got := m.matchesIn(w, friendly); got != want(friendly) || w.made != 0 || w.read != len(friendly) || w.forgot {
+		t.Fatalf("the match after it made %d sets and read %d of %d characters by kept steps", w.made, w.read, len(friendly))
 	}
 }
 
-// A count of what is read is held at the most an int holds, so that on a 32-bit platform it does
-// not go round to a negative that would make a room give up keeping sets it uses.
-func TestCountsThatOnlyGrowAreHeldAtTheMostAnIntHolds(t *testing.T) {
-	if got := grown(math.MaxInt-1, 5); got != math.MaxInt {
-		t.Fatalf("grown(MaxInt-1, 5) is %d", got)
+// A match that keeps no more sets keeps nothing more, sets or steps between them, however long it
+// goes on: what it holds is what it held when it stopped keeping them.
+func TestAMatchThatKeepsNoMoreSetsKeepsNothingMore(t *testing.T) {
+	m, want := tenthOf17()
+	w := m.newWalk()
+	hostile := randomAB(200_000, 7)
+	m.matchesIn(w, hostile)
+	if !w.frozen {
+		t.Fatal("the random subject did not make the match keep no more sets")
 	}
-	if got := grown(2, 3); got != 5 {
-		t.Fatalf("grown(2, 3) is %d", got)
+	kept, bytes, steps := w.known.kept, w.known.bytes, stepsKnown(w)
+	for _, r := range randomAB(50_000, 11) {
+		m.take(w, r)
 	}
-	var k knownSets
-	k.offFor, k.retrying = math.MaxInt/2+1, true
-	k.giveUp()
-	if k.offFor != math.MaxInt {
-		t.Fatalf("a wait doubled past the most an int holds is %d", k.offFor)
+	if w.known.kept != kept || w.known.bytes != bytes || stepsKnown(w) != steps {
+		t.Fatalf("%d sets, %d bytes and %d steps became %d, %d and %d", kept, bytes, steps,
+			w.known.kept, w.known.bytes, stepsKnown(w))
+	}
+	if got := m.matchesIn(w, hostile); got != want(hostile) {
+		t.Fatalf("the random subject is %v again", got)
 	}
 }
 
-// A walk that gives up keeping sets part of the way through counts what it walks after, as one
-// that had given up before it does: the wait before trying again bounds every walk without kept
-// sets, wherever it began.
-func TestAWalkThatGivesUpOnItsWayCountsWhatItWalksAfter(t *testing.T) {
-	read := ReadPattern("(?:a|b)*a(?:a|b){16}").(*Pattern)
-	read.compiled.once.Do(func() { read.compiled.machine = build(read.compiled.meaning) })
-	m := read.compiled.machine
+// A match that keeps no more sets goes on by them again wherever a step a state at a time comes to
+// one it keeps: from the states of a kept set, walked a state at a time, a step whose set is kept
+// leads back to that set.
+func TestAMatchThatKeepsNoMoreSetsComesBackToThoseItKeeps(t *testing.T) {
+	m, _ := tenthOf17()
 	w := m.newWalk()
-	rng := uint32(7)
-	for !w.known.off {
-		var b strings.Builder
-		for range 20_000 {
-			rng = rng*1664525 + 1013904223
-			b.WriteByte("ab"[rng>>31])
-		}
-		m.matchesIn(w, b.String())
+	m.matchesIn(w, randomAB(200_000, 7))
+	if !w.frozen {
+		t.Fatal("the random subject did not make the match keep no more sets")
 	}
-	if w.known.offWork <= 1000 {
-		t.Fatalf("the walk that gave up counted %d of what it walked after", w.known.offWork)
+	for _, from := range w.known.slots {
+		if from == nil {
+			continue
+		}
+		for c, to := range from.ascii {
+			if to == nil {
+				continue
+			}
+			w.in = nil
+			w.now.clear()
+			for _, q := range from.states {
+				w.now.add(q)
+			}
+			m.take(w, rune(c))
+			if w.in != to {
+				t.Fatalf("%q from a kept set walked a state at a time did not come back to the set kept", rune(c))
+			}
+			return
+		}
+	}
+	t.Fatal("no step between kept sets was found")
+}
+
+// A set that alone takes more room than the kept sets are given is kept, as the only one: a match
+// that keeps coming back to it reads by its steps, and does not walk the whole machine at every
+// character.
+func TestASetLargerThanTheRoomIsKeptAlone(t *testing.T) {
+	defer func(was int) { knownBytes = was }(knownBytes)
+	knownBytes = 1
+	m := pathMachine("(?:x*){500}")
+	w := m.newWalk()
+	subject := strings.Repeat("x", 1000)
+	if !m.matchesIn(w, subject) {
+		t.Fatal("x* repeated does not accept x")
+	}
+	if w.frozen || w.in == nil || w.known.kept != 1 {
+		t.Fatalf("the set was not kept alone: %d kept, keeping no more %v", w.known.kept, w.frozen)
+	}
+	// The set it starts in and the one x leads to are not kept together, so the next match keeps
+	// each again, and reads the rest by the step from the second back to itself.
+	m.matchesIn(w, subject)
+	if w.frozen || w.read < len(subject)-2 {
+		t.Fatalf("the next match read %d of %d by kept steps", w.read, len(subject))
 	}
 }
