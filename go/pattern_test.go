@@ -841,6 +841,33 @@ func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
 	}
 }
 
+// Where the anchors come to nothing, a run left alone is what the sequence means as it was read,
+// and putting it together makes nothing for its parts; beside other parts, the sequence is one
+// list of as many parts as it comes to.
+func TestARunTheAnchorsLeaveIsTakenAsItIs(t *testing.T) {
+	var walked [2]float64
+	for at, length := range []int{1_000, 100_000} {
+		anchored := (&patternReader{text: "^" + strings.Repeat("e", length) + "$"}).pattern()
+		if anchored.kind != inTurnWritten || len(anchored.parts) != 3 || anchored.parts[1].kind != runWritten {
+			t.Fatalf("^e...$ was read as %d parts", len(anchored.parts))
+		}
+		if made := placeAnchors(&anchored); made != anchored.parts[1].meaning {
+			t.Fatalf("^e...$ means something other than the run it was read as")
+		}
+		walked[at] = testing.AllocsPerRun(10, func() { placeAnchors(&anchored) })
+	}
+	// What is left is the walk's own, three parts long however long the run is.
+	if walked[0] != walked[1] {
+		t.Fatalf("placing the anchors of ^e...$ made %v allocations, and %v for a run a hundred times as long",
+			walked[0], walked[1])
+	}
+	mixed := (&patternReader{text: "(?:^ab|^c)" + strings.Repeat("e", 1_000) + "$"}).pattern()
+	made := placeAnchors(&mixed)
+	if made.kind != inTurnMeaning || len(made.parts) != 1_001 || cap(made.parts) != 1_001 {
+		t.Fatalf("(?:^ab|^c)e...$ means a sequence of %d parts held in %d", len(made.parts), cap(made.parts))
+	}
+}
+
 // Reading a character makes nothing of its own: it is a pointer in the run of the sequence it is
 // in, and an ASCII character means what every one of it means. So reading a
 // literal ten times as long makes no more than a few more slices.

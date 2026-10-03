@@ -200,9 +200,10 @@ func meaningsOf(ws []written) []*meaning {
 }
 
 // inTurnMeaningOf is parts one after another, with every part that is nothing left out: no part
-// is nothing, nothing alone, and one part itself.
+// is nothing, nothing alone, and one part itself. made is the sequence's own from here: the parts
+// kept are moved down in it, and it is what the sequence holds.
 func inTurnMeaningOf(made []*meaning) *meaning {
-	parts := make([]*meaning, 0, len(made))
+	parts := made[:0]
 	for _, one := range made {
 		if one.kind != nothingMeaning {
 			parts = append(parts, one)
