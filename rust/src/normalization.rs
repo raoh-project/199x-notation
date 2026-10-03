@@ -77,6 +77,70 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
     (read <= longest).then(|| text.to_string())
 }
 
+/// `next` appended to `text`, and the two in `form`, where each already is: the text [`normalize`]
+/// answers for the two joined, worked out from where they meet.
+///
+/// Normalization is not closed under joining: a mark at the start of `next` may be ordered before
+/// one at the end of `text`, or compose with a starter there. What joining can change is only
+/// where the two meet, from the last starter of `text` to the first code point of `next` that
+/// nothing before it reaches: a starter whose decomposition begins with a starter, and in a
+/// composing form one where neither it nor that first member composes with a starter before it.
+/// The first member is asked as well, because a composite of a composing form may begin with
+/// what composes backwards: `U+16123` is `U+1611E U+1611F`, and `U+1611E` composes with a
+/// `U+1611E` before it. Only that is normalized again, and the rest of either is copied, so a caller that
+/// builds a text a piece at a time spends what copying the pieces does and not what normalizing
+/// all of them again for each piece would.
+///
+/// Where `text` or `next` is not in `form`, what `text` becomes is in no form this promises.
+pub fn append_normalized(form: Form, text: &mut String, next: &str) {
+    let reach = next
+        .char_indices()
+        .find(|&(_, c)| out_of_reach(form, c))
+        .map_or(next.len(), |(at, _)| at);
+    if reach == 0 {
+        text.push_str(next);
+        return;
+    }
+    let from = text
+        .char_indices()
+        .rev()
+        .find(|&(_, c)| combining_class(c) == 0)
+        .map_or(0, |(at, _)| at);
+    let mut seam = text.split_off(from);
+    seam.push_str(&next[..reach]);
+    text.push_str(&normalize(form, &seam));
+    text.push_str(&next[reach..]);
+}
+
+/// Whether nothing before `c` in a text in `form` is changed by what comes after `c`, nor `c` by
+/// what comes before it. See [`append_normalized`].
+fn out_of_reach(form: Form, c: char) -> bool {
+    let head = canonical_head(c);
+    combining_class(c) == 0
+        && combining_class(head) == 0
+        && !(form.composes() && (composes_back_into(c) || composes_back_into(head)))
+}
+
+/// The first code point of `c`'s full canonical decomposition, which is `c` where it has none.
+fn canonical_head(c: char) -> char {
+    if let Some([Some(leading), ..]) = decompose_hangul(c) {
+        return leading;
+    }
+    match mapped(CANONICAL, c) {
+        Some(mapping) => canonical_head(mapping[0]),
+        None => c,
+    }
+}
+
+/// Whether a starter before `c` may compose with it: `c` is the second of a pair
+/// [`COMPOSITIONS`] holds, or a Hangul vowel or trailing consonant.
+fn composes_back_into(c: char) -> bool {
+    let c32 = u32::from(c);
+    (V_BASE..V_BASE + V_COUNT).contains(&c32)
+        || (T_BASE + 1..T_BASE + T_COUNT).contains(&c32)
+        || SECONDS.binary_search(&c).is_ok()
+}
+
 /// [`normalize_within`] worked out by the algorithm from byte `from` of `text`, taking the text
 /// before it, `kept` scalar values long, as it is.
 ///
@@ -344,7 +408,29 @@ fn compose(starter: char, c: char) -> Option<char> {
 /// starter, the rest of `Full_Composition_Exclusion`, are read off [`CANONICAL`] and
 /// [`COMBINING_CLASSES`] here, so decomposition and composition cannot disagree. Worked out when the
 /// crate is compiled, from the generated tables.
-static COMPOSITIONS: [(char, char, char); composition_count()] = compositions();
+static COMPOSITIONS: [(char, char, char); composition_count()] = COMPOSITIONS_AT_COMPILE;
+
+/// The second member of every pair in [`COMPOSITIONS`], sorted, a member as often as it is one.
+static SECONDS: [char; composition_count()] = seconds();
+
+const fn seconds() -> [char; composition_count()] {
+    let mut seconds = ['\0'; composition_count()];
+    let mut n = 0;
+    while n < COMPOSITIONS_AT_COMPILE.len() {
+        let second = COMPOSITIONS_AT_COMPILE[n].1;
+        let mut j = n;
+        while j > 0 && seconds[j - 1] as u32 > second as u32 {
+            seconds[j] = seconds[j - 1];
+            j -= 1;
+        }
+        seconds[j] = second;
+        n += 1;
+    }
+    seconds
+}
+
+/// [`COMPOSITIONS`] as a constant, which a constant can be worked out from where a static cannot.
+const COMPOSITIONS_AT_COMPILE: [(char, char, char); composition_count()] = compositions();
 
 const fn composes_back(composite: char, mapping: &[char]) -> bool {
     if mapping.len() != 2 || const_combining_class(mapping[0]) != 0 {
