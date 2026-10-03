@@ -115,6 +115,20 @@ pub fn append_normalized(form: Form, text: &mut String, next: &str) {
 /// Whether nothing before `c` in a text in `form` is changed by what comes after `c`, nor `c` by
 /// what comes before it. See [`append_normalized`].
 fn out_of_reach(form: Form, c: char) -> bool {
+    // Below U+0300 no code point is a mark, the second of a pair, or decomposes to either, which a
+    // test holds of every one of them; most of what is joined starts there.
+    if c < FIRST_IN_REACH {
+        return true;
+    }
+    out_of_reach_by_the_tables(form, c)
+}
+
+/// Every code point below this is out of reach in every form, as [`out_of_reach_by_the_tables`]
+/// answers.
+const FIRST_IN_REACH: char = '\u{0300}';
+
+/// [`out_of_reach`] answered from the tables alone.
+fn out_of_reach_by_the_tables(form: Form, c: char) -> bool {
     let head = canonical_head(c);
     combining_class(c) == 0
         && combining_class(head) == 0
@@ -501,6 +515,16 @@ const fn compositions() -> [(char, char, char); composition_count()] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What [`out_of_reach`] answers without asking the tables is what the tables answer.
+    #[test]
+    fn every_code_point_below_the_first_in_reach_is_out_of_reach() {
+        for c in '\0'..FIRST_IN_REACH {
+            for form in [Form::Nfc, Form::Nfd, Form::Nfkc, Form::Nfkd] {
+                assert!(out_of_reach_by_the_tables(form, c), "{c:?} in {form:?}");
+            }
+        }
+    }
 
     /// Runs of every length from short to long, of marks of several classes: put in order by
     /// insertion or by counting, they are in the order a stable sort by class puts them in.
