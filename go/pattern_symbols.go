@@ -1,6 +1,9 @@
 package notation199x
 
-import "slices"
+import (
+	"slices"
+	"unicode/utf8"
+)
 
 // symbols is a set of the characters a string is made of: Unicode scalar values, every code point
 // but the surrogates.
@@ -51,7 +54,15 @@ var (
 )
 
 // one is the set of r alone, a scalar value.
-func one(r rune) symbols { return symbols{{r, r}} }
+//
+// One ASCII character is the set its shared meaning holds (asciiLiterals): nothing writes to a set
+// once it is made.
+func one(r rune) symbols {
+	if r >= 0 && r < utf8.RuneSelf {
+		return asciiLiterals[r].held
+	}
+	return symbols{{r, r}}
+}
 
 // between is every scalar value from first to last, both ends in it, the surrogates left out.
 // Both ends are scalar values, and first is not above last.

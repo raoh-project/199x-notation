@@ -43,7 +43,7 @@ func readPattern(text string) (read PatternRead) {
 	w := r.pattern()
 	// Every anchor has to come to something, and what it comes to is settled by where it stands,
 	// which is known now that the whole of the pattern is.
-	m := placeAnchors(w)
+	m := placeAnchors(&w)
 	if m == nil {
 		return PatternRefused{Why: AnAnchorThisCannotPlace, From: 0, Construct: text}
 	}
@@ -53,7 +53,7 @@ func readPattern(text string) (read PatternRead) {
 	}
 	// Counted on what was written, where an anchor is one state whatever it came to, so the count
 	// is never below the states of the machine the meaning builds.
-	if writtenStates(w) > int64(MachineStates.Most()) {
+	if writtenStates(&w) > int64(MachineStates.Most()) {
 		return PatternBeyond{Limit: MachineStates, From: 0, Construct: text}
 	}
 	return &Pattern{compiled: &compiled{meaning: m}}
@@ -61,35 +61,83 @@ func readPattern(text string) (read PatternRead) {
 
 // open is a choice being read, in a group or at the top: the arms read so far, and the parts of
 // the one being read.
+//
+// The parts read since the last that holds an anchor hold none, and are held in run as what they
+// mean, with what they are together: a character read is a pointer to its meaning and nothing
+// else. Where a part holding an anchor comes, they go into parts as one (flush), so the parts of a
+// sequence are the ones holding an anchor and the runs between them.
 type open struct {
-	arms, parts []*written
+	arms, parts []written
+	run         []*meaning
+	// runFacts is what the run is as a sequence, and every whether each of its parts must take a
+	// symbol; runStates the states they come to together.
+	runFacts  facts
+	runStates int64
 }
 
-// arm is the arm being read: an arm of one part is that part, and an arm of none is nothing.
-func (o *open) arm() *written {
-	switch len(o.parts) {
-	case 0:
-		return meant(nothing)
-	case 1:
-		return o.parts[0]
-	default:
-		return &written{kind: inTurnWritten, parts: o.parts}
+// arm is the arm being read: an arm of one part is that part, and an arm of none is nothing. One
+// with no part holding an anchor is what its run means.
+func (o *open) arm() written {
+	if len(o.parts) == 0 {
+		switch len(o.run) {
+		case 0:
+			return meant(nothing)
+		case 1:
+			return o.runPart()
+		default:
+			return written{kind: meantWritten, meaning: &meaning{kind: inTurnMeaning, parts: o.run},
+				facts: o.runFacts, states: o.runStates}
+		}
 	}
+	o.flush()
+	if len(o.parts) == 1 {
+		return o.parts[0]
+	}
+	return inTurnOf(o.parts)
+}
+
+// runPart is the one part the run holds.
+func (o *open) runPart() written {
+	return written{kind: meantWritten, meaning: o.run[0], facts: o.runFacts, states: o.runStates}
+}
+
+// flush puts the run into the parts, as the one part it is or as a runWritten, and starts another.
+func (o *open) flush() {
+	switch len(o.run) {
+	case 0:
+		return
+	case 1:
+		o.parts = appended(o.parts, o.runPart())
+	default:
+		o.parts = appended(o.parts, written{kind: runWritten,
+			meaning: &meaning{kind: inTurnMeaning, parts: o.run}, facts: o.runFacts, states: o.runStates})
+	}
+	o.run = nil
+	o.runFacts = facts{}
+	o.runStates = 0
+}
+
+// next starts the next arm, the one before it having been taken.
+func (o *open) next() {
+	o.parts = nil
+	o.run = nil
+	o.runFacts = facts{}
+	o.runStates = 0
 }
 
 // choice is the choice: a choice of one arm is that arm.
-func (o *open) choice() *written {
-	o.arms = append(o.arms, o.arm())
+func (o *open) choice() written {
+	o.arms = appended(o.arms, o.arm())
 	if len(o.arms) == 1 {
 		return o.arms[0]
 	}
-	return &written{kind: eitherOfWritten, parts: o.arms}
+	return eitherOfOf(o.arms)
 }
 
 // pattern is the whole text, as what it is written as. A choice is read with a stack of the
 // choices open around it, so a group is a push and its closing bracket a pop, and nothing here
 // recurses.
-func (r *patternReader) pattern() *written {
+func (r *patternReader) pattern() written {
 	var around []*open
 	reading := &open{}
 	for {
@@ -106,8 +154,8 @@ func (r *patternReader) pattern() *written {
 		}
 		if r.peek() == '|' {
 			r.take()
-			reading.arms = append(reading.arms, reading.arm())
-			reading.parts = nil
+			reading.arms = appended(reading.arms, reading.arm())
+			reading.next()
 			continue
 		}
 		choice := reading.choice()
@@ -133,11 +181,35 @@ func (r *patternReader) pattern() *written {
 // part puts w at the end of the arm being read. A group of nothing is nothing, and is left out so
 // that one written pattern has one tree. An anchor is not one of those: where it stands decides
 // what it comes to.
-func (o *open) part(w *written) {
+func (o *open) part(w written) {
 	if w.kind == meantWritten && w.meaning.kind == nothingMeaning {
 		return
 	}
-	o.parts = append(o.parts, w)
+	if w.facts.holds {
+		o.flush()
+		o.parts = appended(o.parts, w)
+		return
+	}
+	// A part holding no anchor is a meantWritten as it is made, and joins the run as a sequence
+	// part does ([inTurnOf]); every is held only while each part so far must take a symbol.
+	first := len(o.run) == 0
+	o.run = appended(o.run, w.meaning)
+	o.runFacts.may = o.runFacts.may || w.facts.may
+	o.runFacts.must = o.runFacts.must || w.facts.must
+	o.runFacts.every = (first || o.runFacts.every) && w.facts.must
+	o.runStates = plusStates(o.runStates, w.states)
+}
+
+// appended is s with v after it. A slice is made twice as large each time it fills, so that a
+// sequence or a choice as long as the text is copied about once over as it grows: append doubles
+// a short slice too, and grows a long one by a quarter.
+func appended[T any](s []T, v T) []T {
+	if len(s) == cap(s) && cap(s) >= 256 {
+		grown := make([]T, len(s), 2*cap(s))
+		copy(grown, s)
+		s = grown
+	}
+	return append(s, v)
 }
 
 // opened reads a group's opening, plain or (?:, which are the two the grammar has.
@@ -161,7 +233,7 @@ func (r *patternReader) opened() {
 }
 
 // quantified is one with the count written after it, if any.
-func (r *patternReader) quantified(one *written) *written {
+func (r *patternReader) quantified(one written) written {
 	var least, most int
 	r.construct = r.at
 	switch r.peek() {
@@ -208,11 +280,11 @@ func (r *patternReader) quantified(one *written) *written {
 		r.take()
 		r.refuse(APossessiveRepetition)
 	}
-	return &written{kind: repeatedWritten, parts: []*written{one}, least: least, most: most}
+	return repeatedOf(one, least, most)
 }
 
 // atom is one thing written, other than a group.
-func (r *patternReader) atom() *written {
+func (r *patternReader) atom() written {
 	switch r.peek() {
 	case '[':
 		r.take()
@@ -229,7 +301,7 @@ func (r *patternReader) atom() *written {
 	case '^', '$':
 		end := r.peek() == '$'
 		r.take()
-		return &written{kind: anchorWritten, end: end}
+		return anchorOf(end)
 	case '{':
 		// A brace that begins no count. Read as an ordinary character it would be a pattern
 		// meaning one thing here and a count wherever a digit followed it.
@@ -241,10 +313,15 @@ func (r *patternReader) atom() *written {
 	case endOfText:
 		r.refuse(SomethingUnclosed)
 	}
-	return symbolsWritten(one(r.literal()))
+	return meant(literalMeaning(r.literal()))
 }
 
-func symbolsWritten(held symbols) *written {
+// symbolsWritten is held as what it means. One ASCII character, however written, as \| or [a] is,
+// means what it means written as itself.
+func symbolsWritten(held symbols) written {
+	if len(held) == 1 && held[0].first == held[0].last && held[0].first < utf8.RuneSelf {
+		return meant(asciiLiterals[held[0].first])
+	}
 	return meant(&meaning{kind: symbolsMeaning, held: held})
 }
 

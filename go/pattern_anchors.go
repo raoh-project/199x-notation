@@ -11,10 +11,13 @@ package notation199x
 // thing the shape says.
 //
 // The reader asks this of text nested as deeply as it is long, before any limit says it is too
-// deep, because whether an anchor can be placed is part of whether the text is a pattern. So the
-// tree is walked with stacks of its own: once from the leaves up, for what each part may and must
-// take and whether it holds an anchor, and once from the root down, for where each part stands
-// and what it comes to.
+// deep, because whether an anchor can be placed is part of whether the text is a pattern. What
+// each part may and must take and whether it holds an anchor are worked out as the part is read
+// (written.facts), and a part that holds none is read as what it means, the parts of a sequence
+// between two that hold one as one part (runWritten); so what is left is walked once from the root
+// down, with a stack of its own, for where each part holding an anchor and each run beside one
+// stands, and what it comes to. A pattern with no anchor is its meaning already, and is not
+// walked.
 
 // where is whether an anchor is at the end it is asking about, as far as the shape says.
 type where uint8
@@ -27,9 +30,11 @@ const (
 
 // facts is what a part is, as far as the anchors around it ask: whether it accepts any string of
 // one symbol or more, whether every string it accepts has a symbol in it, and whether it holds an
-// anchor.
+// anchor. For a runWritten, every is whether each of the parts it stands for must take a symbol,
+// which is what an anchor beside them asks of them one at a time (sidesOf); must is whether any
+// does, as for any sequence.
 type facts struct {
-	may, must, holds bool
+	may, must, holds, every bool
 }
 
 // placement is a part to place, standing where atStart and atEnd say, or, where together, one
@@ -43,7 +48,9 @@ type placement struct {
 // placeAnchors is the meaning of w with every anchor read as what it comes to, or nil where one
 // cannot be settled.
 func placeAnchors(w *written) *meaning {
-	known := factsOf(w)
+	if w.kind == meantWritten {
+		return w.meaning
+	}
 	tasks := []placement{{w: w, atStart: whereYes, atEnd: whereYes}}
 	var results []*meaning
 	for len(tasks) > 0 {
@@ -54,7 +61,7 @@ func placeAnchors(w *written) *meaning {
 			continue
 		}
 		switch w := task.w; w.kind {
-		case meantWritten:
+		case meantWritten, runWritten:
 			results = append(results, w.meaning)
 		case anchorWritten:
 			at := task.atStart
@@ -70,22 +77,22 @@ func placeAnchors(w *written) *meaning {
 			// Every arm of a choice begins where the choice begins and ends where it ends.
 			tasks = append(tasks, placement{w: w, atStart: task.atStart, atEnd: task.atEnd, together: true})
 			for at := len(w.parts) - 1; at >= 0; at-- {
-				tasks = append(tasks, placement{w: w.parts[at], atStart: task.atStart, atEnd: task.atEnd})
+				tasks = append(tasks, placement{w: &w.parts[at], atStart: task.atStart, atEnd: task.atEnd})
 			}
 		case inTurnWritten:
 			tasks = append(tasks, placement{w: w, atStart: task.atStart, atEnd: task.atEnd, together: true})
-			sides := sidesOf(w, known, task.atStart, task.atEnd)
+			sides := sidesOf(w, task.atStart, task.atEnd)
 			for at := len(w.parts) - 1; at >= 0; at-- {
-				tasks = append(tasks, placement{w: w.parts[at], atStart: sides[at][0], atEnd: sides[at][1]})
+				tasks = append(tasks, placement{w: &w.parts[at], atStart: sides[at][0], atEnd: sides[at][1]})
 			}
 		case repeatedWritten:
 			switch {
-			case !known[w.parts[0]].holds:
+			case !w.parts[0].facts.holds:
 				tasks = append(tasks, placement{w: w, atStart: task.atStart, atEnd: task.atEnd, together: true})
-				tasks = append(tasks, placement{w: w.parts[0], atStart: task.atStart, atEnd: task.atEnd})
+				tasks = append(tasks, placement{w: &w.parts[0], atStart: task.atStart, atEnd: task.atEnd})
 			case w.least == 1 && w.most == 1:
 				// One copy is the thing itself and stands where the repetition stands.
-				tasks = append(tasks, placement{w: w.parts[0], atStart: task.atStart, atEnd: task.atEnd})
+				tasks = append(tasks, placement{w: &w.parts[0], atStart: task.atStart, atEnd: task.atEnd})
 			default:
 				// Any other count leaves how many copies come before the anchor to the string.
 				return nil
@@ -128,23 +135,18 @@ func putTogether(w *written, results []*meaning) []*meaning {
 		return append(results[:cut], &meaning{kind: eitherOfMeaning, parts: arms})
 	case inTurnWritten:
 		cut := len(results) - len(w.parts)
-		// An anchor that asks for nothing leaves nothing in the sequence, so ^abc$ means what abc
-		// means and is the same tree.
-		var parts []*meaning
-		for _, made := range results[cut:] {
-			if made.kind != nothingMeaning {
-				parts = append(parts, made)
+		// A run is the parts it stands for, put in the sequence one by one, so that a sequence
+		// means what it would with each of them a part of its own. An anchor that asks for nothing
+		// leaves nothing in the sequence, so ^abc$ means what abc means and is the same tree.
+		flat := make([]*meaning, 0, len(w.parts))
+		for at, made := range results[cut:] {
+			if w.parts[at].kind == runWritten {
+				flat = append(flat, made.parts...)
+			} else {
+				flat = append(flat, made)
 			}
 		}
-		results = results[:cut]
-		switch len(parts) {
-		case 0:
-			return append(results, nothing)
-		case 1:
-			return append(results, parts[0])
-		default:
-			return append(results, &meaning{kind: inTurnMeaning, parts: parts})
-		}
+		return append(results[:cut], inTurnMeaningOf(flat))
 	case repeatedWritten:
 		last := len(results) - 1
 		results[last] = &meaning{kind: repeatedMeaning, parts: []*meaning{results[last]}, least: w.least, most: w.most}
@@ -160,21 +162,21 @@ func putTogether(w *written, results []*meaning) []*meaning {
 // before it takes a symbol and the sequence is there, and not there where everything before it
 // must; the same for the end. What stands before each part and after it is gathered once from
 // each end, so that a literal written out a symbol at a time does not cost its length squared.
-func sidesOf(w *written, known map[*written]facts, atStart, atEnd where) [][2]where {
+func sidesOf(w *written, atStart, atEnd where) [][2]where {
 	count := len(w.parts)
 	mayBefore := make([]bool, count+1)
 	mustBefore := make([]bool, count+1)
 	mustBefore[0] = true
 	for at, part := range w.parts {
-		mayBefore[at+1] = mayBefore[at] || known[part].may
-		mustBefore[at+1] = mustBefore[at] && known[part].must
+		mayBefore[at+1] = mayBefore[at] || part.facts.may
+		mustBefore[at+1] = mustBefore[at] && mustEach(&part)
 	}
 	mayAfter := make([]bool, count+1)
 	mustAfter := make([]bool, count+1)
 	mustAfter[count] = true
 	for at := count - 1; at >= 0; at-- {
-		mayAfter[at] = mayAfter[at+1] || known[w.parts[at]].may
-		mustAfter[at] = mustAfter[at+1] && known[w.parts[at]].must
+		mayAfter[at] = mayAfter[at+1] || w.parts[at].facts.may
+		mustAfter[at] = mustAfter[at+1] && mustEach(&w.parts[at])
 	}
 	out := make([][2]where, count)
 	for at := range out {
@@ -184,6 +186,15 @@ func sidesOf(w *written, known map[*written]facts, atStart, atEnd where) [][2]wh
 		}
 	}
 	return out
+}
+
+// mustEach is whether every part w stands for must take a symbol: w itself, or for a run each of
+// the parts it holds.
+func mustEach(w *written) bool {
+	if w.kind == runWritten {
+		return w.facts.every
+	}
+	return w.facts.must
 }
 
 // beyond is where a part stands, given what is on that side of it and where they all stand
@@ -198,118 +209,5 @@ func beyond(anyTakes, allTake bool, outer where) where {
 		return whereNo
 	default:
 		return whereUnsettled
-	}
-}
-
-// factsOf is the facts of every part of w, worked out from the leaves up. A part is pushed once to
-// have its parts worked out and once more, below them, to be worked out from theirs.
-func factsOf(w *written) map[*written]facts {
-	known := make(map[*written]facts)
-	type pending struct {
-		w         *written
-		partsDone bool
-	}
-	stack := []pending{{w: w}}
-	for len(stack) > 0 {
-		top := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if !top.partsDone && len(top.w.parts) > 0 {
-			stack = append(stack, pending{w: top.w, partsDone: true})
-			for _, part := range top.w.parts {
-				stack = append(stack, pending{w: part})
-			}
-			continue
-		}
-		known[top.w] = partFacts(top.w, known)
-	}
-	return known
-}
-
-// partFacts is the facts of w, whose parts' facts are known.
-func partFacts(w *written, known map[*written]facts) facts {
-	switch w.kind {
-	case meantWritten:
-		return facts{may: mayTake(w.meaning), must: mustTake(w.meaning)}
-	case anchorWritten:
-		return facts{holds: true}
-	case inTurnWritten:
-		var f facts
-		for _, part := range w.parts {
-			f.may = f.may || known[part].may
-			f.must = f.must || known[part].must
-			f.holds = f.holds || known[part].holds
-		}
-		return f
-	case eitherOfWritten:
-		f := facts{must: true}
-		for _, arm := range w.parts {
-			f.may = f.may || known[arm].may
-			f.must = f.must && known[arm].must
-			f.holds = f.holds || known[arm].holds
-		}
-		return f
-	case repeatedWritten:
-		what := known[w.parts[0]]
-		return facts{
-			may:   (w.most == noCeiling || w.most > 0) && what.may,
-			must:  w.least > 0 && what.must,
-			holds: what.holds,
-		}
-	default:
-		unreachable("written", uint8(w.kind))
-		return facts{}
-	}
-}
-
-// mayTake is whether m accepts any string of one symbol or more. A meaning the reader writes
-// before the anchors are placed is a set of symbols or nothing, so this is never deep.
-func mayTake(m *meaning) bool {
-	switch m.kind {
-	case symbolsMeaning:
-		return true
-	case inTurnMeaning, eitherOfMeaning:
-		for _, part := range m.parts {
-			if mayTake(part) {
-				return true
-			}
-		}
-		return false
-	case repeatedMeaning:
-		return (m.most == noCeiling || m.most > 0) && mayTake(m.parts[0])
-	case nothingMeaning, neverMeaning:
-		return false
-	default:
-		unreachable("meaning", uint8(m.kind))
-		return false
-	}
-}
-
-// mustTake is whether every string m accepts has a symbol in it. Never accepts no string, so none
-// of the strings it accepts is the empty one.
-func mustTake(m *meaning) bool {
-	switch m.kind {
-	case neverMeaning, symbolsMeaning:
-		return true
-	case inTurnMeaning:
-		for _, part := range m.parts {
-			if mustTake(part) {
-				return true
-			}
-		}
-		return false
-	case eitherOfMeaning:
-		for _, arm := range m.parts {
-			if !mustTake(arm) {
-				return false
-			}
-		}
-		return true
-	case repeatedMeaning:
-		return m.least > 0 && mustTake(m.parts[0])
-	case nothingMeaning:
-		return false
-	default:
-		unreachable("meaning", uint8(m.kind))
-		return false
 	}
 }

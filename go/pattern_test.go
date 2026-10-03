@@ -817,3 +817,39 @@ func TestOnlyTheMatchsDecisionForgetsTheKeptSets(t *testing.T) {
 		}
 	}
 }
+
+// A pattern with no anchor is its meaning once it is read, and placing its anchors makes nothing:
+// every part was read as what it means. Around an anchor, the parts between those holding one are
+// one part, read as what they mean.
+func TestAPatternWithNoAnchorIsItsMeaningOnceRead(t *testing.T) {
+	for _, text := range []string{strings.Repeat("ab|[c-e]x?", 100) + "(?:f|g)*h{2,3}",
+		strings.Repeat("abc", 100) + "(?:d|e)*"} {
+		w := (&patternReader{text: text}).pattern()
+		if w.kind != meantWritten {
+			t.Fatalf("a pattern with no anchor was read as a written of kind %d", w.kind)
+		}
+		if made := testing.AllocsPerRun(10, func() { placeAnchors(&w) }); made != 0 {
+			t.Fatalf("placing no anchor made %v allocations", made)
+		}
+	}
+	// The parts between the anchors are one part, a run of what they mean, and placing the
+	// anchors walks three parts however many there are.
+	anchored := (&patternReader{text: "^(?:ab|c)*d" + strings.Repeat("e", 1_000) + "$"}).pattern()
+	if anchored.kind != inTurnWritten || len(anchored.parts) != 3 || anchored.parts[1].kind != runWritten ||
+		len(anchored.parts[1].meaning.parts) != 1_002 {
+		t.Fatalf("^(?:ab|c)*de...$ was read as %d parts", len(anchored.parts))
+	}
+}
+
+// Reading a character makes nothing of its own: it is a pointer in the run of the sequence it is
+// in, and an ASCII character means what every one of it means. So reading a
+// literal ten times as long makes no more than a few more slices.
+func TestReadingALiteralMakesNothingForEachCharacter(t *testing.T) {
+	for _, written := range []string{"abcdefghij", `a\|b\x{64}\.\n`} {
+		short := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat(written, 1_000)) })
+		long := testing.AllocsPerRun(5, func() { ReadPattern(strings.Repeat(written, 10_000)) })
+		if long > short+10 {
+			t.Fatalf("%q a thousand times made %v allocations and ten thousand times %v", written, short, long)
+		}
+	}
+}

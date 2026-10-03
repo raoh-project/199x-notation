@@ -66,6 +66,13 @@
 0028 005E 0061 0029 002A ; REFUSED ;
 0061 0024 0062 ; REFUSED ;
 
+# A part before an anchor is asked about one part at a time. In a?b^ the a? may take nothing and the
+# b must take a symbol, so whether ^ is at the start is not settled and the pattern is refused,
+# though every string a?b accepts has a symbol in it; in ab^ each part must take one, and ^ is
+# never there.
+0061 003F 0062 005E ; REFUSED ;
+0061 0062 005E ; READ ;
+
 # The hex digits are the ASCII ones: U+FF10, U+FF11, U+FF12 and U+FF21 are fullwidth, and no digit.
 005C 0078 FF11 FF12 ; REFUSED ;
 005C 0078 0031 FF12 ; REFUSED ;
