@@ -130,6 +130,112 @@ final class NormalizationTest extends TestCase
             Normalization::normalize(NormalizationForm::NFC, 'a' . $marks));
     }
 
+    /**
+     * A stable starter of a form is a code point whose combining class is 0 and whose quick check
+     * for the form is Yes, as UnicodeData.txt and DerivedNormalizationProps.txt state them: the
+     * generated table is held to a reading of the database of this test's own.
+     */
+    public function testAStableStarterIsAStarterWhoseQuickCheckIsYes(): void
+    {
+        $marks = [];
+        foreach (explode("\n", Repository::read('ucd/18.0.0/UnicodeData.txt')) as $line) {
+            $f = explode(';', $line);
+            if (count($f) > 3 && $f[3] !== '0') {
+                $marks[(int) hexdec($f[0])] = true;
+            }
+        }
+        $notYes = ['NFC' => [], 'NFD' => [], 'NFKC' => [], 'NFKD' => []];
+        foreach (explode("\n", Repository::read('ucd/18.0.0/DerivedNormalizationProps.txt')) as $line) {
+            $f = array_map('trim', explode(';', explode('#', $line, 2)[0]));
+            if (count($f) !== 3 || !str_ends_with($f[1], '_QC') || $f[2] === 'Y') {
+                continue;
+            }
+            $range = explode('..', $f[0]);
+            $from = (int) hexdec($range[0]);
+            $to = (int) hexdec($range[1] ?? $range[0]);
+            for ($cp = $from; $cp <= $to; $cp++) {
+                $notYes[substr($f[1], 0, -3)][$cp] = true;
+            }
+        }
+        $wrong = [];
+        foreach (['NFC' => 1, 'NFD' => 2, 'NFKC' => 4, 'NFKD' => 8] as $form => $bit) {
+            self::assertNotSame([], $notYes[$form], "$form's quick check was read");
+            for ($cp = 0; $cp <= 0x10FFFF; $cp++) {
+                $stated = !isset($marks[$cp]) && !isset($notYes[$form][$cp]);
+                $held = (ord(NormalizationTables::STABLE_PAGES[ord(NormalizationTables::STABLE_BLOCKS[$cp >> 8]) << 8 | $cp & 0xFF]) & $bit) !== 0;
+                if ($stated !== $held && count($wrong) < 20) {
+                    $wrong[] = sprintf('%s U+%04X', $form, $cp);
+                }
+            }
+        }
+        self::assertSame([], $wrong);
+    }
+
+    /**
+     * The text is kept as it is where it holds stable starters, and the algorithm is run only from
+     * the stable starter before a character that is not one up to the next stable starter. That
+     * is right only where the answer is what the algorithm gives over the whole text, so the two
+     * are held to each other, in every form and within every bound around the answer's length.
+     * The texts mix stable starters of several scripts with marks, composites that decompose in one
+     * form and not another, compatibility characters, Hangul jamo and the kana voicing marks, so
+     * that a text goes in and out of the algorithm many times.
+     */
+    public function testRunByRunIsTheAlgorithmOverTheWholeTextInEveryForm(): void
+    {
+        $alphabet = [
+            0x61, 0x65, 0x41, 0x20, 0x2E, 0x00E9, 0x00C7,
+            0x3042, 0x304B, 0x30AB, 0x65E5, 0x672C,
+            0xAC00, 0xAC01, 0xD55C,
+            0x0300, 0x0301, 0x0323, 0x0327, 0x05B0,
+            0x3099, 0x309A, 0x309B,
+            0x1100, 0x1161, 0x11A8,
+            0xFB01, 0x3231, 0xFF76, 0xFF9E, 0x00A0, 0x2126,
+            0x0B47, 0x0B3E, 0x1D15E, 0x0344,
+        ];
+        mt_srand(1999);
+        $failed = [];
+        for ($n = 0; $n < 3000; $n++) {
+            $s = '';
+            for ($i = mt_rand(0, 39); $i > 0; $i--) {
+                $character = Utf8::encode($alphabet[mt_rand(0, count($alphabet) - 1)]);
+                // Runs of stable starters long enough to be kept, between what is not.
+                $s .= str_repeat($character, mt_rand(0, 3) === 0 ? mt_rand(1, 6) : 1);
+            }
+            foreach (NormalizationForm::cases() as $form) {
+                $whole = Normalization::normalizeFromStart($form, $s, -1);
+                self::assertIsString($whole);
+                if (Normalization::normalize($form, $s) !== $whole && count($failed) < 20) {
+                    $failed[] = $form->name . ' ' . Repository::shown($s);
+                }
+                $length = ScalarValues::count($whole);
+                for ($longest = max(0, $length - 2); $longest <= $length + 1; $longest++) {
+                    $within = Normalization::normalizeWithin($form, $s, $longest);
+                    if ($within !== ($longest >= $length ? $whole : null) && count($failed) < 20) {
+                        $failed[] = $form->name . " within $longest " . Repository::shown($s);
+                    }
+                }
+            }
+        }
+        self::assertSame([], $failed);
+    }
+
+    /**
+     * Text that is its own normalization is answered with itself, whether or not the algorithm
+     * went over part of it, and a text the algorithm changes in one place keeps the rest as it is.
+     */
+    public function testTextThatIsItsOwnNormalizationIsAnsweredWithItself(): void
+    {
+        $japanese = str_repeat('日本語のテキスト、ガギグ。', 10);
+        foreach ([$japanese, str_repeat('한국어 텍스트', 10), str_repeat("Renée Ångström à l'école", 10)] as $s) {
+            self::assertSame($s, Normalization::normalize(NormalizationForm::NFC, $s));
+        }
+        self::assertSame($japanese, Normalization::normalize(NormalizationForm::NFKC, $japanese));
+        $marked = str_repeat("abc\u{0327}\u{0301}def", 10);
+        self::assertSame($marked, Normalization::normalize(NormalizationForm::NFD, $marked));
+        self::assertSame($japanese . 'が' . $japanese,
+            Normalization::normalize(NormalizationForm::NFC, $japanese . "か\u{3099}" . $japanese));
+    }
+
     private static function decodeHex(string $field): string
     {
         $out = '';

@@ -22,12 +22,14 @@ use Raoh\Notation199x\Internal\Utf8;
 final class CaseConversion
 {
     /**
-     * For the lowercase and the uppercase mapping, the bytes the mapping may change the character
-     * of: every byte that begins or continues a character past ASCII, and the ASCII characters the
-     * tables name. Read off the tables, so that a run of other bytes is gone past at once without
-     * a rule of its own about ASCII.
+     * For the lowercase and the uppercase mapping: the bytes the mapping may change the character
+     * of, every byte that begins or continues a character past ASCII and the ASCII characters the
+     * tables name; the ASCII characters the mapping makes another ASCII character, and no
+     * Final_Sigma entry names; and those characters, and what each is made, as strtr takes them.
+     * Read off the tables, so that a run of other bytes is gone past at once, and a run of ASCII
+     * the mapping changes is mapped at once, without a rule of its own about ASCII.
      *
-     * @var array{0?: string, 1?: string}
+     * @var array<int, array{string, string, string, string}>
      */
     private static array $stops = [];
 
@@ -79,7 +81,8 @@ final class CaseConversion
      * The mapped text, and null where it is longer than $longest; a negative $longest is no bound.
      *
      * Every form of the conversion runs this, a step at a time: a step is a run of bytes no table
-     * names, gone past whole, or one character, mapped. The text is read where it is:
+     * names, gone past whole, a run of ASCII the mapping makes other ASCII, mapped whole, or one
+     * character, mapped, which is taken one after another up to the next ASCII byte. The text is read where it is:
      * Final_Sigma looks either side of a sigma for as many Case_Ignorable code points as there are,
      * and looks at them in the text. What is bounded is what is written: each character's mapping
      * is measured before any of it is, so the answer never holds more than $longest, nor part of a
@@ -98,7 +101,7 @@ final class CaseConversion
     private static function map(string $s, bool $lower, int $longest): ?string
     {
         $table = $lower ? CaseTables::LOWER : CaseTables::UPPER;
-        $stops = self::stops($lower);
+        [$stops, $changing, $asciiFrom, $asciiTo] = self::stops($lower);
         $length = strlen($s);
         $out = '';
         $changed = false;
@@ -116,25 +119,42 @@ final class CaseConversion
                 $at += $run;
                 continue;
             }
-            $width = Utf8::width(ord($s[$at]));
-            $character = substr($s, $at, $width);
-            $after = $at + $width;
-            $to = null;
-            if ($lower && isset(CaseTables::FINAL_SIGMA[$character]) && self::isFinalSigma($s, $at, $after)) {
-                $to = CaseTables::FINAL_SIGMA[$character];
-            }
-            $to ??= $table[$character] ?? null;
-            $adding = $to === null ? 1 : Utf8::countShort($to);
-            if ($longest >= 0 && $adding > $longest - $written) {
-                return null;
-            }
-            $written += $adding;
-            if ($to !== null) {
-                $out .= substr($s, $kept, $at - $kept) . $to;
+            // A run of ASCII the mapping makes other ASCII: one scalar value a byte, mapped in one
+            // call. A checkpoint added later bounds the run by strspn's length.
+            $run = strspn($s, $changing, $at, $length - $at);
+            if ($run > 0) {
+                if ($longest >= 0 && $run > $longest - $written) {
+                    return null;
+                }
+                $written += $run;
+                $out .= substr($s, $kept, $at - $kept) . strtr(substr($s, $at, $run), $asciiFrom, $asciiTo);
                 $changed = true;
-                $kept = $after;
+                $at += $run;
+                $kept = $at;
+                continue;
             }
-            $at = $after;
+            // Characters past ASCII, one at a time, until the next ASCII byte.
+            do {
+                $width = Utf8::width(ord($s[$at]));
+                $character = substr($s, $at, $width);
+                $after = $at + $width;
+                $to = null;
+                if ($lower && isset(CaseTables::FINAL_SIGMA[$character]) && self::isFinalSigma($s, $at, $after)) {
+                    $to = CaseTables::FINAL_SIGMA[$character];
+                }
+                $to ??= $table[$character] ?? null;
+                $adding = $to === null ? 1 : Utf8::countShort($to);
+                if ($longest >= 0 && $adding > $longest - $written) {
+                    return null;
+                }
+                $written += $adding;
+                if ($to !== null) {
+                    $out .= substr($s, $kept, $at - $kept) . $to;
+                    $changed = true;
+                    $kept = $after;
+                }
+                $at = $after;
+            } while ($at < $length && ord($s[$at]) >= 0x80);
         }
         if (!$changed) {
             return $s;
@@ -142,7 +162,10 @@ final class CaseConversion
         return $out . substr($s, $kept);
     }
 
-    private static function stops(bool $lower): string
+    /**
+     * @return array{string, string, string, string}
+     */
+    private static function stops(bool $lower): array
     {
         $which = $lower ? 0 : 1;
         if (!isset(self::$stops[$which])) {
@@ -150,16 +173,23 @@ final class CaseConversion
             for ($byte = 0x80; $byte <= 0xFF; $byte++) {
                 $stops .= chr($byte);
             }
+            $changing = '';
+            $to = '';
             // Each ASCII character asked of the tables, rather than every key read: a request
             // works this out once, and the 128 lookups cost a few microseconds.
             for ($byte = 0; $byte < 0x80; $byte++) {
                 $character = chr($byte);
-                if ($lower ? isset(CaseTables::LOWER[$character]) || isset(CaseTables::FINAL_SIGMA[$character])
-                    : isset(CaseTables::UPPER[$character])) {
+                $mapped = ($lower ? CaseTables::LOWER : CaseTables::UPPER)[$character] ?? null;
+                if ($mapped !== null || $lower && isset(CaseTables::FINAL_SIGMA[$character])) {
                     $stops .= $character;
                 }
+                if ($mapped !== null && strlen($mapped) === 1 && ord($mapped) < 0x80
+                    && !($lower && isset(CaseTables::FINAL_SIGMA[$character]))) {
+                    $changing .= $character;
+                    $to .= $mapped;
+                }
             }
-            self::$stops[$which] = $stops;
+            self::$stops[$which] = [$stops, $changing, $changing, $to];
         }
         return self::$stops[$which];
     }
