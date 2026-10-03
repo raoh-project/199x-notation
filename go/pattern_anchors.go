@@ -136,8 +136,9 @@ func putTogether(w *written, results []*meaning) []*meaning {
 	case inTurnWritten:
 		cut := len(results) - len(w.parts)
 		// A run is the parts it stands for, put in the sequence one by one, so that a sequence
-		// means what it would with each of them a part of its own. An anchor that asks for nothing
-		// leaves nothing in the sequence, so ^abc$ means what abc means and is the same tree.
+		// means what it would with each of them a part of its own; characters one after another are
+		// one of those parts, and stay one. An anchor that asks for nothing leaves nothing in the
+		// sequence, so ^abc$ means what abc means and is the same tree.
 		//
 		// The parts the sequence comes to are counted first and put in one list made to hold
 		// them, which is the sequence's own. Where one part is left, it is what the sequence
