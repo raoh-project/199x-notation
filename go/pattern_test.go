@@ -1,11 +1,15 @@
 package notation199x
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"unsafe"
 )
 
 func refusedOf(t *testing.T, pattern string) PatternRefused {
@@ -258,9 +262,13 @@ func forgetSteps(w *walk) {
 	for _, set := range w.known.slots {
 		if set != nil {
 			set.ascii = [utf8RuneSelf]*knownSet{}
-			set.other = nil
 		}
 	}
+	// The table keeps its room, and what it is charged for, with no step in it.
+	others := &w.known.others
+	clear(others.keys)
+	clear(others.to)
+	others.count = 0
 }
 
 // stepsKnown is how many steps from the sets w keeps are worked out.
@@ -275,9 +283,8 @@ func stepsKnown(w *walk) int {
 				known++
 			}
 		}
-		known += len(set.other)
 	}
-	return known
+	return known + w.known.others.count
 }
 
 func TestEachTimedWalkGoesTheWayItIsNamed(t *testing.T) {
@@ -588,10 +595,122 @@ func TestASetLargerThanTheRoomIsKeptBesideTheStart(t *testing.T) {
 	if w.frozen || w.in == nil || w.known.kept != 2 || w.in == w.known.first {
 		t.Fatalf("the set was not kept beside the start: %d kept, keeping no more %v", w.known.kept, w.frozen)
 	}
-	// The next match finds both kept, works out the step between them once, and reads the rest by
-	// the step from the second back to itself, keeping no new set.
+	// The step from the set a walk starts in to it was kept with it, so the next match reads every
+	// character by kept steps, keeping no new set.
 	m.matchesIn(w, subject)
-	if w.frozen || w.made != 0 || w.read < len(subject)-1 {
+	if w.frozen || w.made != 0 || w.read != len(subject) {
 		t.Fatalf("the next match read %d of %d by kept steps", w.read, len(subject))
+	}
+}
+
+// A step that does not fit beside the kept sets is not left out without a word: it goes to the
+// match's decision as a set that does not fit does, and the kept sets are forgotten and kept
+// again with the step. The room here holds the sets of (?:é|ü)* and little more, so the steps
+// over é and ü do not fit. Before, a step past ASCII that did not fit was not kept, and nothing
+// was forgotten either, since no set was new: every match after walked each of those steps a
+// state at a time, for as long as the walk was kept.
+func TestAStepThatDoesNotFitIsDecidedOnAsASetIs(t *testing.T) {
+	defer func(was int) { knownBytes = was }(knownBytes)
+	m := pathMachine("(?:é|ü)*")
+	subject := strings.Repeat("éü", 100)
+	knownBytes = 1 << 20
+	all := m.newWalk()
+	m.matchesIn(all, subject)
+	steps := stepsKnown(all)
+	// The least room whose first match forgets nothing.
+	low, high := 1, 1<<20
+	for low < high {
+		mid := (low + high) / 2
+		knownBytes = mid
+		w := m.newWalk()
+		m.matchesIn(w, subject)
+		if w.forgot {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+	knownBytes = low
+	w := m.newWalk()
+	m.matchesIn(w, subject)
+	m.matchesIn(w, subject)
+	if stepsKnown(w) != steps || w.made != 0 || w.read != len([]rune(subject)) {
+		t.Fatalf("with room for the sets and not their steps, %d of %d steps are kept, and the "+
+			"second match made %d sets and read %d characters by kept steps", stepsKnown(w), steps,
+			w.made, w.read)
+	}
+}
+
+// What the kept sets are charged is what they hold, but for the allocator's rounding: keeping sets
+// until they fill the room grows the heap by the bytes charged and not much more or less, over
+// ASCII, whose steps are kept in each set, and past it, whose steps are kept in the table of other
+// steps. Before, a step past ASCII was charged 16 bytes, which says nothing of what a Go map takes.
+func TestKeptSetsChargeWhatTheyTake(t *testing.T) {
+	if size := int(unsafe.Sizeof(knownSet{})); size > knownSetBytes {
+		t.Fatalf("a knownSet takes %d bytes, more than the %d charged", size, knownSetBytes)
+	}
+	for _, each := range []struct {
+		pattern string
+		symbols string
+	}{
+		{"(?:a|b)*a(?:a|b){16}", "ab"},
+		{"(?:é|ü)*é(?:é|ü){16}", "éü"},
+	} {
+		m := pathMachine(each.pattern)
+		symbols := []rune(each.symbols)
+		var subject strings.Builder
+		seed := uint32(7)
+		for range 200_000 {
+			seed = seed*1664525 + 1013904223
+			subject.WriteRune(symbols[seed>>31])
+		}
+		text := subject.String()
+		w := m.newWalk()
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		m.matchesIn(w, text)
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		// Held across both readings, so that what the heap lets go of is none of them.
+		runtime.KeepAlive(w)
+		runtime.KeepAlive(text)
+		grew := float64(after.HeapAlloc) - float64(before.HeapAlloc)
+		charged := float64(w.known.bytes)
+		// The allocator rounds each list up to its size class, an eighth more at most.
+		if !w.frozen || grew < 0.9*charged || grew > 1.25*charged {
+			t.Errorf("%s: %.0f bytes charged and the heap grew %.0f; kept no more %v", each.pattern,
+				charged, grew, w.frozen)
+		}
+	}
+}
+
+// Nothing forgets the kept sets but machine.forgets, which is where a match decides what to do
+// when something does not fit, and knownSets.forget itself, which forgets its table of steps.
+func TestOnlyTheMatchsDecisionForgetsTheKeptSets(t *testing.T) {
+	fset := token.NewFileSet()
+	for _, name := range []string{"pattern_machine.go", "pattern_known.go"} {
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "forget" {
+					if by := funcName(fn); by != "machine.forgets" && by != "knownSets.forget" {
+						t.Errorf("%s forgets the kept sets", by)
+					}
+				}
+				return true
+			})
+		}
 	}
 }
