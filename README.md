@@ -42,11 +42,14 @@ implementation's own.
 Every implementation has an entry point for each rule above, and a bounded case conversion and a
 bounded normalization besides. A bounded case conversion or normalization takes the most scalar
 values its answer may hold, answers what the unbounded one does where that answer is no longer than
-the bound, and answers nothing where it is longer. Each of the other entry points described below is
-in an implementation whose callers need that one, apart from the others: the operations on the
-machine a pattern means, writing a machine as an image, running a match from an image, and running a
-match, a bounded normalization or a bounded case conversion with a checkpoint. Where an
-implementation has one, it holds to the contract every other implementation that has it holds to.
+the bound, and answers nothing where it is longer. The bound is on the work as well as on the
+answer: what one holds and how much of the text it reads turn on the bound and not on the length of
+the text, so it reads no further once what it has read shows the answer to be longer than the bound.
+Each of the other entry points described below is in an implementation whose callers need that
+one, apart from the others: the operations on the machine a pattern means, writing a machine as an
+image, running a match from an image, and running a match, a bounded normalization or a bounded case
+conversion with a checkpoint. Where an implementation has one, it holds to the contract every other
+implementation that has it holds to.
 
 ## What does not belong here
 
@@ -136,10 +139,14 @@ The generator reads the database once into one model, where every fact about Uni
 and checked against the properties Unicode publishes, and writes each language's tables from that
 model with an emitter of its own. An emitter decides which of the model's facts its implementation
 holds as generated and how its language holds them, and derives no fact about Unicode of its own, so
-every implementation answers from the same facts. Which facts are generated follows how long an
-implementation keeps what it works out: Go works out normalization's compositions from the
-decompositions once in a process, and PHP, which keeps nothing from one request to the next, holds
-them as generated. No table is written by hand or read from a resource at run time.
+every implementation answers from the same facts. What a case conversion or a normalization asks of
+each code point it reads, its mapping, its combining class, its decomposition, whether it is a
+stable starter, whether it is Cased or Case_Ignorable, and what it composes into with the code point
+before it, is read from a generated table the code point, or the pair, indexes in a fixed number of
+steps however many entries the table has, rather than worked out from other tables or searched for.
+PHP holds some of them as arrays keyed by the character, which it looks up as directly. A search is
+left only where such a table has said a code point has an entry, as the Final_Sigma mapping of the
+one code point that has one. No table is written by hand or read from a resource at run time.
 
 The vectors in `suite/` are what every implementation is held to, in a format each language reads
 with its standard library; `suite/README.md` states it. The fixtures of a format in `image/` are

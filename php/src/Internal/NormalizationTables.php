@@ -8038,4 +8038,10 @@ final class NormalizationTables
      * Text made only of code points below it is its own normalization in that form.
      */
     public const NFKD_TRIVIAL_LIMIT = 0x00A0;
+
+    /**
+     * The most marks one starter composes with, one after another, in a composing form: of the
+     * marks held after a starter, no more than this many are gone from the answer.
+     */
+    public const MOST_MARKS_COMPOSED = 3;
 }

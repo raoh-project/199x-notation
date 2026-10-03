@@ -2,11 +2,12 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::normalization_tables::{
-    CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY, LONGEST_DECOMPOSITION,
-    NFC_TRIVIAL_LIMIT, NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT, NFKD_TRIVIAL_LIMIT,
-    SCRIPT_SPECIFIC_EXCLUSIONS, STABLE_BLOCKS, STABLE_PAGES,
+    CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY, COMPOSITES,
+    COMPOSITION_CELLS, COMPOSITION_COLUMNS, COMPOSITION_FIRST_BLOCKS, COMPOSITION_FIRST_PAGES,
+    COMPOSITION_SECOND_BLOCKS, COMPOSITION_SECOND_PAGES, DECOMPOSITION_POSITION_BLOCKS,
+    DECOMPOSITION_POSITION_PAGES, LONGEST_DECOMPOSITION, MOST_MARKS_COMPOSED, NFC_TRIVIAL_LIMIT,
+    NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT, NFKD_TRIVIAL_LIMIT, STABLE_BLOCKS, STABLE_PAGES,
 };
-use crate::tables::mapped;
 
 /// The four normalization forms of UAX #15.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -59,12 +60,14 @@ impl Form {
 /// canonically wherever nothing blocks it. The compatibility forms decompose by the compatibility
 /// mappings as well as the canonical ones; composition is canonical in every form.
 pub fn normalize(form: Form, text: &str) -> String {
-    normalize_within(form, text, usize::MAX)
+    normalized::<false>(form, text, usize::MAX)
         .expect("no text is longer than usize::MAX scalar values")
 }
 
 /// [`normalize`] where the answer is no longer than `longest` scalar values, and `None` where it is
-/// longer, which is found out before more than `longest` is written.
+/// longer, which is found out before more than `longest` is written. What it holds and how much of
+/// `text` it reads turn on `longest` and not on the length of `text`: it reads no further once what
+/// it has read shows the answer to be longer.
 ///
 /// Text that is its own normalization is answered as it is. The text is read a code point at a time
 /// and kept as it is up to the first code point that is not a stable starter of the form: a starter
@@ -80,11 +83,22 @@ pub fn normalize(form: Form, text: &str) -> String {
 /// answer only where it changed what it went over, and the answer is made only once one has: up to
 /// there it is the text.
 ///
+/// Each stable starter read is at least one scalar value of the answer, as the starter it is or
+/// composed with what follows it, so the text is read no further once those read and those before
+/// them are more than `longest`.
+///
 /// The text is gone over a code point at a time in [`stable_up_to`] and in [`Composing::run`], each
 /// code point once by each at most, and the marks of a run, which may be as many as the text has, in
 /// [`Composing::order`], [`Composing::settle`] and [`Composing::write`], a mark at a time; no other
-/// loop turns on the text. This loop goes once round for each run the algorithm goes over.
+/// loop turns on the text. The loop of [`normalized`] goes once round for each run the algorithm
+/// goes over.
 pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String> {
+    normalized::<true>(form, text, longest)
+}
+
+/// [`normalize_within`], which asks nothing of `longest` before it holds a mark where `BOUNDED` is
+/// false: [`normalize`] does not pay for what only a bound needs.
+fn normalized<const BOUNDED: bool>(form: Form, text: &str, longest: usize) -> Option<String> {
     // The answer up to `kept`, where a run has changed what it went over.
     let mut out: Option<String> = None;
     let mut kept = 0;
@@ -93,12 +107,16 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
     // starters read since, the last of them at `start` where `start` is before `at`.
     let mut before = 0;
     let mut read = 0;
-    let mut composing: Option<Composing> = None;
+    let mut composing: Option<Composing<BOUNDED>> = None;
     let mut at = 0;
     while at < text.len() {
-        let (stable, count, last) = stable_up_to(form, text, at);
+        // What is written and read is never more than `longest`, so this does not wrap.
+        let (stable, count, last) = stable_up_to(form, text, at, longest - before - read);
         if stable > at {
             read += count;
+            if before + read > longest {
+                return None;
+            }
             start = last;
             at = stable;
             if at == text.len() {
@@ -121,9 +139,6 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
         start = end;
         at = end;
     }
-    if before + read > longest {
-        return None;
-    }
     Some(match out {
         None => text.to_string(),
         Some(mut out) => {
@@ -134,34 +149,50 @@ pub fn normalize_within(form: Form, text: &str, longest: usize) -> Option<String
 }
 
 /// Where the stable starters of `form` that `text` has from byte `at` end: the first code point from
-/// there that is not one, or the end of the text; how many they are; and where the last of them
-/// begins, which is `at` where there are none.
-fn stable_up_to(form: Form, text: &str, mut at: usize) -> (usize, usize, usize) {
-    let bytes = text.as_bytes();
+/// there that is not one, or the end of the text, or where it has gone past one more than `left` of
+/// them; how many it went past; and where the last of them begins, which is `at` where there are
+/// none.
+fn stable_up_to(form: Form, text: &str, mut at: usize, left: usize) -> (usize, usize, usize) {
     let limit = form.trivial_limit();
     let bit = form.stable_bit();
     let mut count = 0;
     let mut last = at;
-    while at < bytes.len() {
-        // Every form's trivial limit is past ASCII, so a byte below 0x80 is a stable starter.
-        if bytes[at] < 0x80 {
+    while at < text.len() && count <= left {
+        let bytes = &text.as_bytes()[..scan_stop(text, at, left, count)];
+        while at < bytes.len() {
+            // Every form's trivial limit is past ASCII, so a byte below 0x80 is a stable starter.
+            if bytes[at] < 0x80 {
+                last = at;
+                at += 1;
+                count += 1;
+                continue;
+            }
+            let c = text[at..]
+                .chars()
+                .next()
+                .expect("a byte that is not ASCII begins a character here");
+            if c >= limit && !is_stable(bit, c) {
+                return (at, count, last);
+            }
             last = at;
-            at += 1;
+            at += c.len_utf8();
             count += 1;
-            continue;
         }
-        let c = text[at..]
-            .chars()
-            .next()
-            .expect("a byte that is not ASCII begins a character here");
-        if c >= limit && !is_stable(bit, c) {
-            break;
-        }
-        last = at;
-        at += c.len_utf8();
-        count += 1;
     }
     (at, count, last)
+}
+
+/// How far a scan of `text` from byte `at`, which may go past one more than `left` code points and
+/// has gone past `count`, can go without counting them: a code point is a byte or more, so up to
+/// there it goes past no more than that, and a code point past ASCII can leave it short, where the
+/// scan goes on from there. What is left is held against the bytes left before anything is added
+/// to `at`, so that no bound, however large, takes it past the end.
+pub(crate) fn scan_stop(text: &str, at: usize, left: usize, count: usize) -> usize {
+    if left - count >= text.len() - at {
+        text.len()
+    } else {
+        at + left - count + 1
+    }
 }
 
 /// Whether `c` is a stable starter of the form whose bit of [`STABLE_PAGES`] is `bit`.
@@ -173,7 +204,7 @@ fn is_stable(bit: u8, c: char) -> bool {
 /// [`normalize_within`] worked out by the algorithm over the whole of `text`, whatever it is.
 #[cfg(test)]
 fn normalize_whole(form: Form, text: &str, longest: usize) -> Option<String> {
-    let mut composing = Composing::new(form, longest);
+    let mut composing = Composing::<true>::new(form, longest);
     composing.run(text, 0, text.len(), 0)?;
     Some(composing.out)
 }
@@ -241,19 +272,19 @@ fn canonical_head(c: char) -> char {
     if let Some([Some(leading), ..]) = decompose_hangul(c) {
         return leading;
     }
-    match mapped(CANONICAL, c) {
+    match decomposition_of(c, false) {
         Some(mapping) => canonical_head(mapping[0]),
         None => c,
     }
 }
 
-/// Whether a starter before `c` may compose with it: `c` is the second of a pair
-/// [`COMPOSITIONS`] holds, or a Hangul vowel or trailing consonant.
+/// Whether a starter before `c` may compose with it: `c` has a column of [`COMPOSITION_CELLS`], or
+/// is a Hangul vowel or trailing consonant.
 fn composes_back_into(c: char) -> bool {
     let c32 = u32::from(c);
     (V_BASE..V_BASE + V_COUNT).contains(&c32)
         || (T_BASE + 1..T_BASE + T_COUNT).contains(&c32)
-        || SECONDS.binary_search(&c).is_ok()
+        || paged(&COMPOSITION_SECOND_BLOCKS, &COMPOSITION_SECOND_PAGES, c) != 0
 }
 
 /// One pass of canonical ordering and, where the form composes, composition over code points
@@ -267,7 +298,13 @@ fn composes_back_into(c: char) -> bool {
 /// or, where nothing is between them, to the starter after it, so a run settled when the next
 /// starter arrives is settled as the whole text's algorithm would settle it. What is held at once
 /// is one run's marks, never the decomposition of the whole text.
-struct Composing {
+///
+/// What is written and the least of the answer what is held can come to are no more than
+/// `longest`, which [`Composing::take`] holds to before it holds another mark: the starter, and the
+/// marks but those it may compose with, which are no more than [`MOST_MARKS_COMPOSED`]. So a run
+/// holds no more than `longest` and [`MOST_MARKS_COMPOSED`] marks, whatever the length of the text.
+/// Where `BOUNDED` is false, `longest` is `usize::MAX`, which no text reaches, and it is not asked.
+struct Composing<const BOUNDED: bool> {
     compatibility: bool,
     composes: bool,
     stable_bit: u8,
@@ -285,8 +322,8 @@ struct Composing {
     parts: Vec<char>,
 }
 
-impl Composing {
-    fn new(form: Form, longest: usize) -> Composing {
+impl<const BOUNDED: bool> Composing<BOUNDED> {
+    fn new(form: Form, longest: usize) -> Composing<BOUNDED> {
         Composing {
             compatibility: form.compatibility(),
             composes: form.composes(),
@@ -329,6 +366,9 @@ impl Composing {
     /// Takes the next decomposed code point; `None` where what is written has passed `longest`.
     fn take(&mut self, c: char) -> Option<()> {
         if combining_class(c) != 0 {
+            if BOUNDED && self.least_held(self.marks.len() + 1) > self.longest - self.written {
+                return None;
+            }
             self.marks.push(c);
             return Some(());
         }
@@ -343,6 +383,19 @@ impl Composing {
         self.write()?;
         self.starter = Some(c);
         Some(())
+    }
+
+    /// The least number of scalar values of the answer the starter held and `marks` marks after it
+    /// come to, whatever follows: every mark, and the starter, but those of the marks it may compose
+    /// with in a composing form.
+    fn least_held(&self, marks: usize) -> usize {
+        if self.starter.is_none() {
+            return marks;
+        }
+        if self.composes {
+            return 1 + marks.saturating_sub(MOST_MARKS_COMPOSED);
+        }
+        1 + marks
     }
 
     /// Puts the held marks in canonical order and, where the form composes, composes into the
@@ -446,6 +499,22 @@ const fn combining_class(c: char) -> u8 {
     COMBINING_CLASS_PAGES[(COMBINING_CLASS_BLOCKS[c >> 8] as usize) << 8 | c & 0xFF]
 }
 
+/// `c`'s one-step decomposition by [`CANONICAL`], or where `compatibility` by [`COMPATIBILITY`] as
+/// well, read where [`DECOMPOSITION_POSITION_PAGES`] says it is; `None` where it has none.
+fn decomposition_of(c: char, compatibility: bool) -> Option<&'static [char]> {
+    let cp = c as usize;
+    let at = usize::from(
+        DECOMPOSITION_POSITION_PAGES
+            [usize::from(DECOMPOSITION_POSITION_BLOCKS[cp >> 8]) << 8 | cp & 0xFF],
+    );
+    match at {
+        0 => None,
+        at if at <= CANONICAL.len() => Some(CANONICAL[at - 1].1),
+        at if compatibility => Some(COMPATIBILITY[at - CANONICAL.len() - 1].1),
+        _ => None,
+    }
+}
+
 /// Pushes `c`'s full decomposition onto `parts`: Hangul's arithmetic, or the tables followed until
 /// nothing decomposes further, the compatibility mappings as well as the canonical ones where
 /// `compatibility`. A code point with none is its own.
@@ -454,14 +523,7 @@ fn decompose_into(parts: &mut Vec<char>, c: char, compatibility: bool) {
         parts.extend(jamo.into_iter().flatten());
         return;
     }
-    let mapping = mapped(CANONICAL, c).or_else(|| {
-        if compatibility {
-            mapped(COMPATIBILITY, c)
-        } else {
-            None
-        }
-    });
-    match mapping {
+    match decomposition_of(c, compatibility) {
         Some(mapping) => {
             for &part in mapping {
                 decompose_into(parts, part, compatibility);
@@ -500,7 +562,7 @@ fn decompose_hangul(c: char) -> Option<[Option<char>; 3]> {
 }
 
 /// The primary composite of `starter` followed by `c`, or `None` where the pair does not compose:
-/// Hangul's L+V and LV+T, or [`COMPOSITIONS`].
+/// Hangul's L+V and LV+T, or [`COMPOSITION_CELLS`] at the row of `starter` and the column of `c`.
 fn compose(starter: char, c: char) -> Option<char> {
     let (s, c32) = (u32::from(starter), u32::from(c));
     if (L_BASE..L_BASE + L_COUNT).contains(&s) && (V_BASE..V_BASE + V_COUNT).contains(&c32) {
@@ -514,89 +576,29 @@ fn compose(starter: char, c: char) -> Option<char> {
     {
         return Some(hangul(s + (c32 - T_BASE)));
     }
-    COMPOSITIONS
-        .binary_search_by_key(&(starter, c), |&(first, second, _)| (first, second))
-        .ok()
-        .map(|at| COMPOSITIONS[at].2)
+    let row = usize::from(paged(
+        &COMPOSITION_FIRST_BLOCKS,
+        &COMPOSITION_FIRST_PAGES,
+        starter,
+    ));
+    let column = usize::from(paged(
+        &COMPOSITION_SECOND_BLOCKS,
+        &COMPOSITION_SECOND_PAGES,
+        c,
+    ));
+    if row == 0 || column == 0 {
+        return None;
+    }
+    match COMPOSITION_CELLS[(row - 1) * COMPOSITION_COLUMNS + column - 1] {
+        0 => None,
+        at => Some(COMPOSITES[usize::from(at) - 1]),
+    }
 }
 
-/// Every pair that composes, as `(first, second, composite)`, sorted by the pair: every two-member
-/// canonical decomposition whose first member is a starter and whose composite is not one of
-/// [`SCRIPT_SPECIFIC_EXCLUSIONS`]. The singleton decompositions and those whose first member is not a
-/// starter, the rest of `Full_Composition_Exclusion`, are read off [`CANONICAL`] and
-/// [`COMBINING_CLASS_PAGES`] here, so decomposition and composition cannot disagree. Worked out when
-/// the crate is compiled, from the generated tables.
-static COMPOSITIONS: [(char, char, char); composition_count()] = COMPOSITIONS_AT_COMPILE;
-
-/// The second member of every pair in [`COMPOSITIONS`], sorted, a member as often as it is one.
-static SECONDS: [char; composition_count()] = seconds();
-
-const fn seconds() -> [char; composition_count()] {
-    let mut seconds = ['\0'; composition_count()];
-    let mut n = 0;
-    while n < COMPOSITIONS_AT_COMPILE.len() {
-        let second = COMPOSITIONS_AT_COMPILE[n].1;
-        let mut j = n;
-        while j > 0 && seconds[j - 1] as u32 > second as u32 {
-            seconds[j] = seconds[j - 1];
-            j -= 1;
-        }
-        seconds[j] = second;
-        n += 1;
-    }
-    seconds
-}
-
-/// [`COMPOSITIONS`] as a constant, which a constant can be worked out from where a static cannot.
-const COMPOSITIONS_AT_COMPILE: [(char, char, char); composition_count()] = compositions();
-
-const fn composes_back(composite: char, mapping: &[char]) -> bool {
-    if mapping.len() != 2 || combining_class(mapping[0]) != 0 {
-        return false;
-    }
-    let mut i = 0;
-    while i < SCRIPT_SPECIFIC_EXCLUSIONS.len() {
-        if SCRIPT_SPECIFIC_EXCLUSIONS[i] as u32 == composite as u32 {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-const fn composition_count() -> usize {
-    let mut count = 0;
-    let mut i = 0;
-    while i < CANONICAL.len() {
-        if composes_back(CANONICAL[i].0, CANONICAL[i].1) {
-            count += 1;
-        }
-        i += 1;
-    }
-    count
-}
-
-const fn compositions() -> [(char, char, char); composition_count()] {
-    let mut pairs = [('\0', '\0', '\0'); composition_count()];
-    let mut n = 0;
-    let mut i = 0;
-    while i < CANONICAL.len() {
-        let (composite, mapping) = CANONICAL[i];
-        if composes_back(composite, mapping) {
-            // Insertion by the pair; the decompositions come sorted by composite, which is close to
-            // sorted by first member.
-            let key = (mapping[0] as u64) << 32 | mapping[1] as u64;
-            let mut j = n;
-            while j > 0 && ((pairs[j - 1].0 as u64) << 32 | pairs[j - 1].1 as u64) > key {
-                pairs[j] = pairs[j - 1];
-                j -= 1;
-            }
-            pairs[j] = (mapping[0], mapping[1], composite);
-            n += 1;
-        }
-        i += 1;
-    }
-    pairs
+/// `c`'s value in a table a code point indexes in two steps, its block's page and its place there.
+fn paged<T: Copy>(blocks: &[u8; 4352], pages: &[T], c: char) -> T {
+    let c = c as usize;
+    pages[usize::from(blocks[c >> 8]) << 8 | c & 0xFF]
 }
 
 #[cfg(test)]
@@ -604,38 +606,12 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::tables::mapped;
+    use crate::tables::ucd::{property, range, ucd};
     use std::format;
     use std::vec;
 
     const FORMS: [Form; 4] = [Form::Nfc, Form::Nfd, Form::Nfkc, Form::Nfkd];
-
-    /// `name` under the repository's `ucd/18.0.0`, or `None` where it is not there and the
-    /// environment does not require it, as the tests under `tests/` read the repository's files.
-    fn ucd(name: &str) -> Option<String> {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../ucd/18.0.0")
-            .join(name);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Some(text),
-            Err(_) if std::env::var_os("NOTATION199X_REQUIRE_SUITE").is_none() => None,
-            Err(error) => panic!("{}: {error}", path.display()),
-        }
-    }
-
-    /// The first and last code point of a field of a UCD line, `XXXX` or `XXXX..YYYY`.
-    fn range(field: &str) -> (u32, u32) {
-        let field = field.trim();
-        match field.split_once("..") {
-            Some((first, last)) => (
-                u32::from_str_radix(first, 16).unwrap(),
-                u32::from_str_radix(last, 16).unwrap(),
-            ),
-            None => {
-                let only = u32::from_str_radix(field, 16).unwrap();
-                (only, only)
-            }
-        }
-    }
 
     /// The combining class of every code point and the forms it is a stable starter in are what
     /// `UnicodeData.txt` and `DerivedNormalizationProps.txt` state: a stable starter of a form is a
@@ -679,6 +655,14 @@ mod tests {
                 let stated = classes[cp] == 0 && not_yes[cp] & form.stable_bit() == 0;
                 assert_eq!(is_stable(form.stable_bit(), c), stated, "{c:?} in {form:?}");
             }
+            // The table of where each decomposition is answers what the searched mappings do.
+            let canonical = mapped(CANONICAL, c);
+            assert_eq!(decomposition_of(c, false), canonical, "{c:?}");
+            assert_eq!(
+                decomposition_of(c, true),
+                canonical.or_else(|| mapped(COMPATIBILITY, c)),
+                "{c:?} with compatibility"
+            );
         }
     }
 
@@ -802,7 +786,7 @@ mod tests {
         ];
         let mut seed = 1u64;
         for length in 2..200 {
-            let mut composing = Composing::new(Form::Nfd, usize::MAX);
+            let mut composing = Composing::<false>::new(Form::Nfd, usize::MAX);
             for _ in 0..length {
                 seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
                 composing
@@ -813,6 +797,60 @@ mod tests {
             expected.sort_by_key(|mark| combining_class(*mark));
             composing.order();
             assert_eq!(composing.marks, expected, "{length} marks");
+        }
+    }
+
+    /// The composition table composes every two-member canonical decomposition in
+    /// `UnicodeData.txt` whose first member is a starter and that `DerivedNormalizationProps.txt`
+    /// does not give `Full_Composition_Exclusion`, and no other pair; a code point has a column where
+    /// and only where it is the second member of one of those.
+    #[test]
+    fn the_composition_table_is_what_the_database_states() {
+        let (Some(unicode_data), Some(props)) =
+            (ucd("UnicodeData.txt"), ucd("DerivedNormalizationProps.txt"))
+        else {
+            return;
+        };
+        let excluded = property(&props, "Full_Composition_Exclusion");
+        let mut starters = vec![true; 0x110000];
+        let mut decompositions = Vec::new();
+        for line in unicode_data.lines() {
+            let fields: Vec<&str> = line.split(';').collect();
+            let cp = u32::from_str_radix(fields[0], 16).unwrap();
+            starters[cp as usize] = fields[3] == "0";
+            if !fields[5].is_empty() && !fields[5].starts_with('<') {
+                let parts: Vec<u32> = fields[5]
+                    .split(' ')
+                    .map(|part| u32::from_str_radix(part, 16).unwrap())
+                    .collect();
+                decompositions.push((cp, parts));
+            }
+        }
+        let mut seconds = vec![false; 0x110000];
+        let mut stated = 0;
+        for (composite, parts) in decompositions {
+            if parts.len() != 2 || !starters[parts[0] as usize] || excluded[composite as usize] {
+                continue;
+            }
+            stated += 1;
+            seconds[parts[1] as usize] = true;
+            let (first, second) = (
+                char::from_u32(parts[0]).unwrap(),
+                char::from_u32(parts[1]).unwrap(),
+            );
+            assert_eq!(
+                compose(first, second),
+                char::from_u32(composite),
+                "{first:?} {second:?}"
+            );
+        }
+        assert_eq!(
+            COMPOSITION_CELLS.iter().filter(|&&at| at != 0).count(),
+            stated
+        );
+        for c in (0..0x110000).filter_map(char::from_u32) {
+            let column = paged(&COMPOSITION_SECOND_BLOCKS, &COMPOSITION_SECOND_PAGES, c);
+            assert_eq!(column != 0, seconds[c as usize], "{c:?}");
         }
     }
 }

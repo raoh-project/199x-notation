@@ -1,7 +1,6 @@
 package net.unit8.notation199x;
 
 import java.util.Arrays;
-import java.util.TreeMap;
 import java.util.stream.IntStream;
 import org.jspecify.annotations.Nullable;
 
@@ -90,7 +89,9 @@ public final class Normalization {
     /**
      * {@link #normalize}, or null where the answer is longer than {@code longest} code points — which
      * is found out before that much is built, so a caller that has a bound on a text's length can ask
-     * for the answer without asking for more than the bound.
+     * for the answer without asking for more than the bound. What it holds and how much of {@code s}
+     * it reads turn on {@code longest} and not on the length of {@code s}: it reads no further once
+     * what it has read shows the answer to be longer.
      *
      * <p>Text that is its own normalization is answered with itself. The text is read a code point at
      * a time and is kept as it is up to the first code point that is not a stable starter of the form:
@@ -135,8 +136,17 @@ public final class Normalization {
      * where the text is read to; and how many code points of the answer come before that. A run is
      * written into the answer only where it changed what it went over, and the answer is made only
      * once one has: up to there it is the text.
+     *
+     * <p>Each stable starter read is at least one code point of the answer, as the starter it is or
+     * composed with what follows it, so the text is read no further once those read and those before
+     * them are more than {@code longest}.
      */
     private static @Nullable String within(Form form, String s, long longest, @Nullable Checkpoint checkpoint) {
+        // Even the empty text is longer than a negative bound. From here, what is written and read
+        // is never more than longest, so what is left of it is never negative.
+        if (longest < 0) {
+            return null;
+        }
         // The answer up to kept, where a run has changed what it went over.
         StringBuilder out = null;
         int kept = 0;
@@ -147,10 +157,13 @@ public final class Normalization {
         long read = 0;
         Composing composing = null;
         for (int at = 0; at < s.length(); ) {
-            long scanned = stableUpTo(form, s, at, checkpoint);
+            long scanned = stableUpTo(form, s, at, longest - before - read, checkpoint);
             int stable = Scan.end(scanned);
             if (stable > at) {
                 read += Scan.codePoints(scanned, at);
+                if (before + read > longest) {
+                    return null;
+                }
                 start = s.offsetByCodePoints(stable, -1);
                 at = stable;
                 if (at == s.length()) {
@@ -178,9 +191,6 @@ public final class Normalization {
             read = 0;
             start = end;
             at = end;
-        }
-        if (before + read > longest) {
-            return null;
         }
         if (out == null) {
             return s;
@@ -219,6 +229,12 @@ public final class Normalization {
      * already decomposed, holding the starter of the run it is in and the marks after it, and writing
      * what is settled. Asks its checkpoint, where it has one, before each code point it reads past
      * where the caller has, and before each held mark it looks at.
+     *
+     * <p>What is written and the least of the answer what is held can come to are no more than
+     * {@code longest}, which {@link #take} holds to before it holds another mark: the starter, and the
+     * marks but those it may compose with, which are no more than
+     * {@link NormalizationTables#MOST_MARKS_COMPOSED}. So a run holds no more than {@code longest} and
+     * that many marks, whatever the length of the text.
      */
     private static final class Composing {
 
@@ -304,6 +320,9 @@ public final class Normalization {
          *  {@code longest}. */
         private boolean take(int cp) {
             if (combiningClass(cp) != 0) {
+                if (leastHeld(markCount + 1) > longest - written) {
+                    return false;
+                }
                 holdMark(cp);
                 return true;
             }
@@ -320,6 +339,16 @@ public final class Normalization {
             }
             starter = cp;
             return true;
+        }
+
+        /** The least number of code points of the answer the starter held and {@code marks} marks
+         *  after it come to, whatever follows: every mark, and the starter, but those of the marks it
+         *  may compose with in a composing form. */
+        private long leastHeld(long marks) {
+            if (starter < 0) {
+                return marks;
+            }
+            return 1 + (composes ? Math.max(marks - NormalizationTables.MOST_MARKS_COMPOSED, 0) : marks);
         }
 
         private void holdMark(int cp) {
@@ -417,31 +446,43 @@ public final class Normalization {
     }
 
     /** Where the stable starters of {@code form} that {@code s} has from {@code at} end, the first
-     *  code point from there that is not one or the end of the text, and how many of them are past
-     *  the basic plane, as a {@link Scan}. Asks {@code checkpoint} before each code point it reads,
-     *  the one it ends at too. */
-    private static long stableUpTo(Form form, String s, int at, @Nullable Checkpoint checkpoint) {
+     *  code point from there that is not one or the end of the text, or where it has gone past more
+     *  than {@code room} of them, and how many of them are past the basic plane, as a {@link Scan}.
+     *  Asks {@code checkpoint} before each code point it reads, the one it ends at too. */
+    private static long stableUpTo(Form form, String s, int at, long room, @Nullable Checkpoint checkpoint) {
         int limit = form.trivialLimit;
         int bit = form.stableBit;
+        int from = at;
         int pairs = 0;
-        while (at < s.length()) {
-            Checkpoints.ask(checkpoint);
-            // Every form's trivial limit is below the surrogates, which the generator checks, so a
-            // unit below it is a code point.
-            if (s.charAt(at) < limit) {
-                at++;
-                continue;
+        while (at < s.length() && at - from - pairs <= room) {
+            int stop = stop(s, at, room - (at - from - pairs));
+            while (at < stop) {
+                Checkpoints.ask(checkpoint);
+                // Every form's trivial limit is below the surrogates, which the generator checks, so
+                // a unit below it is a code point.
+                if (s.charAt(at) < limit) {
+                    at++;
+                    continue;
+                }
+                int cp = s.codePointAt(at);
+                if (!isStable(bit, cp)) {
+                    return Scan.of(at, pairs);
+                }
+                if (cp > Character.MAX_VALUE) {
+                    pairs++;
+                }
+                at += Character.charCount(cp);
             }
-            int cp = s.codePointAt(at);
-            if (!isStable(bit, cp)) {
-                break;
-            }
-            if (cp > Character.MAX_VALUE) {
-                pairs++;
-            }
-            at += Character.charCount(cp);
         }
         return Scan.of(at, pairs);
+    }
+
+    /** How far a scan of {@code s} from {@code at}, which is to go past no more than {@code room}
+     *  code points and one more, can go without counting them: a code point is a unit or two, so up
+     *  to there it goes past no more than that. A code point past the basic plane can leave it
+     *  short, and the scan counts what it went past and goes on. */
+    static int stop(String s, int at, long room) {
+        return room < s.length() - at ? at + (int) room + 1 : s.length();
     }
 
     /** Whether {@code cp} is a stable starter of {@code form}: a starter whose quick check for the
@@ -498,10 +539,7 @@ public final class Normalization {
         if (isHangulSyllable(cp)) {
             return decomposeHangul(cp);
         }
-        int[] mapped = lookup(NormalizationTables.DECOMP, cp);
-        if (mapped == null && compatibility) {
-            mapped = lookup(NormalizationTables.COMPAT, cp);
-        }
+        int[] mapped = decomposition(cp, compatibility);
         if (mapped == null) {
             return null;
         }
@@ -540,10 +578,7 @@ public final class Normalization {
      *  {@code parts} from {@code at}, and answers how many code points it is, or 0 where the tables
      *  name no decomposition of {@code cp}. */
     private static int decomposeTables(int[] parts, int at, int cp, boolean compatibility) {
-        int[] mapped = lookup(NormalizationTables.DECOMP, cp);
-        if (mapped == null && compatibility) {
-            mapped = lookup(NormalizationTables.COMPAT, cp);
-        }
+        int[] mapped = decomposition(cp, compatibility);
         if (mapped == null) {
             return 0;
         }
@@ -559,9 +594,20 @@ public final class Normalization {
         return length;
     }
 
-    private static int @Nullable [] lookup(NormalizationTables.Mapping table, int cp) {
-        int index = Arrays.binarySearch(table.codePoints(), cp);
-        return index >= 0 ? table.mapped()[index] : null;
+    /** {@code cp}'s one-step decomposition by {@link NormalizationTables#DECOMP}, or with
+     *  {@code compatibility} by {@link NormalizationTables#COMPAT} as well, read where
+     *  {@link NormalizationTables#DECOMP_PAGES} says it is; null where it has none. */
+    static int @Nullable [] decomposition(int cp, boolean compatibility) {
+        int at = NormalizationTables.DECOMP_PAGES[(NormalizationTables.DECOMP_BLOCKS[cp >>> 8] & 0xFF) << 8
+                | cp & 0xFF];
+        int canonical = NormalizationTables.DECOMP.mapped().length;
+        if (at == 0) {
+            return null;
+        }
+        if (at <= canonical) {
+            return NormalizationTables.DECOMP.mapped()[at - 1];
+        }
+        return compatibility ? NormalizationTables.COMPAT.mapped()[at - canonical - 1] : null;
     }
 
     /**
@@ -585,44 +631,24 @@ public final class Normalization {
     // blocks it — a mark of a class it is not strictly greater than, or anything at all for a
     // starter. {@link Composing#settle} and {@link Composing#take} are the two halves of it.
 
-    /** The pair-composition table, inverted once from {@link NormalizationTables#DECOMP} rather
-     *  than kept as a fourth generated table: every two-member canonical decomposition whose first
-     *  member is a starter and whose result is not a {@link NormalizationTables#SCRIPT_SPECIFIC_EXCLUSIONS}
-     *  entry, a singleton decomposition, or a non-starter decomposition — the last two read off
-     *  {@code DECOMP}/{@code CCC} themselves, so decomposition and composition cannot disagree with
-     *  each other. Keyed by {@code (long) starter << 32 | (cp & 0xFFFFFFFFL)}, sorted for binary
-     *  search. */
-    private static final long[] COMPOSE_KEYS;
-    private static final int[] COMPOSE_VALUES;
-
-    static {
-        int[] keys = NormalizationTables.DECOMP.codePoints();
-        int[][] mapped = NormalizationTables.DECOMP.mapped();
-        TreeMap<Long, Integer> pairs = new TreeMap<>();
-        for (int i = 0; i < keys.length; i++) {
-            int[] m = mapped[i];
-            if (m.length == 2 && combiningClass(m[0]) == 0
-                    && Arrays.binarySearch(NormalizationTables.SCRIPT_SPECIFIC_EXCLUSIONS, keys[i]) < 0) {
-                pairs.put(pairKey(m[0], m[1]), keys[i]);
-            }
-        }
-        COMPOSE_KEYS = pairs.keySet().stream().mapToLong(Long::longValue).toArray();
-        COMPOSE_VALUES = pairs.values().stream().mapToInt(Integer::intValue).toArray();
-    }
-
-    private static long pairKey(int starter, int cp) {
-        return ((long) starter << 32) | (cp & 0xFFFFFFFFL);
-    }
-
     /** The primary composite of {@code starter} followed by {@code cp}, or -1 if the pair does not
-     *  compose — Hangul's algorithmic L+V and LV+T composition, or {@link #COMPOSE_KEYS}. */
+     *  compose — Hangul's algorithmic L+V and LV+T composition, or
+     *  {@link NormalizationTables#COMPOSITION_CELLS} at the row of {@code starter} and the column of
+     *  {@code cp}. */
     static int compose(int starter, int cp) {
         int hangul = composeHangul(starter, cp);
         if (hangul >= 0) {
             return hangul;
         }
-        int index = Arrays.binarySearch(COMPOSE_KEYS, pairKey(starter, cp));
-        return index >= 0 ? COMPOSE_VALUES[index] : -1;
+        int row = NormalizationTables.COMPOSITION_FIRST_PAGES[
+                (NormalizationTables.COMPOSITION_FIRST_BLOCKS[starter >>> 8] & 0xFF) << 8 | starter & 0xFF];
+        int column = NormalizationTables.COMPOSITION_SECOND_PAGES[
+                (NormalizationTables.COMPOSITION_SECOND_BLOCKS[cp >>> 8] & 0xFF) << 8 | cp & 0xFF] & 0xFF;
+        if (row == 0 || column == 0) {
+            return -1;
+        }
+        int at = NormalizationTables.COMPOSITION_CELLS[(row - 1) * NormalizationTables.COMPOSITION_COLUMNS + column - 1];
+        return at == 0 ? -1 : NormalizationTables.COMPOSITES[at - 1];
     }
 
     private static int composeHangul(int starter, int cp) {

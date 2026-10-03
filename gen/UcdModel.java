@@ -126,8 +126,14 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      * @param longestDecomposition the most code points one code point decomposes into fully, by the
      *                     canonical and the compatibility mappings followed as far as they go, or by
      *                     Hangul's arithmetic: what an implementation makes room for once
+     * @param mostMarksComposed the most marks one starter composes with, one after another: the
+     *                     longest chain of {@code compositions} each of whose second members is a
+     *                     mark, starting from any starter. In a composing form, of the marks held
+     *                     after a starter no more than this many are gone from the answer, so a
+     *                     bounded normalization knows from what it holds that the answer is past the
+     *                     bound before it holds more than the bound and this many marks
      */
-    record NormalizationDerived(CodePointMapping compositions, int longestDecomposition) {}
+    record NormalizationDerived(CodePointMapping compositions, int longestDecomposition, int mostMarksComposed) {}
 
     // Hangul's jamo that compose with a starter before them, by arithmetic rather than by a table
     // (UAX #15, the Hangul section): the vowels and the trailing consonants. The trailing
@@ -151,9 +157,36 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      * @param stableStarters for each code point, the forms it is a
      *                       {@linkplain Decomposition#stableStarter stable starter} in, a bit each, in
      *                       the order of {@link #FORMS}: bit 0 NFC, bit 1 NFD, bit 2 NFKC, bit 3 NFKD
+     * @param caseContext    for each code point, a bit each for what the case conversion asks of it
+     *                       besides its mapping: 1 where it is {@link Casing#cased}, 2 where it is
+     *                       {@link Casing#caseIgnorable}, and 4 where {@link Casing#finalSigma} names it
+     * @param decomposition  for each code point, 0 where it has no decomposition; where
+     *                       {@link Decomposition#canonical} names it, one more than where it is among
+     *                       the code points that mapping names, in order of code point; and where
+     *                       {@link Decomposition#compatibility} does, the number canonical names and
+     *                       one more than where it is among those compatibility names. No code point
+     *                       is named by both
      */
-    record ByCodePoint(PagedTable lower, PagedTable upper, PagedTable combiningClass,
-                       PagedTable stableStarters) {}
+    record ByCodePoint(PagedTable lower, PagedTable upper, PagedTable caseContext, PagedTable combiningClass,
+                       PagedTable stableStarters, PagedTable decomposition, Composing composing) {}
+
+    /**
+     * The primary composites, as a table a pair of code points indexes in three steps: the row of
+     * the first, the column of the second, and the cell there. Hangul's, which are arithmetic, are
+     * not here.
+     *
+     * @param firsts     for each code point, 0 where it is the first member of no composition, and
+     *                   otherwise one more than its row: where it is among the first members, in order
+     *                   of code point
+     * @param seconds    the same of the second members, by column. A code point is not 0 here where
+     *                   and only where a starter before it may compose with it by the table
+     * @param columns    how many second members there are, the length of a row
+     * @param cells      for each row and column, at {@code row * columns + column}, 0 where the pair
+     *                   does not compose, and otherwise one more than where the composite is among
+     *                   {@code composites}
+     * @param composites the primary composites, in order of code point
+     */
+    record Composing(PagedTable firsts, PagedTable seconds, int columns, int[] cells, int[] composites) {}
 
     /** The four normalization forms, by name, in the order each is a bit of
      *  {@link ByCodePoint#stableStarters}. */
@@ -175,6 +208,21 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
      * @param ranges each a {@code [start, end]} pair
      */
     record RangeSet(List<int[]> ranges) {
+
+        /** Whether one of the ranges holds {@code cp}. */
+        boolean contains(int cp) {
+            int low = 0;
+            int high = ranges.size();
+            while (low < high) {
+                int mid = (low + high) >>> 1;
+                if (ranges.get(mid)[1] < cp) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            return low < ranges.size() && ranges.get(low)[0] <= cp;
+        }
 
         RangeSet {
             for (int i = 1; i < ranges.size(); i++) {
@@ -321,8 +369,18 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
             }
         }
 
-        return new Casing(merge(simpleLower, fullLower), merge(simpleUpper, fullUpper),
+        Casing read = new Casing(merge(simpleLower, fullLower), merge(simpleUpper, fullUpper),
                 new CodePointMapping(finalSigma), new RangeSet(cased), new RangeSet(caseIgnorable));
+        // A bounded conversion counts each code point it reads as at least one of the answer.
+        for (CodePointMapping mapping : List.of(read.lower(), read.upper(), read.finalSigma())) {
+            mapping.entries().forEach((cp, mapped) -> {
+                if (mapped.length == 0) {
+                    throw new IllegalStateException("U+" + hex(cp) + " maps to nothing, where a bounded case"
+                            + " conversion takes every code point to be at least one of the answer");
+                }
+            });
+        }
+        return read;
     }
 
     /** Condition lists checked to be locale tailoring rather than merely unrecognized.
@@ -471,7 +529,11 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
             }
         }
         SortedMap<Integer, Integer> ccc = decomposition.combiningClass().entries();
+        SortedSet<Integer> finalSigma = new TreeSet<>(casing.finalSigma().entries().keySet());
         return new ByCodePoint(lower, positions(casing.upper()),
+                PagedTable.of(cp -> (casing.cased().contains(cp) ? 1 : 0)
+                        | (casing.caseIgnorable().contains(cp) ? 2 : 0)
+                        | (finalSigma.contains(cp) ? 4 : 0)),
                 PagedTable.of(cp -> ccc.getOrDefault(cp, 0)),
                 PagedTable.of(cp -> {
                     int forms = 0;
@@ -481,7 +543,54 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
                         }
                     }
                     return forms;
-                }));
+                }),
+                decompositionPositions(decomposition), composing(derived.compositions()));
+    }
+
+    /** Each of {@code codePoints} by where it is among them, from 0. */
+    private static Map<Integer, Integer> numbered(SortedSet<Integer> codePoints) {
+        Map<Integer, Integer> numbered = new TreeMap<>();
+        for (int cp : codePoints) {
+            numbered.put(cp, numbered.size());
+        }
+        return numbered;
+    }
+
+    /** {@link ByCodePoint#composing}: the first and the second members numbered in order of code
+     *  point, and each pair's cell the composite's place among the composites. */
+    private static Composing composing(CodePointMapping compositions) {
+        SortedSet<Integer> firsts = new TreeSet<>();
+        SortedSet<Integer> seconds = new TreeSet<>();
+        for (int[] pair : compositions.entries().values()) {
+            firsts.add(pair[0]);
+            seconds.add(pair[1]);
+        }
+        Map<Integer, Integer> rows = numbered(firsts);
+        Map<Integer, Integer> columns = numbered(seconds);
+        int[] composites = compositions.entries().keySet().stream().mapToInt(Integer::intValue).toArray();
+        int[] cells = new int[rows.size() * columns.size()];
+        for (int i = 0; i < composites.length; i++) {
+            int[] pair = compositions.entries().get(composites[i]);
+            cells[rows.get(pair[0]) * columns.size() + columns.get(pair[1])] = i + 1;
+        }
+        return new Composing(PagedTable.of(cp -> rows.containsKey(cp) ? rows.get(cp) + 1 : 0),
+                PagedTable.of(cp -> columns.containsKey(cp) ? columns.get(cp) + 1 : 0),
+                columns.size(), cells, composites);
+    }
+
+    /** {@link ByCodePoint#decomposition}: the canonical decompositions numbered from 1, and the
+     *  compatibility ones after them. */
+    private static PagedTable decompositionPositions(Decomposition decomposition) {
+        Map<Integer, Integer> position = new TreeMap<>();
+        for (CodePointMapping mapping : List.of(decomposition.canonical(), decomposition.compatibility())) {
+            for (int cp : mapping.entries().keySet()) {
+                if (position.put(cp, position.size() + 1) != null) {
+                    throw new IllegalStateException("U+" + hex(cp) + " has a canonical and a compatibility"
+                            + " decomposition, where the table of decompositions holds one");
+                }
+            }
+        }
+        return PagedTable.of(cp -> position.getOrDefault(cp, 0));
     }
 
     /** For each code point, 0 where {@code mapping} maps it to itself, by not naming it or by
@@ -524,7 +633,48 @@ record UcdModel(String version, Map<String, String> sha256, Casing casing, Decom
                 longest = Math.max(longest, fullDecomposition(decomposition, cp).size());
             }
         }
-        return new NormalizationDerived(new CodePointMapping(compositions), longest);
+        return new NormalizationDerived(new CodePointMapping(compositions), longest,
+                mostMarksComposed(compositions, ccc));
+    }
+
+    /** The longest chain of {@code compositions} each of whose second members is a mark: a starter
+     *  that composes with a mark is the first member of the next, by the composite. Hangul's compose
+     *  only with jamo, which are starters, so none is in a chain. A chain that comes back to where
+     *  it was would let one starter take in any number of marks, and stops the generator. */
+    private static int mostMarksComposed(SortedMap<Integer, int[]> compositions, SortedMap<Integer, Integer> ccc) {
+        Map<Integer, List<Integer>> byMark = new TreeMap<>();
+        compositions.forEach((cp, pair) -> {
+            if (ccc.getOrDefault(pair[1], 0) != 0) {
+                byMark.computeIfAbsent(pair[0], first -> new ArrayList<>()).add(cp);
+            }
+        });
+        Map<Integer, Integer> longest = new TreeMap<>();
+        int most = 0;
+        for (int first : byMark.keySet()) {
+            most = Math.max(most, marksComposedFrom(first, byMark, longest, new TreeSet<>()));
+        }
+        return most;
+    }
+
+    /** The most marks {@code starter} composes with one after another, by {@code byMark}, what each
+     *  composes into with a mark; {@code longest} holds what is worked out, and {@code on} the
+     *  starters of the chain this is in. */
+    private static int marksComposedFrom(int starter, Map<Integer, List<Integer>> byMark,
+                                         Map<Integer, Integer> longest, Set<Integer> on) {
+        Integer known = longest.get(starter);
+        if (known != null) {
+            return known;
+        }
+        if (!on.add(starter)) {
+            throw new IllegalStateException("U+" + hex(starter) + " composes with marks back into itself");
+        }
+        int most = 0;
+        for (int composite : byMark.getOrDefault(starter, List.of())) {
+            most = Math.max(most, 1 + marksComposedFrom(composite, byMark, longest, on));
+        }
+        on.remove(starter);
+        longest.put(starter, most);
+        return most;
     }
 
     /** {@code cp}'s decomposition by the canonical and the compatibility mappings, followed as far as

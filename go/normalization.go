@@ -1,9 +1,7 @@
 package notation199x
 
 import (
-	"slices"
 	"strings"
-	"sync"
 	"unicode/utf8"
 )
 
@@ -52,26 +50,42 @@ func (f *formFacts) stable(r rune) bool {
 }
 
 // stableUpTo is where the stable starters s has from at end: the first code point from there that
-// is not one, or the end of the text; how many code points it went past; and where the last of
-// them begins, which is at where it went past none.
-func (f *formFacts) stableUpTo(s string, at int) (end, count, last int) {
+// is not one, or the end of the text, or, where left is not negative, where it has gone past one
+// more than left of them; how many code points it went past; and where the last of them begins,
+// which is at where it went past none.
+func (f *formFacts) stableUpTo(s string, at, left int) (end, count, last int) {
 	last = at
-	for at < len(s) {
-		if c := s[at]; c < utf8.RuneSelf {
+	for at < len(s) && (left < 0 || count <= left) {
+		stop := scanStop(s, at, left, count)
+		for at < stop {
+			if c := s[at]; c < utf8.RuneSelf {
+				last = at
+				at++
+				count++
+				continue
+			}
+			r, size := utf8.DecodeRuneInString(s[at:])
+			if !f.stable(r) {
+				return at, count, last
+			}
 			last = at
-			at++
+			at += size
 			count++
-			continue
 		}
-		r, size := utf8.DecodeRuneInString(s[at:])
-		if !f.stable(r) {
-			break
-		}
-		last = at
-		at += size
-		count++
 	}
 	return at, count, last
+}
+
+// scanStop is how far a scan of s from at, which may go past one more than left code points and
+// has gone past count, can go without counting them: a code point is a byte or more, so up to
+// there it goes past no more than that, and a code point past ASCII can leave it short, where the
+// scan goes on from there. What is left is held against the bytes left before anything is added
+// to at, so that no bound, however large, takes it past the end. A negative left is no bound.
+func scanStop(s string, at, left, count int) int {
+	if left < 0 || left-count >= len(s)-at {
+		return len(s)
+	}
+	return at + left - count + 1
 }
 
 // facts is what the algorithm asks of f, which panics where f is none of the four forms.
@@ -106,8 +120,10 @@ func Normalize(form Form, s string) string {
 }
 
 // NormalizeWithin is [Normalize] where that is no longer than longest scalar values, and false
-// where it is longer, which is found out before more than longest is written. A negative bound is
-// one no text is within. NormalizeWithin panics where form is none of the four forms.
+// where it is longer, which is found out before more than longest is written. What it holds and
+// how much of s it reads turn on longest and not on the length of s: it reads no further once what
+// it has read shows the answer to be longer. A negative bound is one no text is within.
+// NormalizeWithin panics where form is none of the four forms.
 func NormalizeWithin(form Form, s string, longest int) (string, bool) {
 	form.facts()
 	if longest < 0 {
@@ -126,6 +142,10 @@ func NormalizeWithin(form Form, s string, longest int) (string, bool) {
 // and blocks every mark after it from reaching a starter before it, so what comes before it is
 // settled when it is read. A run is written into the answer only where it changed what it went
 // over, and the answer is made only once one has: up to there it is the text.
+//
+// Each stable starter read is at least one code point of the answer, as the starter it is or
+// composed with what follows it, so with a bound the text is read no further once those read and
+// those before them are more than longest.
 func normalize(form Form, s string, longest int) (string, bool) {
 	facts := form.facts()
 	var out strings.Builder
@@ -137,8 +157,16 @@ func normalize(form Form, s string, longest int) (string, bool) {
 	before, read := 0, 0
 	var c *composing
 	for at := 0; at < len(s); {
-		if end, count, last := facts.stableUpTo(s, at); end > at {
+		// What is written and read is never more than longest, so what is left is never negative.
+		left := -1
+		if longest >= 0 {
+			left = longest - before - read
+		}
+		if end, count, last := facts.stableUpTo(s, at, left); end > at {
 			read += count
+			if longest >= 0 && before+read > longest {
+				return "", false
+			}
 			start = last
 			at = end
 			if at == len(s) {
@@ -169,9 +197,6 @@ func normalize(form Form, s string, longest int) (string, bool) {
 		start = end
 		at = end
 	}
-	if longest >= 0 && before+read > longest {
-		return "", false
-	}
 	if !changed {
 		return s, true
 	}
@@ -186,10 +211,14 @@ const fewMarks = 32
 // composing is one pass of canonical ordering and, where the form composes, composition over code
 // points already decomposed: the starter of the run it is in, the marks held after it, and what is
 // settled.
+//
+// With a bound, what is written and the least of the answer what is held can come to are no more
+// than longest, which take holds to before it holds another mark: the starter, and the marks but
+// those it may compose with, which are no more than mostMarksComposed. So a run holds no more than
+// longest and mostMarksComposed marks, whatever the length of the text.
 type composing struct {
-	form         *formFacts
-	compositions map[[2]rune]rune
-	longest      int
+	form    *formFacts
+	longest int
 	// out is what run wrote, the run settled.
 	out []byte
 	// written is how many code points of the answer come before what is held: those before the
@@ -207,7 +236,7 @@ type composing struct {
 }
 
 func newComposing(form *formFacts, longest int) *composing {
-	c := &composing{form: form, compositions: compositionPairs(), longest: longest, starter: -1}
+	c := &composing{form: form, longest: longest, starter: -1}
 	c.out = c.outRoom[:0]
 	c.marks = c.marksRoom[:0]
 	c.parts = c.partsRoom[:0]
@@ -252,12 +281,15 @@ func (c *composing) run(s string, start, at int, before int) (int, bool) {
 // longest.
 func (c *composing) take(r rune) bool {
 	if combiningClass(r) != 0 {
+		if c.longest >= 0 && c.leastHeld(len(c.marks)+1) > c.longest-c.written {
+			return false
+		}
 		c.marks = append(c.marks, r)
 		return true
 	}
 	kept := c.settle()
 	if c.form.composes && c.starter >= 0 && kept == 0 {
-		if composed, ok := c.compose(c.starter, r); ok {
+		if composed, ok := compose(c.starter, r); ok {
 			c.starter = composed
 			return true
 		}
@@ -267,6 +299,19 @@ func (c *composing) take(r rune) bool {
 	}
 	c.starter = r
 	return true
+}
+
+// leastHeld is the least number of code points of the answer the starter held and marks marks
+// after it come to, whatever follows: every mark, and the starter, but those of the marks it may
+// compose with in a composing form.
+func (c *composing) leastHeld(marks int) int {
+	if c.starter < 0 {
+		return marks
+	}
+	if c.form.composes {
+		marks = max(marks-mostMarksComposed, 0)
+	}
+	return 1 + marks
 }
 
 // settle puts the held marks in canonical order and, where the form composes, composes into the
@@ -283,7 +328,7 @@ func (c *composing) settle() int {
 	for _, mark := range c.marks {
 		class := int(combiningClass(mark))
 		if lastClass < class {
-			if composed, ok := c.compose(c.starter, mark); ok {
+			if composed, ok := compose(c.starter, mark); ok {
 				c.starter = composed
 				continue
 			}
@@ -381,10 +426,7 @@ func decomposeInto(dst []rune, r rune, compatibility bool) ([]rune, bool) {
 		}
 		return dst, true
 	}
-	mapped := canonicalDecomposition.of(r)
-	if mapped == nil && compatibility {
-		mapped = compatibilityDecomposition.of(r)
-	}
+	mapped := decompositionOf(r, compatibility)
 	if mapped == nil {
 		return dst, false
 	}
@@ -397,37 +439,31 @@ func decomposeInto(dst []rune, r rune, compatibility bool) ([]rune, bool) {
 	return dst, true
 }
 
+// decompositionOf is r's one-step decomposition by canonicalDecomposition, or with compatibility by
+// compatibilityDecomposition as well, read where decompositionPositionPages says it is; nil where
+// it has none.
+func decompositionOf(r rune, compatibility bool) []rune {
+	at := int(decompositionPositionPages[int(decompositionPositionBlocks[r>>8])<<8|int(r&0xFF)])
+	switch {
+	case at == 0:
+		return nil
+	case at <= len(canonicalDecomposition):
+		return canonicalDecomposition[at-1].to
+	case compatibility:
+		return compatibilityDecomposition[at-len(canonicalDecomposition)-1].to
+	}
+	return nil
+}
+
 // combiningClass is r's canonical combining class: 0 for a starter, and for a mark the class
 // canonical ordering sorts it by. No Hangul jamo or syllable has one other than 0.
 func combiningClass(r rune) uint8 {
 	return combiningClassPages[int(combiningClassBlocks[r>>8])<<8|int(r&0xFF)]
 }
 
-// compositionPairs is the pair-composition table, worked out the first time the algorithm runs, so
-// that a program that never runs it pays nothing for it.
-var compositionPairs = sync.OnceValue(compositions)
-
-// compositions is the pair-composition table, inverted from canonicalDecomposition rather than
-// kept as a generated table of its own: every two-member canonical decomposition whose first
-// member is a starter and whose result is not a script-specific exclusion. The other two
-// Full_Composition_Exclusion categories, singleton and non-starter decompositions, are read off
-// the decomposition and the combining classes themselves, so decomposition and composition cannot
-// disagree.
-func compositions() map[[2]rune]rune {
-	pairs := make(map[[2]rune]rune)
-	for _, each := range canonicalDecomposition {
-		if len(each.to) == 2 && combiningClass(each.to[0]) == 0 {
-			if _, excluded := slices.BinarySearch(scriptSpecificExclusions, each.from); !excluded {
-				pairs[[2]rune{each.to[0], each.to[1]}] = each.from
-			}
-		}
-	}
-	return pairs
-}
-
 // compose is the primary composite of starter followed by r, and false where the pair does not
-// compose: Hangul's L+V and LV+T, or the table.
-func (c *composing) compose(starter, r rune) (rune, bool) {
+// compose: Hangul's L+V and LV+T, or compositionCells at the row of starter and the column of r.
+func compose(starter, r rune) (rune, bool) {
 	if starter >= hangulLBase && starter < hangulLBase+hangulLCount &&
 		r >= hangulVBase && r < hangulVBase+hangulVCount {
 		return hangulSBase + ((starter-hangulLBase)*hangulVCount+(r-hangulVBase))*hangulTCount, true
@@ -436,6 +472,13 @@ func (c *composing) compose(starter, r rune) (rune, bool) {
 		r > hangulTBase && r < hangulTBase+hangulTCount {
 		return starter + (r - hangulTBase), true
 	}
-	composed, ok := c.compositions[[2]rune{starter, r}]
-	return composed, ok
+	row := int(compositionFirstPages[int(compositionFirstBlocks[starter>>8])<<8|int(starter&0xFF)])
+	column := int(compositionSecondPages[int(compositionSecondBlocks[r>>8])<<8|int(r&0xFF)])
+	if row == 0 || column == 0 {
+		return 0, false
+	}
+	if at := compositionCells[(row-1)*compositionColumns+column-1]; at != 0 {
+		return composites[at-1], true
+	}
+	return 0, false
 }

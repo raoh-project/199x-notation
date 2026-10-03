@@ -40,8 +40,9 @@ final class Normalization
 
     /**
      * normalize($form, $s) where that is no longer than $longest scalar values, and null where it
-     * is longer, which is found out before more than $longest is written. A negative bound is one
-     * no text is within.
+     * is longer, which is found out before more than $longest is written. What it holds and how
+     * much of $s it reads turn on $longest and not on the length of $s: it reads no further once
+     * what it has read shows the answer to be longer. A negative bound is one no text is within.
      */
     public static function normalizeWithin(NormalizationForm $form, string $s, int $longest): ?string
     {
@@ -64,6 +65,10 @@ final class Normalization
      * where the text is read to; and how many scalar values of the answer come before that. A run
      * is written into the answer only where it changed what it went over, and the answer is made
      * only once one has: up to there it is the text.
+     *
+     * Each stable starter read is at least one scalar value of the answer, as the starter it is or
+     * composed with what follows it, so with a bound the text is read no further once those read
+     * and those before them are more than $longest.
      *
      * What a normalization does that grows with the text is done in these loops and in no call to
      * PHP, so a checkpoint added later asks in each of them: normalizeCore() over the runs of the
@@ -89,7 +94,13 @@ final class Normalization
         $read = 0;
         $composing = null;
         for ($at = 0; $at < $length;) {
-            $stable = self::stableUpTo($s, $at, $length, $facts->limit, $facts->bit, $read, $start);
+            // What is written and read is never more than $longest, so what is left is never
+            // negative, and nothing is added to it.
+            $left = $longest < 0 ? -1 : $longest - $before - $read;
+            $stable = self::stableUpTo($s, $at, $length, $left, $facts->limit, $facts->bit, $read, $start);
+            if ($longest >= 0 && $before + $read > $longest) {
+                return null;
+            }
             if ($stable === $length) {
                 break;
             }
@@ -113,57 +124,63 @@ final class Normalization
             $start = $end;
             $at = $end;
         }
-        if ($longest >= 0 && $before + $read > $longest) {
-            return null;
-        }
         return $out === null ? $s : $out . substr($s, $kept);
     }
 
     /**
      * Where the stable starters of the form that $s has from $at end: the first character from
-     * there that is not one, or the end of the text. Adds how many it read to $read, and sets
-     * $last to where the last of them begins where it read any.
+     * there that is not one, or the end of the text, or, where $left is not negative, where it has
+     * gone past one more than $left of them. Adds how many it read to $read, and sets $last to
+     * where the last of them begins where it read any.
      *
      * A step of its loop is a run of ASCII, which is below every form's limit (NormalizationTest
      * holds the tables to that), gone past whole, or one character. A character is decoded from
-     * its bytes where it is, and not taken out of the text first.
+     * its bytes where it is, and not taken out of the text first. A character is a byte or more,
+     * so going up to $stop goes past no more than one more than $left of them, with no count kept
+     * against $left at each step; a character past ASCII can leave it short, and it goes on from
+     * there. What is left is held against the bytes left before anything is added to $at, so that
+     * no bound, however large, takes it past the end or out of int.
      */
-    private static function stableUpTo(string $s, int $at, int $length, int $limit, int $bit, int &$read, int &$last): int
+    private static function stableUpTo(string $s, int $at, int $length, int $left, int $limit, int $bit, int &$read, int &$last): int
     {
         $blocks = NormalizationTables::STABLE_BLOCKS;
         $pages = NormalizationTables::STABLE_PAGES;
-        while ($at < $length) {
-            $b0 = ord($s[$at]);
-            if ($b0 < 0x80) {
-                // A checkpoint added later bounds the run by strspn's length.
-                $run = strspn($s, self::ASCII, $at, $length - $at);
-                $read += $run;
-                $at += $run;
-                $last = $at - 1;
-                continue;
+        $from = $read;
+        while ($at < $length && ($left < 0 || $read - $from <= $left)) {
+            $stop = $left < 0 || $left - ($read - $from) >= $length - $at ? $length : $at + $left - ($read - $from) + 1;
+            while ($at < $stop) {
+                $b0 = ord($s[$at]);
+                if ($b0 < 0x80) {
+                    // A checkpoint added later bounds the run by strspn's length.
+                    $run = strspn($s, self::ASCII, $at, $stop - $at);
+                    $read += $run;
+                    $at += $run;
+                    $last = $at - 1;
+                    continue;
+                }
+                if ($b0 >= 0xE0 && $b0 < 0xF0) {
+                    $cp = (($b0 & 0x0F) << 12) | ((ord($s[$at + 1] ?? "\x80") & 0x3F) << 6)
+                        | (ord($s[$at + 2] ?? "\x80") & 0x3F);
+                    $width = 3;
+                } elseif ($b0 < 0xC0) {
+                    // Not the first byte of a character, which valid UTF-8 has none of here.
+                    $cp = $b0;
+                    $width = 1;
+                } elseif ($b0 < 0xE0) {
+                    $cp = (($b0 & 0x1F) << 6) | (ord($s[$at + 1] ?? "\x80") & 0x3F);
+                    $width = 2;
+                } else {
+                    $cp = (($b0 & 0x07) << 18) | ((ord($s[$at + 1] ?? "\x80") & 0x3F) << 12)
+                        | ((ord($s[$at + 2] ?? "\x80") & 0x3F) << 6) | (ord($s[$at + 3] ?? "\x80") & 0x3F);
+                    $width = 4;
+                }
+                if ($cp >= $limit && $cp <= 0x10FFFF && (ord($pages[ord($blocks[$cp >> 8]) << 8 | $cp & 0xFF]) & $bit) === 0) {
+                    return $at;
+                }
+                $read++;
+                $last = $at;
+                $at += $width;
             }
-            if ($b0 >= 0xE0 && $b0 < 0xF0) {
-                $cp = (($b0 & 0x0F) << 12) | ((ord($s[$at + 1] ?? "\x80") & 0x3F) << 6)
-                    | (ord($s[$at + 2] ?? "\x80") & 0x3F);
-                $width = 3;
-            } elseif ($b0 < 0xC0) {
-                // Not the first byte of a character, which valid UTF-8 has none of here.
-                $cp = $b0;
-                $width = 1;
-            } elseif ($b0 < 0xE0) {
-                $cp = (($b0 & 0x1F) << 6) | (ord($s[$at + 1] ?? "\x80") & 0x3F);
-                $width = 2;
-            } else {
-                $cp = (($b0 & 0x07) << 18) | ((ord($s[$at + 1] ?? "\x80") & 0x3F) << 12)
-                    | ((ord($s[$at + 2] ?? "\x80") & 0x3F) << 6) | (ord($s[$at + 3] ?? "\x80") & 0x3F);
-                $width = 4;
-            }
-            if ($cp >= $limit && $cp <= 0x10FFFF && (ord($pages[ord($blocks[$cp >> 8]) << 8 | $cp & 0xFF]) & $bit) === 0) {
-                return $at;
-            }
-            $read++;
-            $last = $at;
-            $at += $width;
         }
         return $at;
     }

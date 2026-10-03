@@ -51,8 +51,21 @@ final class PhpEmitter {
         mapping(out, "FINAL_SIGMA",
                 "The lowercase mapping that replaces LOWER's at the end of a cased run (Final_Sigma)",
                 casing.finalSigma());
-        ranges(out, "CASED", "Cased", casing.cased());
-        ranges(out, "CASE_IGNORABLE", "Case_Ignorable", casing.caseIgnorable());
+        PagedTable context = model.byCodePoint().caseContext();
+        if (context.pages().size() > 0x100 || context.greatest() > 0xFF) {
+            throw new IllegalStateException("CONTEXT does not fit the strings it is written as");
+        }
+        out.append("    /**\n");
+        comment(out, "    ", "For each code point, a bit each for what Final_Sigma asks of it: 1 where it is Cased, 2"
+                + " where it is Case_Ignorable, and 4 where FINAL_SIGMA names it, as the byte at"
+                + " ord(CONTEXT_BLOCKS[$cp >> " + PagedTable.SHIFT + "]) << " + PagedTable.SHIFT + " | $cp & 0x"
+                + UcdModel.hex(PagedTable.PAGE - 1) + " of CONTEXT_PAGES: each block of " + PagedTable.PAGE
+                + " code points has the page of its values, and blocks that hold the same values share one ("
+                + context.pages().size() + " pages).");
+        out.append("     */\n");
+        out.append("    public const CONTEXT_BLOCKS = ").append(bytes(context.blocks())).append(";\n\n");
+        out.append("    /** The pages CONTEXT_BLOCKS gives each block. */\n");
+        out.append("    public const CONTEXT_PAGES = ").append(bytes(context.values())).append(";\n\n");
         return footer(out);
     }
 
@@ -126,6 +139,13 @@ final class PhpEmitter {
             out.append("    public const ").append(form.toUpperCase(Locale.ROOT)).append("_TRIVIAL_LIMIT = ")
                     .append(code(limit)).append(";\n\n");
         }
+
+        out.append("    /**\n");
+        out.append("     * The most marks one starter composes with, one after another, in a composing form: of the\n");
+        out.append("     * marks held after a starter, no more than this many are gone from the answer.\n");
+        out.append("     */\n");
+        out.append("    public const MOST_MARKS_COMPOSED = ")
+                .append(model.normalizationDerived().mostMarksComposed()).append(";\n\n");
         return footer(out);
     }
 

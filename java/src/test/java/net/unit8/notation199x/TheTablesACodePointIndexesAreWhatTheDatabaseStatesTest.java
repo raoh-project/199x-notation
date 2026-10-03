@@ -95,6 +95,27 @@ class TheTablesACodePointIndexesAreWhatTheDatabaseStatesTest {
         assertEquals(List.of(), wrong);
     }
 
+    /** The table of where each decomposition is answers what the searched mappings do. */
+    @Test
+    void theDecompositionTableAnswersWhatTheMappingsDo() {
+        List<String> wrong = new ArrayList<>();
+        for (int cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
+            int canonical = Arrays.binarySearch(NormalizationTables.DECOMP.codePoints(), cp);
+            int compatibility = Arrays.binarySearch(NormalizationTables.COMPAT.codePoints(), cp);
+            int[] searched = canonical >= 0 ? NormalizationTables.DECOMP.mapped()[canonical] : null;
+            if (!Arrays.equals(Normalization.decomposition(cp, false), searched)) {
+                wrong.add(Integer.toHexString(cp));
+            }
+            if (searched == null && compatibility >= 0) {
+                searched = NormalizationTables.COMPAT.mapped()[compatibility];
+            }
+            if (!Arrays.equals(Normalization.decomposition(cp, true), searched)) {
+                wrong.add(Integer.toHexString(cp) + " with compatibility");
+            }
+        }
+        assertEquals(List.of(), wrong);
+    }
+
     /** The room a decomposition is written into is the longest one there is, in any form. */
     @Test
     void theRoomForADecompositionIsTheLongestThereIs() {
@@ -104,6 +125,97 @@ class TheTablesACodePointIndexesAreWhatTheDatabaseStatesTest {
             longest = Math.max(longest, parts == null ? 1 : parts.length);
         }
         assertEquals(longest, NormalizationTables.LONGEST_DECOMPOSITION);
+    }
+
+    /** The case context of every code point is what {@code DerivedCoreProperties.txt} states of
+     *  {@code Cased} and {@code Case_Ignorable}, and whether {@link CaseTables#FINAL_SIGMA} names it. */
+    @Test
+    void theCaseContextIsWhatTheDatabaseStates() throws IOException {
+        Set<Integer> cased = property("DerivedCoreProperties.txt", "Cased");
+        Set<Integer> ignorable = property("DerivedCoreProperties.txt", "Case_Ignorable");
+        Set<Integer> finalSigma = new HashSet<>();
+        for (int cp : CaseTables.FINAL_SIGMA.codePoints()) {
+            finalSigma.add(cp);
+        }
+        List<String> wrong = new ArrayList<>();
+        for (int cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
+            if (CaseConversion.hasContext(cp, CaseConversion.CASED) != cased.contains(cp)
+                    || CaseConversion.hasContext(cp, CaseConversion.CASE_IGNORABLE) != ignorable.contains(cp)
+                    || CaseConversion.hasContext(cp, CaseConversion.FINAL_SIGMA_NAMED) != finalSigma.contains(cp)) {
+                wrong.add(Integer.toHexString(cp));
+            }
+        }
+        assertEquals(List.of(), wrong);
+    }
+
+    /** The composition table composes every two-member canonical decomposition in
+     *  {@code UnicodeData.txt} whose first member is a starter and that
+     *  {@code DerivedNormalizationProps.txt} does not give {@code Full_Composition_Exclusion}, and no
+     *  other pair; a code point has a column where and only where it is the second member of one of
+     *  those. */
+    @Test
+    void theCompositionTableIsWhatTheDatabaseStates() throws IOException {
+        Map<Integer, Integer> classes = combiningClasses();
+        Set<Integer> excluded = property("DerivedNormalizationProps.txt", "Full_Composition_Exclusion");
+        Set<Integer> seconds = new HashSet<>();
+        List<String> wrong = new ArrayList<>();
+        int stated = 0;
+        for (String line : Files.readAllLines(Ucd.file("UnicodeData.txt"))) {
+            String[] f = line.split(";", -1);
+            int composite = Integer.parseInt(f[0], 16);
+            if (f[5].isEmpty() || f[5].startsWith("<")) {
+                continue;
+            }
+            String[] parts = f[5].split(" ");
+            if (parts.length != 2 || excluded.contains(composite)) {
+                continue;
+            }
+            int first = Integer.parseInt(parts[0], 16);
+            int second = Integer.parseInt(parts[1], 16);
+            if (classes.containsKey(first)) {
+                continue;
+            }
+            stated++;
+            seconds.add(second);
+            if (Normalization.compose(first, second) != composite) {
+                wrong.add(Integer.toHexString(first) + " " + Integer.toHexString(second));
+            }
+        }
+        int composing = 0;
+        for (char at : NormalizationTables.COMPOSITION_CELLS) {
+            if (at != 0) {
+                composing++;
+            }
+        }
+        assertEquals(stated, composing, "pairs the table composes");
+        for (int cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
+            boolean second = NormalizationTables.COMPOSITION_SECOND_PAGES[
+                    (NormalizationTables.COMPOSITION_SECOND_BLOCKS[cp >>> 8] & 0xFF) << 8 | cp & 0xFF] != 0;
+            if (second != seconds.contains(cp)) {
+                wrong.add("second " + Integer.toHexString(cp));
+            }
+        }
+        assertEquals(List.of(), wrong);
+    }
+
+    /** The code points a property file of the database gives {@code name}. */
+    private static Set<Integer> property(String file, String name) throws IOException {
+        Set<Integer> has = new HashSet<>();
+        for (String line : Files.readAllLines(Ucd.file(file))) {
+            String[] f = line.split("#", 2)[0].split(";");
+            if (f.length < 2 || !f[1].trim().equals(name)) {
+                continue;
+            }
+            String[] range = f[0].trim().split("\\.\\.");
+            int last = Integer.parseInt(range[range.length - 1], 16);
+            for (int cp = Integer.parseInt(range[0], 16); cp <= last; cp++) {
+                has.add(cp);
+            }
+        }
+        if (has.isEmpty()) {
+            throw new IllegalStateException(file + " gives no code point " + name);
+        }
+        return has;
     }
 
     /** The non-zero combining classes {@code UnicodeData.txt} states, by code point. No range it

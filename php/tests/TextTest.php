@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Raoh\Notation199x\Tests;
 
 use PHPUnit\Framework\TestCase;
+use Raoh\Notation199x\Tests\Support\Repository;
+use Raoh\Notation199x\Internal\Utf8;
+use Raoh\Notation199x\Internal\CaseTables;
 use Raoh\Notation199x\CaseConversion;
 use Raoh\Notation199x\ScalarValues;
 use Raoh\Notation199x\TemporalAnswer;
@@ -96,6 +99,44 @@ final class TextTest extends TestCase
         self::assertSame('STRASSE', CaseConversion::uppercaseWithin('straße', 7));
         self::assertNull(CaseConversion::lowercaseWithin('', -1));
         self::assertSame('', CaseConversion::lowercaseWithin('', 0));
+    }
+
+    /**
+     * The case context of every code point is what DerivedCoreProperties.txt states of Cased and
+     * Case_Ignorable, and whether FINAL_SIGMA names it.
+     */
+    public function testTheCaseContextIsWhatTheDatabaseStates(): void
+    {
+        $cased = [];
+        $ignorable = [];
+        foreach (explode("\n", Repository::read('ucd/18.0.0/DerivedCoreProperties.txt')) as $line) {
+            $fields = explode(';', explode('#', $line, 2)[0]);
+            if (count($fields) < 2) {
+                continue;
+            }
+            $name = trim($fields[1]);
+            if ($name !== 'Cased' && $name !== 'Case_Ignorable') {
+                continue;
+            }
+            $range = explode('..', trim($fields[0]));
+            for ($cp = intval($range[0], 16), $last = intval($range[count($range) - 1], 16); $cp <= $last; $cp++) {
+                if ($name === 'Cased') {
+                    $cased[$cp] = true;
+                } else {
+                    $ignorable[$cp] = true;
+                }
+            }
+        }
+        $wrong = [];
+        for ($cp = 0; $cp <= 0x10FFFF; $cp++) {
+            $context = ord(CaseTables::CONTEXT_PAGES[ord(CaseTables::CONTEXT_BLOCKS[$cp >> 8]) << 8 | $cp & 0xFF]);
+            $stated = (isset($cased[$cp]) ? 1 : 0) | (isset($ignorable[$cp]) ? 2 : 0)
+                | ($cp >= 0xD800 && $cp <= 0xDFFF || !isset(CaseTables::FINAL_SIGMA[Utf8::encode($cp)]) ? 0 : 4);
+            if ($context !== $stated && count($wrong) < 20) {
+                $wrong[] = sprintf('U+%04X is %d, not %d', $cp, $context, $stated);
+            }
+        }
+        self::assertSame([], $wrong);
     }
 
     public function testTextACaseConversionLeavesAsItIsIsAnsweredWithItself(): void
