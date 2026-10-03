@@ -43,6 +43,7 @@ class AMachineIsWhatItWasMadeAsTest {
     void whatItWasWrittenFromMayBeWrittenToAndTheMachineIsAsItWas() {
         Written written = Written.ofAs();
         Automaton machine = Automaton.madeOf(written.rows(), written.accepting());
+        int shape = machine.shape();
 
         written.accepting().clear(0);
         written.row().clear();
@@ -54,6 +55,7 @@ class AMachineIsWhatItWasMadeAsTest {
         assertEquals(List.of(new Automaton.Step(CodePoints.of('a'), 0)), machine.stepsFrom(0));
         assertEquals(true, machine.accepts("aaa", ROOMY));
         assertEquals(false, machine.accepts("ab", ROOMY));
+        assertEquals(shape, machine.shape(), "and so is the hash read off its table");
         // And every operation still walks it: the tables are in step with each other.
         Automaton one = machine.canonical(ROOMY);
         assertTrue(one.walks("aa"));
