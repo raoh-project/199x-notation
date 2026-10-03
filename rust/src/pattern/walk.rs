@@ -38,14 +38,15 @@ const NO_STEP: u64 = u64::MAX;
 /// machine's states.
 ///
 /// Two sets are kept whatever they cost: the one a walk starts in, which every match needs, and the
-/// one the walk has come to when the others are forgotten ([`Cache::hold`]), with the step between
-/// them. [`Cache::forget`] keeps the first, so no match forgets the others to keep it, and a set
-/// larger than the room is kept beside it. What they hold is not counted against [`KNOWN_BYTES`]
-/// but apart from it ([`Cache::needed`]): the room bounds everything else, the other sets, the
-/// steps and the lists that hold them. So a step from a set larger than the room is kept in the
-/// room as any is, and what is kept is at most the room and those two sets, at most twice the
-/// machine's states. Anything else, a set or a step, is kept where there is room for it, and where there is
-/// not that is said to the match ([`Kept::Full`], [`Cache::learn`]), which decides
+/// one the walk has come to when the others are forgotten, with the step between them. One method
+/// keeps them, [`Cache::afresh`], which forgets everything else first, and nothing else keeps
+/// anything beside the room; so no match forgets the others to keep the set a walk starts in, and
+/// a set larger than the room is kept beside it. What they hold is not counted against
+/// [`KNOWN_BYTES`] but apart from it ([`Cache::needed`]): the room bounds everything else, the
+/// other sets, the steps and the lists that hold them. So a step from a set larger than the room is
+/// kept in the room as any is, and what is kept is at most the room and those two sets, at most
+/// twice the machine's states. Anything else, a set or a step, is kept where there is room for it,
+/// and where there is not that is said to the match ([`Kept::Full`], [`Cache::learn`]), which decides
 /// ([`Cache::make_room`]): nothing is refused without the match knowing, so no match goes on working
 /// out one step again and again because there was no room to keep it.
 ///
@@ -202,11 +203,24 @@ impl Cache {
             + slots * size_of::<u32>()
     }
 
-    /// Forgets every kept set but the one a walk starts in, and where each class leads from that
-    /// one, and lets go of the room they held. Every match needs that set, whatever it reads, so a
-    /// match never forgets the others to make room for it, and the set a match forgot them for is
-    /// kept beside it ([`Cache::hold`]). Called by [`Cache::make_room`] alone.
-    fn forget(&mut self, width: usize) {
+    /// Starts the kept sets again from what every match needs, and answers the place the row of
+    /// the set in `walk.next` begins, with whether it was made here. Every kept set but the one a
+    /// walk starts in is forgotten, with every step, and the room they held is let go; the set in
+    /// `walk.next` is kept beside that one, whatever it costs, and so is the step over `from_start`
+    /// to it where it was come to from that one. A cache that has kept nothing keeps the set in
+    /// `walk.next` as the one a walk starts in. Every match needs that set, whatever it reads, so a
+    /// match never forgets the others to make room for it.
+    ///
+    /// It is the one way anything is kept beside the room ([`Cache::needed`]), so what is beside it
+    /// is those two sets and that step, whoever calls it and however often, and not something the
+    /// callers keep to by the order they call in. Called by [`Cache::make_room`], and by
+    /// [`walk_with`] for a cache that has kept nothing, alone.
+    fn afresh(
+        &mut self,
+        machine: &Machine,
+        width: usize,
+        from_start: Option<usize>,
+    ) -> (u32, bool) {
         let start = match self.start {
             Some(row) if row != NONE => Some((
                 core::mem::take(&mut self.sets[row as usize / width]),
@@ -226,22 +240,55 @@ impl Cache {
         if let Some((states, hash, accepting)) = start {
             self.start = Some(self.put(width, states, hash, accepting, true));
         }
+        let (row, made) = if self.walk.next.is_empty() {
+            (NONE, false)
+        } else {
+            let hash = hash_of(&self.walk.next);
+            match self.found(hash, width) {
+                Some(row) => (row, false),
+                None => (self.admit(machine, width, hash, true), true),
+            }
+        };
+        let Some(start) = self.start else {
+            self.start = Some(row);
+            return (row, made);
+        };
+        if let Some(class) = from_start
+            && start != NONE
+        {
+            if class < width {
+                self.next[start as usize + class] = row;
+            } else {
+                self.needed += self.cold.room_for_one();
+                self.cold.insert(start, class, row);
+            }
+        }
+        (row, made)
     }
 
     /// What a match does where there is no room for a set or a step it would keep, as [`Keeping`]
-    /// says: forgets the kept sets, but the one a walk starts in, and answers true; or is frozen,
-    /// and answers false. The one place the kept sets are forgotten, so every time they are is
-    /// counted by the match that did it.
-    fn make_room(&mut self, width: usize, keeping: &mut Keeping) -> bool {
+    /// says: starts the kept sets again with the set in `walk.next` ([`Cache::afresh`]) and answers
+    /// the place its row begins; or is frozen, and answers `None`. The one place the kept sets are
+    /// forgotten, so every time they are is counted by the match that did it.
+    fn make_room(
+        &mut self,
+        machine: &Machine,
+        width: usize,
+        keeping: &mut Keeping,
+        from_start: Option<usize>,
+    ) -> Option<u32> {
         if keeping.restarted && keeping.read < 10 * keeping.made {
             keeping.frozen = true;
-            return false;
+            return None;
         }
-        self.forget(width);
         keeping.restarted = true;
         keeping.made = 0;
         keeping.read = 0;
-        true
+        let (row, made) = self.afresh(machine, width, from_start);
+        if made {
+            keeping.made += 1;
+        }
+        Some(row)
     }
 
     /// Where class `class` leads from the kept set whose row begins at `row`: the place the row of
@@ -257,32 +304,18 @@ impl Cache {
     /// Keeps that class `class` leads from the kept set whose row begins at `row` to `to`, which
     /// was not known, and answers whether it is kept. A class in the row is kept in it, whose room
     /// was counted when the set was kept. A class past the row is kept where there is room for it;
-    /// where there is not, nothing is kept and the match is told, to decide what to do. With
-    /// `needed`, it is kept whatever it costs, beside the room: asked only for the step from the set
-    /// a walk starts in to the set it is in when the others were just forgotten for it.
-    fn learn(&mut self, width: usize, row: u32, class: usize, to: u32, needed: bool) -> bool {
+    /// where there is not, nothing is kept and the match is told, to decide what to do.
+    fn learn(&mut self, width: usize, row: u32, class: usize, to: u32) -> bool {
         if class < width {
             self.next[row as usize + class] = to;
             return true;
         }
         let more = self.cold.room_for_one();
-        if needed {
-            self.needed += more;
-        } else if self.room() + more > KNOWN_BYTES {
+        if self.room() + more > KNOWN_BYTES {
             return false;
         }
         self.cold.insert(row, class, to);
         true
-    }
-
-    /// Keeps that class `class` leads from the set a walk starts in to `to`, the set the walk is in
-    /// once the others were just forgotten for it, whatever it costs, beside the room.
-    fn learn_from_start(&mut self, width: usize, class: usize, to: u32) {
-        if let Some(start) = self.start
-            && start != NONE
-        {
-            self.learn(width, start, class, to, true);
-        }
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins, as
@@ -294,6 +327,7 @@ impl Cache {
         machine: &Machine,
         width: usize,
         keeping: &mut Keeping,
+        from_start: Option<usize>,
     ) -> Option<(u32, bool)> {
         if keeping.frozen {
             return self.find(width);
@@ -304,29 +338,10 @@ impl Cache {
                 keeping.made += 1;
                 Some((row, false))
             }
-            Kept::Full => {
-                if !self.make_room(width, keeping) {
-                    return None;
-                }
-                Some((self.hold(machine, width, keeping), true))
-            }
+            Kept::Full => self
+                .make_room(machine, width, keeping, from_start)
+                .map(|row| (row, true)),
         }
-    }
-
-    /// The kept set the walk has just come to, in `walk.next`, as the place its row begins: found
-    /// where it is kept, and otherwise kept now, whatever it costs, and counted as made by the match.
-    /// What every match needs is kept so: the set a walk starts in, and the set a walk is in once the
-    /// others are forgotten.
-    fn hold(&mut self, machine: &Machine, width: usize, keeping: &mut Keeping) -> u32 {
-        if self.walk.next.is_empty() {
-            return NONE;
-        }
-        let hash = hash_of(&self.walk.next);
-        if let Some(row) = self.found(hash, width) {
-            return row;
-        }
-        keeping.made += 1;
-        self.admit(machine, width, hash, true)
     }
 
     /// The kept set the walk has just come to, in `walk.next`, as the place its row begins, or
@@ -375,7 +390,7 @@ impl Cache {
 
     /// Keeps the set in `walk.next`, which is not kept, whose hash is `hash`, as a copy of its
     /// states in a list of its own, and answers the place its row begins. It is kept whatever room
-    /// is left: [`Cache::keep`] asks first, and [`Cache::hold`] keeps what every match needs, with
+    /// is left: [`Cache::keep`] asks first, and [`Cache::afresh`] keeps what every match needs, with
     /// `needed`, beside the room.
     ///
     /// The set is copied and not moved out of the walk: moved, it would leave `walk.next` with no
@@ -767,11 +782,13 @@ fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut 
     let mut at = match cache.start {
         Some(start) => start,
         None => {
-            // Only a cache that has kept nothing comes here: forgetting the kept sets keeps this
-            // one, which is kept whatever it costs.
+            // Only a cache that has kept nothing comes here: starting the kept sets again keeps
+            // this one, which is kept whatever it costs.
             cache.walk.begin(machine);
-            let start = cache.hold(machine, width, keeping);
-            cache.start = Some(start);
+            let (start, made) = cache.afresh(machine, width, None);
+            if made {
+                keeping.made += 1;
+            }
             start
         }
     };
@@ -794,30 +811,22 @@ fn walk_with(machine: &Machine, cache: &mut Cache, subject: &str, keeping: &mut 
             .advance(machine, &cache.sets[at as usize / width], c);
         i += c.len_utf8();
         let row = at;
-        // Forgetting the kept sets keeps the one a walk starts in, so a step from it is kept after,
-        // with the set it leads to, whatever it costs.
-        let from_start = cache.start == Some(row);
-        at = match cache.come_to(machine, width, keeping) {
-            // A frozen match writes no step. One that forgot has no row to write it in, but for the
-            // set a walk starts in.
-            Some((next, forgot)) if forgot || keeping.frozen => {
-                if forgot && from_start {
-                    cache.learn_from_start(width, class, next);
-                }
-                next
-            }
+        // Starting the kept sets again keeps the one a walk starts in, and the step from it to the
+        // set the walk came to.
+        let from_start = (cache.start == Some(row)).then_some(class);
+        at = match cache.come_to(machine, width, keeping, from_start) {
+            // A frozen match writes no step. One that started the kept sets again has no row to
+            // write it in, but for the set a walk starts in, whose step afresh kept.
+            Some((next, forgot)) if forgot || keeping.frozen => next,
             Some((next, _)) => {
-                if cache.learn(width, row, class, next, false) || !cache.make_room(width, keeping) {
-                    // Kept; or not, and the match is frozen, in the set it came to, which is kept.
+                if cache.learn(width, row, class, next) {
                     next
                 } else {
-                    // The kept sets were forgotten for the step, and the set the walk came to is
-                    // kept again, beside the one a walk starts in.
-                    let next = cache.hold(machine, width, keeping);
-                    if from_start {
-                        cache.learn_from_start(width, class, next);
-                    }
-                    next
+                    // Started again for the step, with the set the walk came to; or frozen, in
+                    // that set, which is kept, with no step to it.
+                    cache
+                        .make_room(machine, width, keeping, from_start)
+                        .unwrap_or(next)
                 }
             }
             // The walk goes on a state at a time from the set it came to, in `next`.
@@ -1132,6 +1141,60 @@ mod tests {
             "{:<56} {found:>10.2?}",
             "kept sets found by their hash, 400 bytes"
         );
+    }
+
+    /// Only [`Cache::afresh`] keeps anything beside the room, and only [`Cache::make_room`], which
+    /// decides when the kept sets are started again, and [`walk_with`], for a cache that has kept
+    /// nothing, call it: so what is beside the room is the two sets and the step `afresh` keeps,
+    /// and not something the callers keep to by the order they call in. Read from the code, line by
+    /// line, as the list of loops is.
+    #[test]
+    fn only_starting_the_kept_sets_again_keeps_anything_beside_the_room() {
+        use alloc::string::{String, ToString};
+        let source = include_str!("walk.rs");
+        let before = source.find("#[cfg(test)]").unwrap_or(source.len());
+        let mut function = String::new();
+        for (at, line) in source[..before].lines().enumerate() {
+            let line = line.find("//").map_or(line, |cut| &line[..cut]);
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed
+                .strip_prefix("fn ")
+                .or_else(|| trimmed.strip_prefix("pub(crate) fn "))
+            {
+                function =
+                    rest[..rest.find(['(', '<']).expect("a function's name ends")].to_string();
+            }
+            let place = alloc::format!("line {}, in {function}", at + 1);
+            if line.contains(".afresh(") {
+                assert!(
+                    function == "make_room" || function == "walk_with",
+                    "{place} starts the kept sets again"
+                );
+            }
+            for call in [".put(", ".admit("] {
+                if let Some(from) = line.find(call) {
+                    // The last argument says whether the set is kept beside the room: read on this
+                    // line, so a call laid over more lines fails here to be looked at again.
+                    let args = &line[from..];
+                    let last = args
+                        .find(')')
+                        .map(|close| args[..close].rsplit(',').next().unwrap_or("").trim())
+                        .unwrap_or_else(|| {
+                            panic!("{place}: a call to keep a set ends on its line")
+                        });
+                    let ok = last == "false"
+                        || last == "true" && function == "afresh"
+                        || last == "needed" && function == "admit";
+                    assert!(ok, "{place} keeps something beside the room ({last})");
+                }
+            }
+            if line.contains("needed +=") {
+                assert!(
+                    function == "afresh" || function == "put",
+                    "{place} counts something beside the room"
+                );
+            }
+        }
     }
 
     /// The list of loops in [`matches`]'s doc is held to the code: each function of this file with a
