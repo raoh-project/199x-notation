@@ -1,11 +1,11 @@
 use alloc::string::{String, ToString};
 
 use crate::case_tables::{
-    CASE_IGNORABLE, CASED, FINAL_SIGMA, LOWER, LOWER_POSITION_BLOCKS, LOWER_POSITION_PAGES, UPPER,
-    UPPER_POSITION_BLOCKS, UPPER_POSITION_PAGES,
+    CASE_CONTEXT_BLOCKS, CASE_CONTEXT_PAGES, FINAL_SIGMA, LOWER, LOWER_POSITION_BLOCKS,
+    LOWER_POSITION_PAGES, UPPER, UPPER_POSITION_BLOCKS, UPPER_POSITION_PAGES,
 };
 use crate::normalization::scan_stop;
-use crate::tables::{mapped, within};
+use crate::tables::mapped;
 
 /// `text` in lowercase: Unicode 18.0.0's untailored full mapping, from `UnicodeData.txt` and
 /// `SpecialCasing.txt`, with no locale or language tailoring. One code point can map to several. A
@@ -126,14 +126,14 @@ fn map_case(text: &str, lower: bool, longest: usize) -> Option<String> {
             .expect("same_up_to stops where a character begins");
         let after = at + c.len_utf8();
         let mut mapping = mappings[usize::from(position(blocks, pages, c)) - 1].1;
-        if lower && let Some(final_mapping) = mapped(FINAL_SIGMA, c) {
+        if lower && has_context(c, FINAL_SIGMA_NAMED) {
             // The sigma is at least one scalar value of the answer, as every code point is, and
             // each `Case_Ignorable` one after it is another.
             if written == longest {
                 return None;
             }
             if is_final_sigma(text, at, after, longest - written - 1)? {
-                mapping = final_mapping;
+                mapping = mapped(FINAL_SIGMA, c).expect("CASE_CONTEXT says FINAL_SIGMA names it");
             }
         }
         if mapping.len() > longest - written {
@@ -250,14 +250,14 @@ fn is_final_sigma(text: &str, at: usize, after: usize, most: usize) -> Option<bo
     let before = text[..at]
         .chars()
         .rev()
-        .find(|c| !within(CASE_IGNORABLE, *c));
-    if !before.is_some_and(|c| within(CASED, c)) {
+        .find(|&c| !has_context(c, CASE_IGNORABLE));
+    if !before.is_some_and(|c| has_context(c, CASED)) {
         return Some(false);
     }
     // Every code point before the one that decides it is skipped, so `skipped` counts those.
     for (skipped, c) in text[after..].chars().enumerate() {
-        if !within(CASE_IGNORABLE, c) {
-            return Some(!within(CASED, c));
+        if !has_context(c, CASE_IGNORABLE) {
+            return Some(!has_context(c, CASED));
         }
         if skipped == most {
             return None;
@@ -266,11 +266,23 @@ fn is_final_sigma(text: &str, at: usize, after: usize, most: usize) -> Option<bo
     Some(true)
 }
 
+// What [`CASE_CONTEXT_PAGES`] holds of a code point, a bit each.
+const CASED: u8 = 1;
+const CASE_IGNORABLE: u8 = 2;
+const FINAL_SIGMA_NAMED: u8 = 4;
+
+/// Whether [`CASE_CONTEXT_PAGES`] holds `bit` of `c`.
+fn has_context(c: char, bit: u8) -> bool {
+    let c = c as usize;
+    CASE_CONTEXT_PAGES[usize::from(CASE_CONTEXT_BLOCKS[c >> 8]) << 8 | c & 0xFF] & bit != 0
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
 
     use super::*;
+    use crate::tables::ucd::{property, ucd};
     use alloc::vec::Vec;
 
     /// `Final_Sigma` as Java decides it: from each sigma, look back and then forward past the
@@ -279,9 +291,12 @@ mod tests {
         let before = text[..at]
             .iter()
             .rev()
-            .find(|c| !within(CASE_IGNORABLE, **c));
-        let after = text[at + 1..].iter().find(|c| !within(CASE_IGNORABLE, **c));
-        before.is_some_and(|c| within(CASED, *c)) && !after.is_some_and(|c| within(CASED, *c))
+            .find(|c| !has_context(**c, CASE_IGNORABLE));
+        let after = text[at + 1..]
+            .iter()
+            .find(|c| !has_context(**c, CASE_IGNORABLE));
+        before.is_some_and(|c| has_context(*c, CASED))
+            && !after.is_some_and(|c| has_context(*c, CASED))
     }
 
     fn lowercase_by_looking_around(text: &[char]) -> String {
@@ -331,8 +346,8 @@ mod tests {
     #[test]
     fn lowercase_is_the_mapping_with_final_sigma_looked_for_around_each_sigma() {
         let alphabet = ['A', 'Σ', '.', '\u{02B0}', ' ', '\u{0130}'];
-        assert!(within(CASED, '\u{02B0}') && within(CASE_IGNORABLE, '\u{02B0}'));
-        assert!(within(CASE_IGNORABLE, '.') && !within(CASED, '.'));
+        assert!(has_context('\u{02B0}', CASED) && has_context('\u{02B0}', CASE_IGNORABLE));
+        assert!(has_context('.', CASE_IGNORABLE) && !has_context('.', CASED));
         let mut text: Vec<char> = Vec::new();
         for length in 0..=6u32 {
             for mut n in 0..alphabet.len().pow(length) {
@@ -357,6 +372,30 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// The case context of every code point is what `DerivedCoreProperties.txt` states of `Cased`
+    /// and `Case_Ignorable`, and whether [`FINAL_SIGMA`] names it.
+    #[test]
+    fn the_case_context_is_what_the_database_states() {
+        let Some(properties) = ucd("DerivedCoreProperties.txt") else {
+            return;
+        };
+        let cased = property(&properties, "Cased");
+        let ignorable = property(&properties, "Case_Ignorable");
+        for c in (0..0x110000).filter_map(char::from_u32) {
+            assert_eq!(has_context(c, CASED), cased[c as usize], "{c:?}");
+            assert_eq!(
+                has_context(c, CASE_IGNORABLE),
+                ignorable[c as usize],
+                "{c:?}"
+            );
+            assert_eq!(
+                has_context(c, FINAL_SIGMA_NAMED),
+                mapped(FINAL_SIGMA, c).is_some(),
+                "{c:?}"
+            );
         }
     }
 }

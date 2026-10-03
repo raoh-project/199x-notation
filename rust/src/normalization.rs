@@ -2,10 +2,11 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::normalization_tables::{
-    CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY,
-    DECOMPOSITION_POSITION_BLOCKS, DECOMPOSITION_POSITION_PAGES, LONGEST_DECOMPOSITION,
-    MOST_MARKS_COMPOSED, NFC_TRIVIAL_LIMIT, NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT,
-    NFKD_TRIVIAL_LIMIT, SCRIPT_SPECIFIC_EXCLUSIONS, STABLE_BLOCKS, STABLE_PAGES,
+    CANONICAL, COMBINING_CLASS_BLOCKS, COMBINING_CLASS_PAGES, COMPATIBILITY, COMPOSITES,
+    COMPOSITION_CELLS, COMPOSITION_COLUMNS, COMPOSITION_FIRST_BLOCKS, COMPOSITION_FIRST_PAGES,
+    COMPOSITION_SECOND_BLOCKS, COMPOSITION_SECOND_PAGES, DECOMPOSITION_POSITION_BLOCKS,
+    DECOMPOSITION_POSITION_PAGES, LONGEST_DECOMPOSITION, MOST_MARKS_COMPOSED, NFC_TRIVIAL_LIMIT,
+    NFD_TRIVIAL_LIMIT, NFKC_TRIVIAL_LIMIT, NFKD_TRIVIAL_LIMIT, STABLE_BLOCKS, STABLE_PAGES,
 };
 
 /// The four normalization forms of UAX #15.
@@ -277,13 +278,13 @@ fn canonical_head(c: char) -> char {
     }
 }
 
-/// Whether a starter before `c` may compose with it: `c` is the second of a pair
-/// [`COMPOSITIONS`] holds, or a Hangul vowel or trailing consonant.
+/// Whether a starter before `c` may compose with it: `c` has a column of [`COMPOSITION_CELLS`], or
+/// is a Hangul vowel or trailing consonant.
 fn composes_back_into(c: char) -> bool {
     let c32 = u32::from(c);
     (V_BASE..V_BASE + V_COUNT).contains(&c32)
         || (T_BASE + 1..T_BASE + T_COUNT).contains(&c32)
-        || SECONDS.binary_search(&c).is_ok()
+        || paged(&COMPOSITION_SECOND_BLOCKS, &COMPOSITION_SECOND_PAGES, c) != 0
 }
 
 /// One pass of canonical ordering and, where the form composes, composition over code points
@@ -561,7 +562,7 @@ fn decompose_hangul(c: char) -> Option<[Option<char>; 3]> {
 }
 
 /// The primary composite of `starter` followed by `c`, or `None` where the pair does not compose:
-/// Hangul's L+V and LV+T, or [`COMPOSITIONS`].
+/// Hangul's L+V and LV+T, or [`COMPOSITION_CELLS`] at the row of `starter` and the column of `c`.
 fn compose(starter: char, c: char) -> Option<char> {
     let (s, c32) = (u32::from(starter), u32::from(c));
     if (L_BASE..L_BASE + L_COUNT).contains(&s) && (V_BASE..V_BASE + V_COUNT).contains(&c32) {
@@ -575,89 +576,29 @@ fn compose(starter: char, c: char) -> Option<char> {
     {
         return Some(hangul(s + (c32 - T_BASE)));
     }
-    COMPOSITIONS
-        .binary_search_by_key(&(starter, c), |&(first, second, _)| (first, second))
-        .ok()
-        .map(|at| COMPOSITIONS[at].2)
+    let row = usize::from(paged(
+        &COMPOSITION_FIRST_BLOCKS,
+        &COMPOSITION_FIRST_PAGES,
+        starter,
+    ));
+    let column = usize::from(paged(
+        &COMPOSITION_SECOND_BLOCKS,
+        &COMPOSITION_SECOND_PAGES,
+        c,
+    ));
+    if row == 0 || column == 0 {
+        return None;
+    }
+    match COMPOSITION_CELLS[(row - 1) * COMPOSITION_COLUMNS + column - 1] {
+        0 => None,
+        at => Some(COMPOSITES[usize::from(at) - 1]),
+    }
 }
 
-/// Every pair that composes, as `(first, second, composite)`, sorted by the pair: every two-member
-/// canonical decomposition whose first member is a starter and whose composite is not one of
-/// [`SCRIPT_SPECIFIC_EXCLUSIONS`]. The singleton decompositions and those whose first member is not a
-/// starter, the rest of `Full_Composition_Exclusion`, are read off [`CANONICAL`] and
-/// [`COMBINING_CLASS_PAGES`] here, so decomposition and composition cannot disagree. Worked out when
-/// the crate is compiled, from the generated tables.
-static COMPOSITIONS: [(char, char, char); composition_count()] = COMPOSITIONS_AT_COMPILE;
-
-/// The second member of every pair in [`COMPOSITIONS`], sorted, a member as often as it is one.
-static SECONDS: [char; composition_count()] = seconds();
-
-const fn seconds() -> [char; composition_count()] {
-    let mut seconds = ['\0'; composition_count()];
-    let mut n = 0;
-    while n < COMPOSITIONS_AT_COMPILE.len() {
-        let second = COMPOSITIONS_AT_COMPILE[n].1;
-        let mut j = n;
-        while j > 0 && seconds[j - 1] as u32 > second as u32 {
-            seconds[j] = seconds[j - 1];
-            j -= 1;
-        }
-        seconds[j] = second;
-        n += 1;
-    }
-    seconds
-}
-
-/// [`COMPOSITIONS`] as a constant, which a constant can be worked out from where a static cannot.
-const COMPOSITIONS_AT_COMPILE: [(char, char, char); composition_count()] = compositions();
-
-const fn composes_back(composite: char, mapping: &[char]) -> bool {
-    if mapping.len() != 2 || combining_class(mapping[0]) != 0 {
-        return false;
-    }
-    let mut i = 0;
-    while i < SCRIPT_SPECIFIC_EXCLUSIONS.len() {
-        if SCRIPT_SPECIFIC_EXCLUSIONS[i] as u32 == composite as u32 {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-const fn composition_count() -> usize {
-    let mut count = 0;
-    let mut i = 0;
-    while i < CANONICAL.len() {
-        if composes_back(CANONICAL[i].0, CANONICAL[i].1) {
-            count += 1;
-        }
-        i += 1;
-    }
-    count
-}
-
-const fn compositions() -> [(char, char, char); composition_count()] {
-    let mut pairs = [('\0', '\0', '\0'); composition_count()];
-    let mut n = 0;
-    let mut i = 0;
-    while i < CANONICAL.len() {
-        let (composite, mapping) = CANONICAL[i];
-        if composes_back(composite, mapping) {
-            // Insertion by the pair; the decompositions come sorted by composite, which is close to
-            // sorted by first member.
-            let key = (mapping[0] as u64) << 32 | mapping[1] as u64;
-            let mut j = n;
-            while j > 0 && ((pairs[j - 1].0 as u64) << 32 | pairs[j - 1].1 as u64) > key {
-                pairs[j] = pairs[j - 1];
-                j -= 1;
-            }
-            pairs[j] = (mapping[0], mapping[1], composite);
-            n += 1;
-        }
-        i += 1;
-    }
-    pairs
+/// `c`'s value in a table a code point indexes in two steps, its block's page and its place there.
+fn paged<T: Copy>(blocks: &[u8; 4352], pages: &[T], c: char) -> T {
+    let c = c as usize;
+    pages[usize::from(blocks[c >> 8]) << 8 | c & 0xFF]
 }
 
 #[cfg(test)]
@@ -666,38 +607,11 @@ mod tests {
 
     use super::*;
     use crate::tables::mapped;
+    use crate::tables::ucd::{property, range, ucd};
     use std::format;
     use std::vec;
 
     const FORMS: [Form; 4] = [Form::Nfc, Form::Nfd, Form::Nfkc, Form::Nfkd];
-
-    /// `name` under the repository's `ucd/18.0.0`, or `None` where it is not there and the
-    /// environment does not require it, as the tests under `tests/` read the repository's files.
-    fn ucd(name: &str) -> Option<String> {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../ucd/18.0.0")
-            .join(name);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Some(text),
-            Err(_) if std::env::var_os("NOTATION199X_REQUIRE_SUITE").is_none() => None,
-            Err(error) => panic!("{}: {error}", path.display()),
-        }
-    }
-
-    /// The first and last code point of a field of a UCD line, `XXXX` or `XXXX..YYYY`.
-    fn range(field: &str) -> (u32, u32) {
-        let field = field.trim();
-        match field.split_once("..") {
-            Some((first, last)) => (
-                u32::from_str_radix(first, 16).unwrap(),
-                u32::from_str_radix(last, 16).unwrap(),
-            ),
-            None => {
-                let only = u32::from_str_radix(field, 16).unwrap();
-                (only, only)
-            }
-        }
-    }
 
     /// The combining class of every code point and the forms it is a stable starter in are what
     /// `UnicodeData.txt` and `DerivedNormalizationProps.txt` state: a stable starter of a form is a
@@ -883,6 +797,60 @@ mod tests {
             expected.sort_by_key(|mark| combining_class(*mark));
             composing.order();
             assert_eq!(composing.marks, expected, "{length} marks");
+        }
+    }
+
+    /// The composition table composes every two-member canonical decomposition in
+    /// `UnicodeData.txt` whose first member is a starter and that `DerivedNormalizationProps.txt`
+    /// does not give `Full_Composition_Exclusion`, and no other pair; a code point has a column where
+    /// and only where it is the second member of one of those.
+    #[test]
+    fn the_composition_table_is_what_the_database_states() {
+        let (Some(unicode_data), Some(props)) =
+            (ucd("UnicodeData.txt"), ucd("DerivedNormalizationProps.txt"))
+        else {
+            return;
+        };
+        let excluded = property(&props, "Full_Composition_Exclusion");
+        let mut starters = vec![true; 0x110000];
+        let mut decompositions = Vec::new();
+        for line in unicode_data.lines() {
+            let fields: Vec<&str> = line.split(';').collect();
+            let cp = u32::from_str_radix(fields[0], 16).unwrap();
+            starters[cp as usize] = fields[3] == "0";
+            if !fields[5].is_empty() && !fields[5].starts_with('<') {
+                let parts: Vec<u32> = fields[5]
+                    .split(' ')
+                    .map(|part| u32::from_str_radix(part, 16).unwrap())
+                    .collect();
+                decompositions.push((cp, parts));
+            }
+        }
+        let mut seconds = vec![false; 0x110000];
+        let mut stated = 0;
+        for (composite, parts) in decompositions {
+            if parts.len() != 2 || !starters[parts[0] as usize] || excluded[composite as usize] {
+                continue;
+            }
+            stated += 1;
+            seconds[parts[1] as usize] = true;
+            let (first, second) = (
+                char::from_u32(parts[0]).unwrap(),
+                char::from_u32(parts[1]).unwrap(),
+            );
+            assert_eq!(
+                compose(first, second),
+                char::from_u32(composite),
+                "{first:?} {second:?}"
+            );
+        }
+        assert_eq!(
+            COMPOSITION_CELLS.iter().filter(|&&at| at != 0).count(),
+            stated
+        );
+        for c in (0..0x110000).filter_map(char::from_u32) {
+            let column = paged(&COMPOSITION_SECOND_BLOCKS, &COMPOSITION_SECOND_PAGES, c);
+            assert_eq!(column != 0, seconds[c as usize], "{c:?}");
         }
     }
 }
