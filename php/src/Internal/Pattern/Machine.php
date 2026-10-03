@@ -141,45 +141,16 @@ final class Machine
     {
         $b = new MachineBuilder($m->tree);
         $machine = new self();
-        $machine->accept = $b->part($m->root, $b->state());
-        [$machine->stepStart, $machine->stepTo, $machine->stepOver] = self::rows($b->states, $b->stepFrom, $b->stepTo, $b->stepOver);
-        [$machine->freeStart, $machine->freeTo] = self::rows($b->states, $b->freeFrom, $b->freeTo, null);
+        $machine->accept = $b->build($m->root);
+        $machine->stepStart = $b->stepStart;
+        $machine->stepTo = $b->stepTo;
+        $machine->stepOver = $b->stepOver;
+        $machine->freeStart = $b->freeStart;
+        $machine->freeTo = $b->freeTo;
         $machine->sets = $m->tree->sets;
         $machine->setStart = $m->tree->sets->start;
         $machine->setRanges = $m->tree->sets->ranges;
         return $machine;
-    }
-
-    /**
-     * Steps given as where each comes from, laid out as rows: an offset for each state and the
-     * steps from it one after another, in the order they were made.
-     *
-     * @param list<int>      $from
-     * @param list<int>      $to
-     * @param list<int>|null $over
-     * @return array{array<int, int>, array<int, int>, array<int, int>}
-     */
-    private static function rows(int $states, array $from, array $to, ?array $over): array
-    {
-        $start = array_fill(0, $states + 1, 0);
-        foreach ($from as $q) {
-            $start[$q + 1]++;
-        }
-        for ($q = 0; $q < $states; $q++) {
-            $start[$q + 1] += $start[$q];
-        }
-        $next = $start;
-        $count = count($from);
-        $rowTo = array_fill(0, $count, 0);
-        $rowOver = $over === null ? [] : array_fill(0, $count, 0);
-        foreach ($from as $i => $q) {
-            $at = $next[$q]++;
-            $rowTo[$at] = $to[$i];
-            if ($over !== null) {
-                $rowOver[$at] = $over[$i];
-            }
-        }
-        return [$start, $rowTo, $rowOver];
     }
 
     /**

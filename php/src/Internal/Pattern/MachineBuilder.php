@@ -5,27 +5,101 @@ declare(strict_types=1);
 namespace Raoh\Notation199x\Internal\Pattern;
 
 /**
- * Builds the states and steps of a machine from a meaning, as flat lists that Machine lays out as
- * rows once the whole of it is made. A step is made where it comes from, which may be a state made
- * long before, so the steps are gathered as they come and put in order after.
+ * Builds the states and steps of a machine from a meaning, laid out as the rows Machine holds: an
+ * offset for each state and the steps from it one after another, in the order they were made.
+ *
+ * A step is made where it comes from, which may be a state made long before, so the steps are
+ * written as they come; and then, the steps from each state counted, each is moved, in the lists
+ * it was written in, to its place in its state's row. What is held besides the rows is the state
+ * each step came from, one number a step, which becomes the place it goes and is let go of once
+ * the steps are in place: laying the steps out into lists of their own would hold them twice over.
  *
  * @internal
  */
 final class MachineBuilder
 {
     public int $states = 0;
-    /** @var list<int> */
-    public array $stepFrom = [];
-    /** @var list<int> */
+    /** @var array<int, int> once built, where each state's steps begin in $stepTo, and one more where the last one's end */
+    public array $stepStart = [];
+    /** @var array<int, int> */
     public array $stepTo = [];
-    /** @var list<int> */
+    /** @var array<int, int> */
     public array $stepOver = [];
-    /** @var list<int> */
-    public array $freeFrom = [];
-    /** @var list<int> */
+    /** @var array<int, int> as $stepStart, for the steps for nothing */
+    public array $freeStart = [];
+    /** @var array<int, int> */
     public array $freeTo = [];
+    /** @var array<int, int> the state each step comes from, in the order they were made */
+    private array $stepFrom = [];
+    /** @var array<int, int> */
+    private array $freeFrom = [];
+
     public function __construct(private readonly Tree $tree)
     {
+    }
+
+    /**
+     * Builds the machine for $root, and answers the state it accepts in.
+     */
+    public function build(int $root): int
+    {
+        $accept = $this->part($root, $this->state());
+        $this->stepStart = self::laidOut($this->states, $this->stepFrom, $this->stepTo, $this->stepOver);
+        $empty = [];
+        $this->freeStart = self::laidOut($this->states, $this->freeFrom, $this->freeTo, $empty);
+        return $accept;
+    }
+
+    /**
+     * Moves the steps in $to, and in $over where it is not empty, each to its place in the row of
+     * the state $from says it comes from, keeping the order they were made in within a row, and
+     * answers where each of the $states rows begins, with one more where the last one ends. $from
+     * is used up.
+     *
+     * Each step's place is worked out first, into $from, and the steps are then moved round the
+     * cycles those places make: a step moved to its place is never moved again, so moving them all
+     * is as many moves as there are steps, and takes no list but those they are in.
+     *
+     * @param array<int, int> $from
+     * @param array<int, int> $to
+     * @param array<int, int> $over
+     * @return array<int, int>
+     */
+    private static function laidOut(int $states, array &$from, array &$to, array &$over): array
+    {
+        $start = array_fill(0, $states + 1, 0);
+        foreach ($from as $q) {
+            $start[$q + 1]++;
+        }
+        for ($q = 0; $q < $states; $q++) {
+            $start[$q + 1] += $start[$q];
+        }
+        $sum = $start[$states];
+        for ($i = 0; $i < $sum; $i++) {
+            $from[$i] = $start[$from[$i]]++;
+        }
+        // Each row's next place is now where the following row begins.
+        for ($q = $states - 1; $q > 0; $q--) {
+            $start[$q] = $start[$q - 1];
+        }
+        $start[0] = 0;
+        $moving = $over !== [];
+        for ($i = 0; $i < $sum; $i++) {
+            while (($place = $from[$i]) !== $i) {
+                $held = $to[$i];
+                $to[$i] = $to[$place];
+                $to[$place] = $held;
+                if ($moving) {
+                    $held = $over[$i];
+                    $over[$i] = $over[$place];
+                    $over[$place] = $held;
+                }
+                $from[$i] = $from[$place];
+                $from[$place] = $place;
+            }
+        }
+        $from = [];
+        return $start;
     }
 
     public function state(): int

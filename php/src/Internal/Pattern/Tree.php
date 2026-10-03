@@ -91,19 +91,30 @@ final class Tree
     }
 
     /**
-     * An IN_TURN or EITHER_OF part of $parts.
+     * An IN_TURN or EITHER_OF part of $items from $from on, which are taken off it: the parts of a
+     * sequence or a choice being read go from the reader's list into the tree without being copied
+     * into one of their own.
      *
-     * @param list<int> $parts
+     * @param list<int> $items
      */
-    public function of(int $kind, array $parts): int
+    public function taken(int $kind, array &$items, int $from): int
     {
-        // Appended one at a time: a sequence may be as long as the text, and spread into a call its
-        // parts would be copied onto the stack.
         $first = count($this->list);
-        foreach ($parts as $part) {
-            $this->list[] = $part;
+        $count = count($items) - $from;
+        for ($i = $from, $n = count($items); $i < $n; $i++) {
+            $this->list[] = $items[$i];
         }
-        return $this->add($kind, $first, count($parts));
+        if ($from === 0) {
+            $items = [];
+        } else {
+            // Taken from the end, so that it costs what is taken and not the list: array_splice
+            // would write the whole list out again, and the list is as long as the groups open
+            // around the one being read.
+            for ($i = 0; $i < $count; $i++) {
+                array_pop($items);
+            }
+        }
+        return $this->add($kind, $first, $count);
     }
 
     /**
