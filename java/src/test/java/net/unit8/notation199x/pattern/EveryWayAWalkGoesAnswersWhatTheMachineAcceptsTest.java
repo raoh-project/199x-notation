@@ -222,19 +222,25 @@ class EveryWayAWalkGoesAnswersWhatTheMachineAcceptsTest {
     }
 
     /**
-     * A set a walk would start in that is past what the sets kept may hold is not kept uncounted:
-     * the pattern keeps none and moves each state for every character.
+     * A set a walk starts in that is past what the budget holds is kept whatever it takes, and
+     * counted: every match needs it, so the pattern still keeps sets, and is not left moving each
+     * state for every character for want of room for it. A walk that then fills the room goes into
+     * a new generation once, keeping the set it came to beside the one it starts in, and keeps no
+     * more past that; the answers are the same.
      */
     @Test
-    void aFirstSetPastWhatMayBeKeptKeepsNone() {
+    void aFirstSetPastWhatTheBudgetHoldsIsKeptWhateverItTakes() {
         Automaton shaped = PatternMachine.of(((PatternRead.Read) PatternParser.read("(a?){50}b")).meaning())
                 .shaped();
         StringPattern.Budget given = StringPattern.Budget.DEFAULT;
         StringPattern run = StringPattern.of(shaped, new StringPattern.Budget(given.classWork(),
                 given.tableEntries(), given.asciiEntries(), given.runs(), given.subsets(), 10));
-        assertEquals(StringPattern.Way.EVERY_STATE, run.way());
+        assertEquals(StringPattern.Way.SETS_KEPT, run.way());
+        assertEquals(1, run.setsKept(), "the set a walk starts in");
         assertTrue(run.matches("a".repeat(50) + "b"));
+        assertEquals(2, run.setsKept(), "the set a walk starts in and the one it went into a generation for");
         assertFalse(run.matches("a".repeat(51) + "b"));
+        assertTrue(run.matches("b"));
     }
 
     /**

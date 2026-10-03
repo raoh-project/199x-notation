@@ -94,6 +94,32 @@ class WhatAMatchDecidesGoesNoFurtherThanTheMatchTest {
     }
 
     /**
+     * A generation another walk started counts against a match that goes into it as one it started
+     * would. Here, as soon as the sets kept are full, they are started again from the match's own
+     * checkpoint, as a walk on another thread that filled them would; the match, which meets few of
+     * its sets again, goes into the first new one, fills it and keeps no more, so the sets are
+     * started again twice however long the subject. A match that went into each new generation it
+     * found, uncounted, kept sets in one after another to the end of the subject.
+     */
+    @Test
+    void aMatchCountsTheGenerationsOtherWalksStart() {
+        StringPattern pattern = StringPattern.of(shaped(SEVENTEENTH));
+        int[] started = {0};
+        Checkpoint another = () -> {
+            if (pattern.setsKept() >= StringPattern.Budget.DEFAULT.subsets()) {
+                started[0]++;
+                pattern.startSetsAgain();
+            }
+            return true;
+        };
+        String hostile = random(200_000, 13);
+        assertEquals(new Outcome.Answered<>(hostile.charAt(hostile.length() - 17) == 'a'),
+                pattern.matches(hostile, another));
+        assertEquals(2, started[0], "the sets were started again " + started[0] + " times");
+        assertEquals(1, pattern.setsKept(), "nothing kept in the last generation but where walks start");
+    }
+
+    /**
      * Walks on many threads at once fill the sets, start them again in each other's place and keep
      * no more, each on its own, and each answers what the subject's seventeenth character from the
      * end says.
