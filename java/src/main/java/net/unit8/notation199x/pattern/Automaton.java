@@ -1182,16 +1182,19 @@ public final class Automaton {
     /**
      * The symbols a value can be written out of and read back.
      *
-     * <p>Everything but the C0 controls other than TAB, LF and CR, and DEL. Those reach a source as
-     * themselves, since no literal spells them, so what a person pastes is not what was chosen;
-     * TAB, LF and CR a literal spells. Nothing about the language: a rule admitting one of these
-     * admits it, and this is only which of them a value is preferably built from.
+     * <p>Everything but the Unicode control codes, General_Category=Cc, except TAB, LF and CR, which
+     * a literal spells. The rest no literal spells, so they reach a source as themselves and what a
+     * person pastes is not what was chosen. Cc is a set Unicode promises never to change, so this
+     * does not move with a Unicode version; and it is Cc and not Cf, whose format characters, a
+     * zero-width joiner among them, take part in what a string says. Nothing about the language: a
+     * rule admitting one of these admits it, and a string holding one is a string; this is only
+     * which of them a value is preferably built from.
      */
     private static final CodePoints WRITABLE = CodePoints.EVERYTHING
             .less(CodePoints.between(0, 8))
             .less(CodePoints.between(0x0B, 0x0C))
             .less(CodePoints.between(0x0E, 0x1F))
-            .less(CodePoints.of(0x7F));
+            .less(CodePoints.between(0x7F, 0x9F));
 
     /**
      * The shortest string it accepts out of {@code these} and no longer than {@code mostSymbols},
