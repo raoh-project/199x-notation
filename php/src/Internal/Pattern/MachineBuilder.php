@@ -10,7 +10,7 @@ namespace Raoh\Notation199x\Internal\Pattern;
  *
  * A step is made where it comes from, which may be a state made long before, so the steps are
  * written as they come; and then, the steps from each state counted, each is moved, in the lists
- * it was written in, to its place in its state's row. What is held besides the rows is the state
+ * it was written in, to its place in its state's row, where they were not made state by state. What is held besides the rows is the state
  * each step came from, one number a step, which becomes the place it goes and is let go of once
  * the steps are in place: laying the steps out into lists of their own would hold them twice over.
  *
@@ -68,11 +68,21 @@ final class MachineBuilder
     private static function laidOut(int $states, array &$from, array &$to, array &$over): array
     {
         $start = array_fill(0, $states + 1, 0);
+        $inOrder = true;
+        $last = 0;
         foreach ($from as $q) {
             $start[$q + 1]++;
+            $inOrder = $inOrder && $q >= $last;
+            $last = $q;
         }
         for ($q = 0; $q < $states; $q++) {
             $start[$q + 1] += $start[$q];
+        }
+        // Steps made state by state, as a sequence or a repetition of one makes them, are in their
+        // rows already, and are left where they are.
+        if ($inOrder) {
+            $from = [];
+            return $start;
         }
         $sum = $start[$states];
         for ($i = 0; $i < $sum; $i++) {
