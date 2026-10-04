@@ -342,11 +342,12 @@ the directory:
 2. Merge it, and tag the merge commit on `main` `ts/vX.Y.Z`. The workflow fails a tag that is not
    `ts/` and a version, that is not the version `ts/package.json` holds, or that names a commit not
    on `main`. It runs the whole of CI on the commit, and only once that passes publishes `X.Y.Z`:
-   under `latest` where it is newer than what `latest` names as it is published; otherwise under
-   `release-X.Y` where it is newer than what that names; and otherwise, as a patch whose run comes
-   after a newer patch's, under `release-X.Y.Z`, which names it and nothing else, so that it moves
-   neither. What each names is asked of the registry, which holds what was published, so a tag the
-   workflow refused, or whose run failed, has no say in it.
+   under `latest` where it is newer than what `latest` names as it is published, and otherwise, as a
+   patch of an older line or one whose run comes after a newer release's, under `release-X.Y.Z`,
+   which names it and nothing else. `latest` only ever moves to a newer release, so once every run
+   has run it names the newest release published, whatever order the runs ran in. What it names is
+   asked of the registry, which holds what was published, so a tag the workflow refused, or whose run
+   failed, has no say in it.
 3. Merge `main` back into `develop`, and set `ts/package.json` there to `<next version>-dev`.
 
 The workflow logs in with nothing: npm proves to the registry that it runs in this workflow of this
