@@ -7,6 +7,16 @@
 // Database by `gen/Generate.java` in the repository, and the rules are held to the vectors in its
 // `suite` directory, the same vectors every other implementation is held to.
 
+export {
+  PATTERN_LIMITS,
+  readPattern,
+  type Pattern,
+  type PatternBeyond,
+  type PatternLimit,
+  type PatternRead,
+  type PatternRefusal,
+  type PatternRefused,
+} from "./pattern.ts";
 export { compare, illFormedAt, scalarCount } from "./text.ts";
 export {
   INSTANT_MAX,
