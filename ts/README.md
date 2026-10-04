@@ -11,7 +11,7 @@ This package is developed in `ts/` of
 Rust and PHP implementations, and is held to the same test vectors for the rules it has. Issues and
 pull requests go there.
 
-It runs on Node from 22.18.0 on, and in any engine with ES2024, and depends on nothing. No rule asks
+It runs on Node from 22 on, and in any engine with ES2024, and depends on nothing. No rule asks
 the engine's Unicode support or its `Date`: `\s`, `String.prototype.trim` and `Intl` answer by the
 engine's release, and `Date` reads text by rules of its own.
 
@@ -36,3 +36,6 @@ readInstant("2026-09-30T24:00:00+09:00");     // { value: { epochSecond: 1790780
 
 An instant's epoch second is a `bigint`, since the moments an instant holds reach past the integers a
 `number` holds exactly.
+
+Working on the package itself takes Node 22.18.0 or later, which runs the tests as the TypeScript
+they are written in; `package.json` says the first in `engines` and the second in `devEngines`.
