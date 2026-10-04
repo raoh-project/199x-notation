@@ -11,15 +11,9 @@ the same way everywhere.
 
 ## Status
 
-The Java implementation is here, moved from Souther's runtime and compiler, and the Go, Rust and PHP
-implementations beside it. Souther, raoh-java, raoh-go, raoh-rust and raoh-php do not depend on them
-yet, and all four are held to `suite/`.
-
-The TypeScript implementation, for raoh-ts and the TypeScript Souther's wasm backend generates, is
-being written a rule at a time. It has the `White_Space` set, order and length in scalar values, and
-the temporal grammar, and is held to the lines of `suite/` for those. Case conversion,
-normalization and the pattern language come next, and until it has them it is not one of the
-implementations the rest of this README speaks of.
+The Java implementation is here, moved from Souther's runtime and compiler, and the Go, Rust, PHP
+and TypeScript implementations beside it. Souther, raoh-java, raoh-go, raoh-rust, raoh-php and
+raoh-ts do not depend on them yet, and all five are held to `suite/`.
 
 ## What belongs here
 
@@ -311,6 +305,60 @@ The workflow pushes to the mirror with a deploy key that can write to it, held h
 `raoh-project/199x-notation-php` empty, add the public half of the key to it as a deploy key with
 write access and the private half here as that secret, push the first tag, and submit the mirror
 to Packagist under the `raoh` vendor, with its GitHub hook on.
+
+### TypeScript
+
+The package is `@raoh/199x-notation`, published from `ts/` by the `TypeScript publish` workflow and by
+nothing else. `ts/package.json` on `develop` holds the next version as `X.Y.Z-dev`. A push to
+`develop` that changes `ts/` publishes the commit it brings, once CI has passed on it, as
+`X.Y.Z-dev.N.YYYYMMDDHHMMSS.gHHHHHHHHHHHH` under the dist-tag `dev`: `N` is how many commits the
+commit holds, itself and every one before it, then the time of the commit, then the commit. npm
+takes a version once and never again, so a development version is a commit, as a timestamped Maven
+snapshot is. A later commit on `develop` holds every one before it, so its `N` is greater and SemVer
+orders the versions as `develop` does; the time does not, since a commit can be dated before its
+parent, and two can be made in one second.
+
+`dev` names the newest state of the package on `develop`, and not whichever run happened to publish
+last. Just before it publishes, a run asks `develop` as it is then whether a later commit that
+changes `ts/` has reached it, and where one has, it publishes nothing and leaves `dev` to that
+commit's run; one run publishes at a time, so the run that finds itself newest publishes before any
+later commit's run asks, whatever order GitHub starts the runs in. So the commits of one push but
+the last, and a push a later one overtakes before its run publishes, have no version of their own;
+and where the later commit's run fails, `dev` stays where it was until a push whose run passes.
+
+`npm install @raoh/199x-notation` takes `latest`, which is a release, and a range written for
+releases, `^0.2.0`, takes no development version: npm takes a prerelease only for a range that names
+one of the same `X.Y.Z`, and `^0.2.0-dev.1` takes every later one. So a project that
+means one commit writes its version exactly, `npm install --save-exact @raoh/199x-notation@<version>`,
+as `npm install` otherwise saves a range.
+
+`ts/scripts/publish.sh` says what version a ref makes, under which dist-tag, and publishes it, and CI
+takes each path it can take as a dry run on every pull request (`ts/scripts/try-publish.sh`), so
+each is taken before a push takes it. A release is a tag, as for Go and PHP, and the tag begins with
+the directory:
+
+1. On a branch from `develop`, set `ts/package.json`'s version to `X.Y.Z` and open a pull request to
+   `main`, as for a Java release.
+2. Merge it, and tag the merge commit on `main` `ts/vX.Y.Z`. The workflow fails a tag that is not
+   `ts/` and a version, that is not the version `ts/package.json` holds, or that names a commit not
+   on `main`. It runs the whole of CI on the commit, and only once that passes publishes `X.Y.Z`:
+   under `latest` where it is newer than what `latest` names as it is published, and otherwise, as a
+   patch of an older line or one whose run comes after a newer release's, under `release-X.Y.Z`,
+   which names it and nothing else. `latest` only ever moves to a newer release, so once every run
+   has run it names the newest release published, whatever order the runs ran in. What it names is
+   asked of the registry, which holds what was published, so a tag the workflow refused, or whose run
+   failed, has no say in it.
+3. Merge `main` back into `develop`, and set `ts/package.json` there to `<next version>-dev`.
+
+The workflow logs in with nothing: npm proves to the registry that it runs in this workflow of this
+repository, which the package's settings on npmjs.com name as its trusted publisher, and the
+registry records with each version the commit and the run it was built in. A trusted publisher is
+named for a package that exists, so the package's first version is published by hand from a
+checkout, and the trusted publisher named after it: repository `raoh-project/199x-notation`, workflow
+`ts-publish.yml`, with `npm publish` allowed. A trusted publisher named since September 3, 2026
+allows `npm stage publish` and allows `npm publish` only where it is chosen, and the workflow
+publishes with `npm publish`. It needs nothing else: it reads what `latest` names from the registry
+without logging in, as anyone can of a public package.
 
 ## The name
 

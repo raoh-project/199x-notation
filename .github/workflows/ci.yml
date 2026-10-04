@@ -210,6 +210,15 @@ jobs:
         run: |
           cmp LICENSE ../LICENSE
           npm pack --dry-run --json | jq -e '.[0].files | map(.path) | index("LICENSE") and index("README.md")'
+      # What the TypeScript publish workflow does, but the upload, on each path it can take: a
+      # development version newest on develop, one only a later commit elsewhere has passed and one
+      # a later commit to the package has passed, a release that is the greatest tagged and one below
+      # another. None turns on the ref CI runs for or on what package.json holds, so CI asks the same
+      # for a pull request, for develop, and when a release, of this package or another, runs it on a
+      # commit on main.
+      - name: Publish, as a dry run, on each path
+        working-directory: ts
+        run: scripts/try-publish.sh
 
   # The package on the oldest Node a project that installs it may run (engines), which is older
   # than the one the tests need as TypeScript. The tools run on the Node they need, and compile the

@@ -1,14 +1,14 @@
 {
   "name": "@raoh/199x-notation",
   "version": "0.2.0-dev",
-  "description": "The rules for reading text that Raoh and Souther share: Unicode 18.0.0 White_Space, order and length in scalar values, and temporal text",
+  "description": "The rules for reading text that Raoh and Souther share: Unicode 18.0.0 case conversion and normalization, White_Space, order and length in scalar values, temporal text, and the pattern language",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/raoh-project/199x-notation.git",
     "directory": "ts"
   },
-  "keywords": ["unicode", "white-space", "iso8601", "date", "time"],
+  "keywords": ["unicode", "normalization", "case", "pattern", "iso8601"],
   "type": "module",
   "exports": {
     ".": {
@@ -22,6 +22,9 @@
     "README.md"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.0.0"
   },

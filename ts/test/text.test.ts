@@ -16,14 +16,14 @@ it("a string is well formed where every surrogate is half of a pair", () => {
 
 it("a scalar value past U+FFFF counts once", () => {
   assert.equal(scalarCount("\u{10FFFF}\u{10FFFF}"), 2);
-  assert.equal(scalarCount("é"), 2);
+  assert.equal(scalarCount("e\u0301"), 2);
 });
 
 it("text is ordered by scalar value wherever the two first differ", () => {
-  assert.equal(compare("￿", "\u{10000}"), -1);
-  assert.equal(compare("x", "x\u{10000}"), -1);
+  assert.equal(compare("\uFFFF", "\u{10000}"), -1);
+  assert.equal(compare("x\uE000", "x\u{10000}"), -1);
   assert.equal(compare("x\u{10000}", "x\u{10001}"), -1);
   assert.equal(compare("x\u{1F600}", "x\u{1F600}"), 0);
-  assert.equal(compare("퟿", "\u{10000}"), -1);
+  assert.equal(compare("\uD7FF", "\u{10000}"), -1);
   assert.equal(compare("\u{10000}a", "\u{10000}"), 1);
 });
