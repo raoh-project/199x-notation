@@ -136,7 +136,11 @@ function putTogether(w: Written, results: Meaning[]): void {
           if (one.kind !== "inTurn") {
             throw new Error(`a run means parts in turn, and this means ${one.kind}`);
           }
-          parts.push(...one.parts);
+          // One at a time: a run can hold as many parts as the text has characters, past what one
+          // call takes as arguments.
+          for (const part of one.parts) {
+            parts.push(part);
+          }
         } else if (one.kind !== "nothing") {
           parts.push(one);
         } else {

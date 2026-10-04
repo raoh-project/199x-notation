@@ -536,7 +536,9 @@ class Reader {
         this.at += 2;
         this.refuse("aClassOfClasses");
       }
-      members.push(...this.classMember());
+      for (const bound of this.classMember()) {
+        members.push(bound);
+      }
     }
     this.expect(CLOSE_BRACKET);
     const held = normalized(members);
