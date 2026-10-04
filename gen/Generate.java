@@ -31,7 +31,7 @@ public final class Generate {
         UcdModel model = UcdModel.read(Path.of(args[0]));
         Map<Path, String> sources = new LinkedHashMap<>();
         for (Map<Path, String> rendered : List.of(JavaEmitter.render(model), GoEmitter.render(model),
-                RustEmitter.render(model), PhpEmitter.render(model))) {
+                RustEmitter.render(model), PhpEmitter.render(model), TsEmitter.render(model))) {
             rendered.forEach((path, text) -> {
                 if (sources.putIfAbsent(path, text) != null) {
                     throw new IllegalStateException("two emitters write " + path);

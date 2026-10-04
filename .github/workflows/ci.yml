@@ -27,9 +27,13 @@ jobs:
         run: |
           java gen/Generate.java ucd/18.0.0
           git diff --exit-code
-      - name: Test
+      - name: Test and package
         working-directory: java
-        run: mvn --batch-mode test
+        run: mvn --batch-mode package
+      # What is published carries the license, which is outside java/.
+      - name: The jar carries the license
+        working-directory: java
+        run: unzip -p target/199x-notation-*.jar META-INF/LICENSE | cmp - ../LICENSE
       # The images the tests wrote of the suite's patterns, for the implementations that read P1.
       - name: Keep the images of the suite's patterns
         uses: actions/upload-artifact@v4
@@ -104,21 +108,44 @@ jobs:
         env:
           NOTATION199X_REQUIRE_SUITE: '1'
         run: cargo test
+      # A crate holds only what is under rust/, so the license is a copy there, and what is
+      # published holds the copy.
+      - name: The crate carries the license
+        working-directory: rust
+        run: |
+          cmp LICENSE ../LICENSE
+          cargo package --list | grep -qx LICENSE
 
   php:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # The oldest PHP composer.json takes, and the newest.
-        php: ['8.2', '8.5']
+        # The oldest PHP composer.json takes, read from it, and the newest.
+        php: [oldest, '8.5']
     steps:
       - uses: actions/checkout@v5
+      # composer.json and this are one statement, so the oldest is read there: a version written
+      # here as well would let the tests pass on a PHP the package no longer takes.
+      - name: The PHP to run on
+        id: php
+        working-directory: php
+        run: |
+          if [ "${{ matrix.php }}" != oldest ]; then
+            echo "version=${{ matrix.php }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          required=$(jq -r '.require["php-64bit"]' composer.json)
+          if [[ ! "$required" =~ ^\^([0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::composer.json requires PHP $required; write the oldest it takes as ^X.Y"
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
       # Without intl, so that a rule that asked it would fail here. PHPUnit needs mbstring and
       # Composer needs it or iconv, so those stay, and HostTest holds the sources to not asking
       # either.
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ matrix.php }}
+          php-version: ${{ steps.php.outputs.version }}
           extensions: :intl
           coverage: none
       - name: Validate composer.json
@@ -136,6 +163,60 @@ jobs:
         env:
           NOTATION199X_REQUIRE_SUITE: '1'
         run: vendor/bin/phpunit
+
+  typescript:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest Node package.json says it runs on, read from it, and the current LTS.
+        node: [oldest, lts/*]
+    steps:
+      - uses: actions/checkout@v5
+      # The engines field and this are one statement, so the oldest is read there, to the patch: a
+      # version written here as well, or one naming only a major, would let the tests pass on a
+      # Node the package does not promise and leave the one it does untried.
+      - name: The Node to run on
+        id: node
+        working-directory: ts
+        run: |
+          if [ "${{ matrix.node }}" != oldest ]; then
+            echo "version=${{ matrix.node }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          engines=$(jq -r '.engines.node' package.json)
+          if [[ ! "$engines" =~ ^\>=([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::package.json says it runs on Node $engines; write the oldest it runs on as >=X.Y.Z"
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+      - name: Install the tools
+        working-directory: ts
+        run: npm ci
+      - name: Type-check
+        working-directory: ts
+        run: npm run typecheck
+      # What is published is what tsc writes of the sources.
+      - name: Build
+        working-directory: ts
+        run: npm run build
+      # A checkout holds suite/, and a test that does not find it fails rather than skips.
+      - name: Test
+        working-directory: ts
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: npm test
+      # A package holds only what is under ts/, so the license is a copy there, and what npm packs
+      # holds the copy and the README.
+      - name: The package carries the license and the README
+        working-directory: ts
+        run: |
+          cmp LICENSE ../LICENSE
+          npm pack --dry-run --json | jq -e '.[0].files | map(.path) | index("LICENSE") and index("README.md")'
 
   # Java writes an image of each pattern of the suite, and Rust reads it and answers what the suite
   # says the pattern accepts. Apart from the rust job, so that what Rust answers alone is not held up
