@@ -137,6 +137,36 @@ jobs:
           NOTATION199X_REQUIRE_SUITE: '1'
         run: vendor/bin/phpunit
 
+  typescript:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest Node package.json says it runs on, and the current one.
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+      - name: Install the tools
+        working-directory: ts
+        run: npm ci
+      - name: Type-check
+        working-directory: ts
+        run: npm run typecheck
+      # What is published is what tsc writes of the sources.
+      - name: Build
+        working-directory: ts
+        run: npm run build
+      # A checkout holds suite/, and a test that does not find it fails rather than skips.
+      - name: Test
+        working-directory: ts
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: npm test
+
   # Java writes an image of each pattern of the suite, and Rust reads it and answers what the suite
   # says the pattern accepts. Apart from the rust job, so that what Rust answers alone is not held up
   # by Java.

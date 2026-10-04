@@ -15,6 +15,12 @@ The Java implementation is here, moved from Souther's runtime and compiler, and 
 implementations beside it. Souther, raoh-java, raoh-go, raoh-rust and raoh-php do not depend on them
 yet, and all four are held to `suite/`.
 
+The TypeScript implementation, for raoh-ts and the TypeScript Souther's wasm backend generates, is
+being written a rule at a time. It has the `White_Space` set, order and length in scalar values, and
+the temporal grammar, and is held to the lines of `suite/` for those. Case conversion,
+normalization and the pattern language come next, and until it has them it is not one of the
+implementations the rest of this README speaks of.
+
 ## What belongs here
 
 - Unicode 18.0.0 default case conversion, with no locale or language tailoring, including the
@@ -123,10 +129,12 @@ One directory per language, beside the data they are all generated from and chec
 | `rust/` | Crate `notation199x` |
 | `go/` | Module `github.com/raoh-project/199x-notation/go`, package `notation199x` |
 | `php/` | Composer package `raoh/199x-notation`, namespace `Raoh\Notation199x` |
+| `ts/` | npm package `@raoh/199x-notation` |
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
 `notation199x`. A Composer package name can, so the PHP package is `raoh/199x-notation`, under the
-vendor raoh-php is published under.
+vendor raoh-php is published under. An npm package name can too, and `@raoh/199x-notation` is under the scope raoh-ts
+is published under.
 
 Tables are generated from `ucd/` and checked in. Generation is run by hand and never during a
 build: taking a later Unicode version is a change to the specifications, not a dependency update.
