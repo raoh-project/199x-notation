@@ -18,6 +18,10 @@ class ScalarValuesAnswerEveryLineOfTheSuiteTest {
             String text = line.text(0);
             long expected = line.number(1);
             long counted = ScalarValues.count(text);
+            Outcome<Long> asking = ScalarValues.count(text, () -> true);
+            if (!asking.equals(new Outcome.Answered<>(expected))) {
+                return Suite.shown(text) + " is counted " + asking + " with a checkpoint, not " + expected;
+            }
             return counted == expected ? null : Suite.shown(text) + " is counted " + counted + ", not " + expected;
         }));
     }
@@ -33,6 +37,11 @@ class ScalarValuesAnswerEveryLineOfTheSuiteTest {
                 default -> 1;
             };
             int answered = Integer.signum(ScalarValues.compare(a, b));
+            Outcome<Integer> asking = ScalarValues.compare(a, b, () -> true);
+            if (!(asking instanceof Outcome.Answered<Integer>(Integer each)) || Integer.signum(each) != expected) {
+                return Suite.shown(a) + " against " + Suite.shown(b) + " is " + asking
+                        + " with a checkpoint, not " + expected;
+            }
             return answered == expected ? null
                     : Suite.shown(a) + " against " + Suite.shown(b) + " is " + answered + ", not " + expected;
         }));
