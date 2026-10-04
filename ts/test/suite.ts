@@ -8,11 +8,26 @@
 
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
 
 const REQUIRE_SUITE = "NOTATION199X_REQUIRE_SUITE";
-const ROOT = join(import.meta.dirname, "..", "..");
+const ROOT = join(packageRoot(import.meta.dirname), "..");
+
+/**
+ * The directory of the package `from` is in, the nearest that holds a package.json: the tests run
+ * from test/ as TypeScript, and from the directory they are compiled into as JavaScript.
+ */
+function packageRoot(from: string): string {
+  for (let at = from; ; at = dirname(at)) {
+    if (existsSync(join(at, "package.json"))) {
+      return at;
+    }
+    if (dirname(at) === at) {
+      throw new Error(`no package.json above ${from}`);
+    }
+  }
+}
 
 /**
  * The path of `name` under the repository's root, or `undefined` where the file is not there and
