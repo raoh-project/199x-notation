@@ -109,6 +109,15 @@ export class Line {
     return Number(field);
   }
 
+  /** Reads a field as an unsigned decimal, or `undefined` where it is empty. */
+  numberOrNothing(i: number): number | undefined {
+    if (this.#fields[i] === "") {
+      this.empty(i);
+      return undefined;
+    }
+    return this.number(i);
+  }
+
   /** Reads a field as one of `names`. */
   oneOf<const N extends string>(i: number, names: readonly N[]): N {
     const field = this.#take(i);
