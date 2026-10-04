@@ -117,6 +117,44 @@ class ARuleIsStoppedWhereItIsAskedTest {
     }
 
     /**
+     * Finding half a pair and counting ask once a code point read, a pair being one, and comparing
+     * once a unit compared, up to the first that differs.
+     */
+    @Test
+    void textIsMeasuredAndOrderedAskingAsItGoes() {
+        String pairs = "a𐐀".repeat(MANY);
+        long read = pairs.codePointCount(0, pairs.length());
+
+        Counting clean = Counting.never();
+        assertEquals(new Outcome.Answered<>(-1), ScalarValues.halfAPairAt(pairs, clean));
+        assertEquals(read, clean.asked);
+        Counting half = Counting.never();
+        assertEquals(new Outcome.Answered<>(pairs.length()), ScalarValues.halfAPairAt(pairs + "\uDC00b", half));
+        assertEquals(read + 1, half.asked, "up to and including the half it found");
+
+        Counting counted = Counting.never();
+        assertEquals(new Outcome.Answered<>(read + 1), ScalarValues.count(pairs + "\uD800", counted));
+        assertEquals(read + 1, counted.asked);
+
+        Counting same = Counting.never();
+        assertEquals(new Outcome.Answered<>(0), ScalarValues.compare(pairs, pairs, same));
+        assertEquals(pairs.length(), same.asked);
+        Counting apart = Counting.never();
+        Outcome<Integer> differing = ScalarValues.compare(pairs + "a", pairs + "b", apart);
+        assertTrue(differing instanceof Outcome.Answered<Integer>(Integer below) && below < 0, differing.toString());
+        assertEquals(pairs.length() + 1, apart.asked);
+        Counting prefix = Counting.never();
+        assertEquals(new Outcome.Answered<>(-1), ScalarValues.compare("ab", "abc", prefix));
+        assertEquals(2, prefix.asked);
+
+        for (long at : new long[] {1, read / 2, read}) {
+            assertInstanceOf(Outcome.Stopped.class, ScalarValues.halfAPairAt(pairs, new Counting(at)));
+            assertInstanceOf(Outcome.Stopped.class, ScalarValues.count(pairs, new Counting(at)));
+            assertInstanceOf(Outcome.Stopped.class, ScalarValues.compare(pairs, pairs, new Counting(at)));
+        }
+    }
+
+    /**
      * A rule stopped at its first ask has made nothing as long as the text: room for the answer is
      * made as the answer is written, and not all at once from the length of what was handed in.
      */
