@@ -11,15 +11,9 @@ the same way everywhere.
 
 ## Status
 
-The Java implementation is here, moved from Souther's runtime and compiler, and the Go, Rust and PHP
-implementations beside it. Souther, raoh-java, raoh-go, raoh-rust and raoh-php do not depend on them
-yet, and all four are held to `suite/`.
-
-The TypeScript implementation, for raoh-ts and the TypeScript Souther's wasm backend generates, is
-being written a rule at a time. It has the `White_Space` set, order and length in scalar values, and
-the temporal grammar, and is held to the lines of `suite/` for those. Case conversion,
-normalization and the pattern language come next, and until it has them it is not one of the
-implementations the rest of this README speaks of.
+The Java implementation is here, moved from Souther's runtime and compiler, and the Go, Rust, PHP
+and TypeScript implementations beside it. Souther, raoh-java, raoh-go, raoh-rust, raoh-php and
+raoh-ts do not depend on them yet, and all five are held to `suite/`.
 
 ## What belongs here
 

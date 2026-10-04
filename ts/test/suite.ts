@@ -129,6 +129,24 @@ export class Line {
     return found;
   }
 
+  /** Reads a field as one of `names`, or `undefined` where it is empty. */
+  oneOfOrNothing<const N extends string>(i: number, names: readonly N[]): N | undefined {
+    if (this.#fields[i] === "") {
+      this.empty(i);
+      return undefined;
+    }
+    return this.oneOf(i, names);
+  }
+
+  /** Reads a field as `true` or `false`. */
+  yesOrNo(i: number): boolean {
+    const field = this.#take(i);
+    if (field !== "true" && field !== "false") {
+      this.#mistake(i, "true or false");
+    }
+    return field === "true";
+  }
+
   /** What is wrong with how the line is written, or `undefined`: a field not read, or misread. */
   mistake(): string | undefined {
     const unread = this.#read.indexOf(false);

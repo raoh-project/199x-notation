@@ -118,10 +118,10 @@ it("a leap second is refused as one where its moment with second 59 is one", () 
 
 // What only a JavaScript string can hold, and only a JavaScript caller can pass.
 it("text past ASCII is in no form, half of a surrogate pair included", () => {
-  assert.equal(checkTemporal("date", "2026-09-3٠"), "malformed");
+  assert.equal(checkTemporal("date", "2026-09-3\u0660"), "malformed");
   assert.equal(checkTemporal("date", "2026-09-30\uD800"), "malformed");
   assert.equal(checkTemporal("time", "\uDC0012:00"), "malformed");
-  assert.equal(checkTemporal("time", "１２:00"), "malformed");
+  assert.equal(checkTemporal("time", "\uFF11\uFF12:00"), "malformed");
 });
 
 it("a kind that is none of the kinds is a mistake of the caller's", () => {

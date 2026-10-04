@@ -90,7 +90,7 @@ it("normalization within a bound answers every line of the suite", (t) => {
 // A text normalized one combining run at a time is the text normalized whole: a bound that is the
 // answer's length takes it, and one less does not.
 it("a bound is held on the answer", () => {
-  for (const text of ["", "a", "Å", "Ǻ", "ﬃ", "㌀", "가", "\u{1D15E}", "ȩ́́x", "\u{1D15E}\u{1D165}"]) {
+  for (const text of ["", "a", "Å", "Ǻ", "ﬃ", "㌀", "가", "\u{1D15E}", "ȩ\u0301\u0301x", "\u{1D15E}\u{1D165}"]) {
     for (const form of FORMS) {
       const whole = normalize(form, text);
       const length = [...whole].length;
@@ -117,5 +117,5 @@ it("a form and a bound are what the caller is held to", () => {
   assert.throws(() => normalizeWithin("NFC", "a", 0.5), RangeError);
   assert.equal(normalizeWithin("NFC", "", -1), undefined);
   // Half a surrogate pair comes back out where it was.
-  assert.equal(normalize("NFC", "a\uD800́"), "a\uD800́");
+  assert.equal(normalize("NFC", "a\uD800\u0301"), "a\uD800\u0301");
 });
