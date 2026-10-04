@@ -310,11 +310,13 @@ to Packagist under the `raoh` vendor, with its GitHub hook on.
 
 The package is `@raoh/199x-notation`, published from `ts/` by the `TypeScript publish` workflow and by
 nothing else. `ts/package.json` on `develop` holds the next version as `X.Y.Z-dev`. A push to
-`develop` that changes `ts/` publishes the commit it brings, once CI has passed on it, as that
-version followed by the time of the commit and the commit, `X.Y.Z-dev.YYYYMMDDHHMMSS.gHHHHHHHHHHHH`,
-under the dist-tag `dev`. npm takes a version once and never again, so a development version is a
-commit, as a timestamped Maven snapshot is: the commit makes two commits two versions, which the time
-alone does not, and the time puts them in the order they were made.
+`develop` that changes `ts/` publishes the commit it brings, once CI has passed on it, as
+`X.Y.Z-dev.N.YYYYMMDDHHMMSS.gHHHHHHHHHHHH` under the dist-tag `dev`: `N` is how many commits the
+commit holds, itself and every one before it, then the time of the commit, then the commit. npm
+takes a version once and never again, so a development version is a commit, as a timestamped Maven
+snapshot is. A later commit on `develop` holds every one before it, so its `N` is greater and SemVer
+orders the versions as `develop` does; the time does not, since a commit can be dated before its
+parent, and two can be made in one second.
 
 `dev` names the newest state of the package on `develop`, and not whichever run happened to publish
 last. Just before it publishes, a run asks `develop` as it is then whether a later commit that
@@ -326,7 +328,7 @@ and where the later commit's run fails, `dev` stays where it was until a push wh
 
 `npm install @raoh/199x-notation` takes `latest`, which is a release, and a range written for
 releases, `^0.2.0`, takes no development version: npm takes a prerelease only for a range that names
-one of the same `X.Y.Z`, and `^0.2.0-dev.20261004000000.g0` takes every later one. So a project that
+one of the same `X.Y.Z`, and `^0.2.0-dev.1` takes every later one. So a project that
 means one commit writes its version exactly, `npm install --save-exact @raoh/199x-notation@<version>`,
 as `npm install` otherwise saves a range.
 
@@ -340,10 +342,11 @@ the directory:
 2. Merge it, and tag the merge commit on `main` `ts/vX.Y.Z`. The workflow fails a tag that is not
    `ts/` and a version, that is not the version `ts/package.json` holds, or that names a commit not
    on `main`. It runs the whole of CI on the commit, and only once that passes publishes `X.Y.Z`:
-   under `latest` where it is newer than what `latest` names as it is published, and under
-   `release-X.Y` where it is not, so a release whose run comes after a newer one's never takes
-   `latest` from it. What `latest` names is asked of the registry, which holds what was published,
-   so a tag the workflow refused, or whose run failed, has no say in it.
+   under `latest` where it is newer than what `latest` names as it is published; otherwise under
+   `release-X.Y` where it is newer than what that names; and otherwise, as a patch whose run comes
+   after a newer patch's, under `release-X.Y.Z`, which names it and nothing else, so that it moves
+   neither. What each names is asked of the registry, which holds what was published, so a tag the
+   workflow refused, or whose run failed, has no say in it.
 3. Merge `main` back into `develop`, and set `ts/package.json` there to `<next version>-dev`.
 
 The workflow logs in with nothing: npm proves to the registry that it runs in this workflow of this
