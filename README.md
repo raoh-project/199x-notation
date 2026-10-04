@@ -321,7 +321,8 @@ last. Just before it publishes, a run asks `develop` as it is then whether a lat
 changes `ts/` has reached it, and where one has, it publishes nothing and leaves `dev` to that
 commit's run; one run publishes at a time, so the run that finds itself newest publishes before any
 later commit's run asks, whatever order GitHub starts the runs in. So the commits of one push but
-the last, and a push a later one overtakes before its run publishes, have no version of their own.
+the last, and a push a later one overtakes before its run publishes, have no version of their own;
+and where the later commit's run fails, `dev` stays where it was until a push whose run passes.
 
 `npm install @raoh/199x-notation` takes `latest`, which is a release, and a range written for
 releases, `^0.2.0`, takes no development version: npm takes a prerelease only for a range that names
@@ -339,8 +340,10 @@ the directory:
 2. Merge it, and tag the merge commit on `main` `ts/vX.Y.Z`. The workflow fails a tag that is not
    `ts/` and a version, that is not the version `ts/package.json` holds, or that names a commit not
    on `main`. It runs the whole of CI on the commit, and only once that passes publishes `X.Y.Z`:
-   under `latest` where it is the greatest release tagged, and under `release-X.Y` where a greater
-   one is, so a release whose run comes after a greater one's never takes `latest` from it.
+   under `latest` where it is newer than what `latest` names as it is published, and under
+   `release-X.Y` where it is not, so a release whose run comes after a newer one's never takes
+   `latest` from it. What `latest` names is asked of the registry, which holds what was published,
+   so a tag the workflow refused, or whose run failed, has no say in it.
 3. Merge `main` back into `develop`, and set `ts/package.json` there to `<next version>-dev`.
 
 The workflow logs in with nothing: npm proves to the registry that it runs in this workflow of this
