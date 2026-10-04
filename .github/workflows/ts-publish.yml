@@ -1,0 +1,99 @@
+name: TypeScript publish
+
+# Publishes ts/ as @raoh/199x-notation. A commit on develop that changes ts/ is published as the
+# version package.json holds, X.Y.Z-dev, followed by the time of the commit, under the dist-tag dev:
+# a version npm takes once and never again, which a caller names exactly and no range of versions
+# reaches. A tag ts/vX.Y.Z on main publishes X.Y.Z under latest, what `npm install` takes.
+#
+# npm is handed nothing to log in with: it proves to the registry that it runs in this workflow of
+# this repository (trusted publishing, the package's settings on npmjs.com naming this file), and
+# the registry records where each version was built from.
+
+on:
+  push:
+    branches: [develop]
+    # A tag is published whatever it changed: GitHub does not ask a tag about paths.
+    paths: ['ts/**', '.github/workflows/ts-publish.yml']
+    tags: ['ts/v*']
+
+concurrency:
+  group: ts-publish
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      dist-tag: ${{ steps.version.outputs.dist-tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: The version to publish
+        id: version
+        run: |
+          held=$(jq -r .version ts/package.json)
+          if [[ "$GITHUB_REF" == refs/tags/ts/v* ]]; then
+            version="${GITHUB_REF#refs/tags/ts/v}"
+            if ! echo "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+              echo "::error::${GITHUB_REF#refs/tags/} is not ts/vX.Y.Z"
+              exit 1
+            fi
+            if [ "$held" != "$version" ]; then
+              echo "::error::the tag is ts/v$version and ts/package.json holds $held"
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::ts/v$version names a commit that is not on main"
+              exit 1
+            fi
+            echo "dist-tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            if ! echo "$held" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev$'; then
+              echo "::error::ts/package.json on develop holds $held, where it holds the next version as X.Y.Z-dev"
+              exit 1
+            fi
+            # The time of the commit, and not of the run, so that a run again publishes the same
+            # version, which npm refuses rather than publishing it twice.
+            version="$held.$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S)"
+            echo "dist-tag=dev" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Everything CI checks of a commit, on the commit that is published.
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [version, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # What npm proves to the registry that it runs here with.
+      id-token: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      DIST_TAG: ${{ needs.version.outputs.dist-tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing takes npm 11.5.1 or later.
+      - name: An npm that publishes as this workflow
+        run: |
+          npm install --global npm@^11.5.1
+          npm --version
+      - name: Publish
+        working-directory: ts
+        run: |
+          npm ci
+          npm version --no-git-tag-version "$VERSION"
+          npm publish --tag "$DIST_TAG"
