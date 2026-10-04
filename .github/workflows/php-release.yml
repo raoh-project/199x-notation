@@ -9,9 +9,10 @@ on:
   push:
     tags: ['php/v*']
 
-# One release at a time, in the order the tags were pushed, and none left out. A group holds one
-# run waiting by default, and a run that comes after it takes its place, so a tag pushed while
-# another waited would never be released; queue: max holds every run that comes, up to a hundred.
+# One release at a time, and none left out; the order the runs start in is GitHub's, and Packagist
+# orders the versions by what they are. A group holds one run waiting by default, and a run that
+# comes after it takes its place, so a tag pushed while another waited would never be released;
+# queue: max holds every run, up to a hundred.
 concurrency:
   group: php-release
   cancel-in-progress: false

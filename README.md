@@ -309,28 +309,38 @@ to Packagist under the `raoh` vendor, with its GitHub hook on.
 ### TypeScript
 
 The package is `@raoh/199x-notation`, published from `ts/` by the `TypeScript publish` workflow and by
-nothing else. `ts/package.json` on `develop` holds the next version as `X.Y.Z-dev`, and each commit
-on `develop` that changes `ts/` is published, once CI has passed on it, as that version followed by
-the time of the commit and the commit, `X.Y.Z-dev.YYYYMMDDHHMMSS.gHHHHHHHHHHHH`, under the dist-tag
-`dev`. npm takes a version once and never again, so a development version is a commit, as a
-timestamped Maven snapshot is: the commit makes two commits two versions, which the time alone does
-not, and the time puts them in the order they were made. `npm install @raoh/199x-notation` takes
-`latest`, which is a release, and a range written for releases, `^0.2.0`, takes no development
-version: npm takes a prerelease only for a range that names one of the same `X.Y.Z`, and
-`^0.2.0-dev.20261004000000.g0` takes every later one. So a project that means one commit writes its
-version exactly, `npm install --save-exact @raoh/199x-notation@<version>`, as `npm install` otherwise
-saves a range. Each commit is published in turn, in the order it was pushed, so `dev` names the last
-of them. `ts/scripts/publish.sh` says
-what version a ref makes and publishes it, and CI runs it as a dry run for a development version and
-for a release on every pull request, so the path a tag takes is taken before a tag is pushed. A
-release is a tag, as for Go and PHP, and the tag begins with the directory:
+nothing else. `ts/package.json` on `develop` holds the next version as `X.Y.Z-dev`. A push to
+`develop` that changes `ts/` publishes the commit it brings, once CI has passed on it, as that
+version followed by the time of the commit and the commit, `X.Y.Z-dev.YYYYMMDDHHMMSS.gHHHHHHHHHHHH`,
+under the dist-tag `dev`. npm takes a version once and never again, so a development version is a
+commit, as a timestamped Maven snapshot is: the commit makes two commits two versions, which the time
+alone does not, and the time puts them in the order they were made.
+
+`dev` names the newest state of the package on `develop`, and not whichever run happened to publish
+last. Just before it publishes, a run asks `develop` as it is then whether a later commit that
+changes `ts/` has reached it, and where one has, it publishes nothing and leaves `dev` to that
+commit's run; one run publishes at a time, so the run that finds itself newest publishes before any
+later commit's run asks, whatever order GitHub starts the runs in. So the commits of one push but
+the last, and a push a later one overtakes before its run publishes, have no version of their own.
+
+`npm install @raoh/199x-notation` takes `latest`, which is a release, and a range written for
+releases, `^0.2.0`, takes no development version: npm takes a prerelease only for a range that names
+one of the same `X.Y.Z`, and `^0.2.0-dev.20261004000000.g0` takes every later one. So a project that
+means one commit writes its version exactly, `npm install --save-exact @raoh/199x-notation@<version>`,
+as `npm install` otherwise saves a range.
+
+`ts/scripts/publish.sh` says what version a ref makes, under which dist-tag, and publishes it, and CI
+takes each path it can take as a dry run on every pull request (`ts/scripts/try-publish.sh`), so
+each is taken before a push takes it. A release is a tag, as for Go and PHP, and the tag begins with
+the directory:
 
 1. On a branch from `develop`, set `ts/package.json`'s version to `X.Y.Z` and open a pull request to
    `main`, as for a Java release.
 2. Merge it, and tag the merge commit on `main` `ts/vX.Y.Z`. The workflow fails a tag that is not
    `ts/` and a version, that is not the version `ts/package.json` holds, or that names a commit not
-   on `main`. It runs the whole of CI on the commit, and only once that passes publishes `X.Y.Z`
-   under `latest`.
+   on `main`. It runs the whole of CI on the commit, and only once that passes publishes `X.Y.Z`:
+   under `latest` where it is the greatest release tagged, and under `release-X.Y` where a greater
+   one is, so a release whose run comes after a greater one's never takes `latest` from it.
 3. Merge `main` back into `develop`, and set `ts/package.json` there to `<next version>-dev`.
 
 The workflow logs in with nothing: npm proves to the registry that it runs in this workflow of this
