@@ -311,11 +311,15 @@ to Packagist under the `raoh` vendor, with its GitHub hook on.
 The package is `@raoh/199x-notation`, published from `ts/` by the `TypeScript publish` workflow and by
 nothing else. `ts/package.json` on `develop` holds the next version as `X.Y.Z-dev`, and each commit
 on `develop` that changes `ts/` is published, once CI has passed on it, as that version followed by
-the time of the commit, `X.Y.Z-dev.YYYYMMDDHHMMSS`, under the dist-tag `dev`. npm takes a version
-once and never again, so a development version is a commit, as a timestamped Maven snapshot is; and
-no range of versions a project writes reaches one, so only a project that names it exactly gets it.
-`npm install @raoh/199x-notation` takes `latest`, which is a release. A release is a tag, as for Go
-and PHP, and the tag begins with the directory:
+the time of the commit and the commit, `X.Y.Z-dev.YYYYMMDDHHMMSS.gHHHHHHHHHHHH`, under the dist-tag
+`dev`. npm takes a version once and never again, so a development version is a commit, as a
+timestamped Maven snapshot is: the commit makes two commits two versions, which the time alone does
+not, and the time puts them in the order they were made. No range of versions a project writes
+reaches one, so only a project that names it exactly gets it.
+`npm install @raoh/199x-notation` takes `latest`, which is a release. `ts/scripts/publish.sh` says
+what version a ref makes and publishes it, and CI runs it as a dry run for a development version and
+for a release on every pull request, so the path a tag takes is taken before a tag is pushed. A
+release is a tag, as for Go and PHP, and the tag begins with the directory:
 
 1. On a branch from `develop`, set `ts/package.json`'s version to `X.Y.Z` and open a pull request to
    `main`, as for a Java release.
