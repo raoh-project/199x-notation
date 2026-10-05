@@ -21,8 +21,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-held="$(jq -r .version package.json)"
-release="${held%-dev}"
+# The release this takes is one that was never published, and never will be: npm refuses even a dry
+# run of a version the registry has, so the version package.json holds, once it is released, would
+# stop every run that comes after the release, on the commit that is released and on develop until
+# it holds the next. Nothing here depends on which version that is.
+release="999990.2.3"
 line="${release%.*}"
 patch="${release##*.}"
 start="$(git rev-parse HEAD)"
