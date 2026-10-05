@@ -267,7 +267,7 @@ release is deployed from the commit its tag names, so what Central holds is what
 
 The module is `github.com/raoh-project/notation-199x/go`, and a release of it is a tag: nothing in
 `go/` names its version. A tag on a module in a subdirectory begins with the subdirectory, so the
-module's version `vX.Y.Z` is the tag `go/vX.Y.Z`. The first release is `go/v0.1.0`.
+module's version `vX.Y.Z` is the tag `go/vX.Y.Z`. The first release is `go/v0.2.0`.
 
 1. Merge what is to be released into `main`, as for a Java release.
 2. Tag the commit on `main` `go/vX.Y.Z` and push the tag. CI runs the Go tests on it.
@@ -288,7 +288,7 @@ so a release is published to a mirror whose root is `php/`,
 reads the mirror. The mirror is written by CI and by nothing else: nobody commits to it, and an
 issue or a pull request there is sent here. As for Go, a tag here begins with the directory, so the
 package's version `vX.Y.Z` is the tag `php/vX.Y.Z` here and the tag `vX.Y.Z` on the mirror. The
-first release is `php/v0.1.0`.
+first release is `php/v0.2.0`.
 
 1. Merge what is to be released into `main`, as for a Java release.
 2. Tag the commit on `main` `php/vX.Y.Z` and push the tag. The `PHP release` workflow fails a tag
@@ -361,6 +361,26 @@ checkout, and the trusted publisher named after it: repository `raoh-project/not
 allows `npm stage publish` and allows `npm publish` only where it is chosen, and the workflow
 publishes with `npm publish`. It needs nothing else: it reads what `latest` names from the registry
 without logging in, as anyone can of a public package.
+
+### Rust
+
+The crate is `notation199x`, published to crates.io from `rust/`. `rust/Cargo.toml` on `develop` holds
+the next version as `X.Y.Z-dev`, and a release is that version without the suffix. As for Go and
+PHP, a tag begins with the directory, `rust/vX.Y.Z`.
+
+1. On a branch from `develop`, set `rust/Cargo.toml`'s version to `X.Y.Z`, let `cargo check` write it
+   into `rust/Cargo.lock`, and open a pull request to `main`, as for a Java release.
+2. Merge it, and tag the merge commit on `main` `rust/vX.Y.Z` and push the tag.
+3. Publish from a checkout of the tag, logged in to crates.io with `cargo login`:
+   ```sh
+   git checkout rust/vX.Y.Z
+   cd rust && cargo publish
+   ```
+   `cargo publish --dry-run` packages the crate and builds it from the package first.
+4. Merge `main` back into `develop`, and set `rust/Cargo.toml` there to `<next version>-dev`.
+
+A version crates.io has taken is never replaced: a release that is wrong is yanked and followed by
+another.
 
 ## The name
 
