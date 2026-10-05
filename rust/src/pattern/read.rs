@@ -273,14 +273,7 @@ impl<'a> Reader<'a> {
         while !self.done() && (self.peek() != Some(b']') || first) {
             first = false;
             self.construct = self.at;
-            if self.peek() == Some(b'[') {
-                self.take()?;
-                return Err(self.refuse(PatternRefusal::AClassOfClasses));
-            }
-            if self.text[self.at..].starts_with("&&") {
-                self.at += 2;
-                return Err(self.refuse(PatternRefusal::AClassOfClasses));
-            }
+            self.refuse_class_of_classes()?;
             members.extend_from_slice(self.class_member()?.runs());
         }
         self.expect(b']')?;
@@ -293,8 +286,23 @@ impl<'a> Reader<'a> {
         Ok(if negated { held.not() } else { held })
     }
 
-    /// One member of a class: a symbol, a run of them, or a shorthand's whole set. A run is read
-    /// only where both ends are one symbol: `[\d-z]` names no run.
+    /// A `[` or `&&` here is refused, as a class inside a class and as an intersection, wherever it
+    /// stands in a class, an end of a run included.
+    fn refuse_class_of_classes(&mut self) -> Result<(), Refusal> {
+        if self.peek() == Some(b'[') {
+            self.take()?;
+            return Err(self.refuse(PatternRefusal::AClassOfClasses));
+        }
+        if self.text[self.at..].starts_with("&&") {
+            self.at += 2;
+            return Err(self.refuse(PatternRefusal::AClassOfClasses));
+        }
+        Ok(())
+    }
+
+    /// One member of a class: a symbol, a run of them, or a shorthand's whole set. A `-` makes a run
+    /// only between two single symbols, each a character or an escape that stands for one.
+    /// Anywhere else it is a symbol of its own: `[a-\d]` holds `a`, `-` and the digits.
     fn class_member(&mut self) -> Result<Symbols, Refusal> {
         let member = self.class_atom()?;
         let bytes = self.text.as_bytes();
@@ -303,8 +311,13 @@ impl<'a> Reader<'a> {
             && bytes.get(self.at + 1).is_some_and(|next| *next != b']')
         {
             self.take()?;
+            let after_dash = self.at;
+            self.refuse_class_of_classes()?;
             let Some(upper) = self.class_atom()?.single() else {
-                return Err(self.refuse(PatternRefusal::AnEscapeThisDoesNotRead));
+                self.at = after_dash;
+                let mut both = member.runs().to_vec();
+                both.push(('-', '-'));
+                return Ok(Symbols::normalized(both));
             };
             if upper < lower {
                 return Err(self.refuse(PatternRefusal::ACountThisCannotRead));

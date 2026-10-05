@@ -101,7 +101,6 @@ it("each refusal is for what was written", () => {
     "[b-a]": "aCountThisCannotRead",
     "\\y": "anEscapeThisDoesNotRead",
     "\\x{110000}": "anEscapeThisDoesNotRead",
-    "[a-\\d]": "anEscapeThisDoesNotRead",
     "\\\uA7DD": "anEscapeThisDoesNotRead",
     "(?=a)b": "aGroupTheGrammarDoesNotHave",
     "(?<name>a)": "aGroupTheGrammarDoesNotHave",

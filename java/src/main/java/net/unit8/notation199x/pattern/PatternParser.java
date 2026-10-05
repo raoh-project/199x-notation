@@ -318,15 +318,7 @@ public final class PatternParser {
         while (!done() && (peek() != ']' || first)) {
             first = false;
             construct = at;
-            if (peek() == '[') {
-                take();
-                throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
-            }
-            if (peek() == '&' && at + 1 < regex.length() && regex.charAt(at + 1) == '&') {
-                take();
-                take();
-                throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
-            }
+            refuseClassOfClasses();
             members.addAll(classMember().ranges());
         }
         expect(']');
@@ -340,21 +332,41 @@ public final class PatternParser {
         return negated ? held.not() : held;
     }
 
+    /** A {@code [} or {@code &&} here is refused: as a class inside a class and as an
+     *  intersection, wherever it stands in a class, an end of a run included. */
+    private void refuseClassOfClasses() {
+        if (peek() == '[') {
+            take();
+            throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
+        }
+        if (peek() == '&' && at + 1 < regex.length() && regex.charAt(at + 1) == '&') {
+            take();
+            take();
+            throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
+        }
+    }
+
     /**
      * One member of a class, which is a symbol, a run of them, or a shorthand's whole set.
      *
-     * <p>A run is read only where both ends are one symbol. {@code [\d-z]} names no run: what is on
-     * the left of the dash is ten symbols, and there is no such thing as the range from ten symbols
-     * to one.
+     * <p>A {@code -} makes a run only between two single symbols, each a character or an escape
+     * that stands for one. Anywhere else it is a symbol of its own, so {@code [a-\d]} holds
+     * {@code a}, {@code -} and the digits, and {@code [\d-z]} the digits, {@code -} and {@code z}.
      */
     private CodePoints classMember() {
         CodePoints member = classAtom();
         boolean isOne = member.size() == 1;
         if (isOne && peek() == '-' && at + 1 < regex.length() && regex.charAt(at + 1) != ']') {
             take();
+            int afterDash = at;
+            refuseClassOfClasses();
             CodePoints upper = classAtom();
             if (upper.size() != 1) {
-                throw refused(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ);
+                // No run: the dash is a symbol, and what follows it is read as a member of its own.
+                at = afterDash;
+                List<CodePoints.Range> both = new ArrayList<>(member.ranges());
+                both.addAll(CodePoints.of('-').ranges());
+                return new CodePoints(both);
             }
             if (upper.least() < member.least()) {
                 throw refused(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ);

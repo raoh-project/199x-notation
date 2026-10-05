@@ -294,14 +294,7 @@ final class Reader
         while (!$this->done() && ($this->peek() !== 0x5D || $first)) {
             $first = false;
             $this->construct = $this->at;
-            if ($this->peek() === 0x5B) {
-                $this->take();
-                $this->refuse(PatternRefusal::AClassOfClasses);
-            }
-            if (substr($this->text, $this->at, 2) === '&&') {
-                $this->at += 2;
-                $this->refuse(PatternRefusal::AClassOfClasses);
-            }
+            $this->refuseClassOfClasses();
             array_push($members, ...$this->classMember());
         }
         $this->expect(0x5D);
@@ -315,8 +308,25 @@ final class Reader
     }
 
     /**
-     * One member of a class: a symbol, a run of them, or a shorthand's whole set. A run is read
-     * only where both ends are one symbol: [\d-z] names no run.
+     * A [ or && here is refused, as a class inside a class and as an intersection, wherever it
+     * stands in a class, an end of a run included.
+     */
+    private function refuseClassOfClasses(): void
+    {
+        if ($this->peek() === 0x5B) {
+            $this->take();
+            $this->refuse(PatternRefusal::AClassOfClasses);
+        }
+        if (substr($this->text, $this->at, 2) === '&&') {
+            $this->at += 2;
+            $this->refuse(PatternRefusal::AClassOfClasses);
+        }
+    }
+
+    /**
+     * One member of a class: a symbol, a run of them, or a shorthand's whole set. A - makes a run
+     * only between two single symbols, each a character or an escape that stands for one. Anywhere
+     * else it is a symbol of its own: [a-\d] holds a, - and the digits.
      *
      * @return list<int>
      */
@@ -326,9 +336,12 @@ final class Reader
         if (Symbols::size($member) === 1 && $this->peek() === 0x2D && $this->at + 1 < $this->length
             && $this->text[$this->at + 1] !== ']') {
             $this->take();
+            $afterDash = $this->at;
+            $this->refuseClassOfClasses();
             $upper = $this->classAtom();
             if (Symbols::size($upper) !== 1) {
-                $this->refuse(PatternRefusal::AnEscapeThisDoesNotRead);
+                $this->at = $afterDash;
+                return Symbols::normalized([...$member, 0x2D, 0x2D]);
             }
             if ($upper[0] < $member[0]) {
                 $this->refuse(PatternRefusal::ACountThisCannotRead);

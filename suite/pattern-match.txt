@@ -119,3 +119,31 @@
 002E ; 202A ; true
 005C 0030 0033 0037 0037 ; 00FF ; true
 005C 0030 0037 ; 0007 ; true
+
+# 0.9: a - makes a run only between two single characters, an octal escape takes the longest run
+# of digits, a backslash before a character that is no letter or decimal digit stands for it, and
+# only a class's own syntax is special inside it.
+005B 0061 002D 005C 0064 005D ; 0061 ; true
+005B 0061 002D 005C 0064 005D ; 002D ; true
+005B 0061 002D 005C 0064 005D ; 0035 ; true
+005B 0061 002D 005C 0064 005D ; 0062 ; false
+005B 005C 0064 002D 007A 005D ; 002D ; true
+005B 005C 0064 002D 007A 005D ; 007A ; true
+005B 005C 0064 002D 007A 005D ; 0079 ; false
+005B 0061 005E 005D ; 005E ; true
+005B 0061 005E 005D ; 0061 ; true
+005B 002E 005D ; 002E ; true
+005B 002E 005D ; 0062 ; false
+005B 007C 005D ; 007C ; true
+005B 005D 0061 005D ; 005D ; true
+005B 005E 005D 0061 005D ; 005D ; false
+005B 005E 005D 0061 005D ; 0062 ; true
+005C 0030 0031 0032 0033 ; 0053 ; true
+005C 0030 0031 0032 0033 ; 000A ; false
+005C 0030 0031 0032 0033 ; 0033 ; false
+005C 0030 0033 0037 0037 ; 00FF ; true
+005C 216B ; 216B ; true
+005C 00B2 ; 00B2 ; true
+0061 0024 0024 ; 0061 ; true
+0061 0024 007C 0062 ; 0062 ; true
+0061 0024 0028 0029 ; 0061 ; true
