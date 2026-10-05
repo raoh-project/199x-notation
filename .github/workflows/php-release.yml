@@ -2,7 +2,7 @@ name: PHP release
 
 # A tag php/vX.Y.Z releases php/ as version vX.Y.Z of raoh/notation-199x. Packagist reads
 # composer.json at the root of a repository, so the release is published to a mirror whose root is
-# php/, raoh-project/199x-notation-php, and Packagist reads the mirror. Nothing is committed to the
+# php/, raoh-project/notation-199x-php, and Packagist reads the mirror. Nothing is committed to the
 # mirror but what this workflow writes.
 
 on:
@@ -72,7 +72,7 @@ jobs:
       # A version Packagist has seen is never moved, so a tag the mirror already has stops here.
       - name: Publish to the mirror
         run: |
-          git clone git@github.com:raoh-project/199x-notation-php.git mirror
+          git clone git@github.com:raoh-project/notation-199x-php.git mirror
           if [ -n "$(git -C mirror ls-remote --tags origin "refs/tags/$VERSION")" ]; then
             echo "::error::the mirror already has $VERSION, and a released version is never moved"
             exit 1
@@ -85,6 +85,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit --allow-empty -m "$VERSION from raoh-project/199x-notation@$GITHUB_SHA"
-          git tag -a "$VERSION" -m "$VERSION is php/ of raoh-project/199x-notation at $GITHUB_SHA ($TAG)"
+          git commit --allow-empty -m "$VERSION from raoh-project/notation-199x@$GITHUB_SHA"
+          git tag -a "$VERSION" -m "$VERSION is php/ of raoh-project/notation-199x at $GITHUB_SHA ($TAG)"
           git push --atomic origin main "refs/tags/$VERSION"
