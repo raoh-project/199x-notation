@@ -1,4 +1,4 @@
-# raoh/199x-notation
+# raoh/notation-199x
 
 The PHP implementation of the rules for reading text that
 [Raoh](https://github.com/raoh-project) and [Souther](https://github.com/souther-lang/souther)
@@ -12,7 +12,7 @@ Rust implementations, and is held to the same test vectors. Packagist reads it f
 writes on each release and nobody commits to. Issues and pull requests go to 199x-notation.
 
 ```sh
-composer require raoh/199x-notation
+composer require raoh/notation-199x
 ```
 
 It needs a 64-bit PHP 8 from 8.2 on, as `composer.json` requires it (`"php-64bit": "^8.2"`): a

@@ -1,6 +1,6 @@
 name: PHP release
 
-# A tag php/vX.Y.Z releases php/ as version vX.Y.Z of raoh/199x-notation. Packagist reads
+# A tag php/vX.Y.Z releases php/ as version vX.Y.Z of raoh/notation-199x. Packagist reads
 # composer.json at the root of a repository, so the release is published to a mirror whose root is
 # php/, raoh-project/199x-notation-php, and Packagist reads the mirror. Nothing is committed to the
 # mirror but what this workflow writes.

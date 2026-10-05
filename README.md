@@ -122,14 +122,15 @@ One directory per language, beside the data they are all generated from and chec
 | `java/` | Maven artifact `net.unit8.199x:notation-199x`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
 | `go/` | Module `github.com/raoh-project/199x-notation/go`, package `notation199x` |
-| `php/` | Composer package `raoh/199x-notation`, namespace `Raoh\Notation199x` |
-| `ts/` | npm package `@raoh/199x-notation` |
+| `php/` | Composer package `raoh/notation-199x`, namespace `Raoh\Notation199x` |
+| `ts/` | npm package `@raoh/notation-199x` |
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
-`notation199x`. A Maven artifactId can begin with one, but a Clojure symbol cannot, so the Java artifact is
-`notation-199x`, which `deps.edn` and Leiningen can write. A Composer package name can, so the PHP package is `raoh/199x-notation`, under the
-vendor raoh-php is published under. An npm package name can too, and `@raoh/199x-notation` is under the scope raoh-ts
-is published under.
+`notation199x`. The Java artifact, the Composer package and the npm package are named `notation-199x`
+instead of `199x-notation`: a Clojure symbol cannot begin its name with a digit, so `deps.edn` and
+Leiningen cannot write the artifactId `199x-notation`, and the other two are named alike. The
+Composer package is under the vendor raoh-php is published under, and the npm package under the scope
+raoh-ts is published under.
 
 Tables are generated from `ucd/` and checked in. Generation is run by hand and never during a
 build: taking a later Unicode version is a change to the specifications, not a dependency update.
@@ -280,7 +281,7 @@ contents a version had, and a module fetched by version is checked against them.
 
 ### PHP
 
-The package is `raoh/199x-notation`, and a release of it is a tag: nothing in `php/` names its
+The package is `raoh/notation-199x`, and a release of it is a tag: nothing in `php/` names its
 version. Packagist reads `composer.json` at the root of a repository, and this one's is in `php/`,
 so a release is published to a mirror whose root is `php/`,
 [raoh-project/199x-notation-php](https://github.com/raoh-project/199x-notation-php), and Packagist
@@ -309,7 +310,7 @@ to Packagist under the `raoh` vendor, with its GitHub hook on.
 
 ### TypeScript
 
-The package is `@raoh/199x-notation`, published from `ts/` by the `TypeScript publish` workflow and by
+The package is `@raoh/notation-199x`, published from `ts/` by the `TypeScript publish` workflow and by
 nothing else. `ts/package.json` on `develop` holds the next version as `X.Y.Z-dev`. A push to
 `develop` that changes `ts/` publishes the commit it brings, once CI has passed on it, as
 `X.Y.Z-dev.N.YYYYMMDDHHMMSS.gHHHHHHHHHHHH` under the dist-tag `dev`: `N` is how many commits the
@@ -327,10 +328,10 @@ later commit's run asks, whatever order GitHub starts the runs in. So the commit
 the last, and a push a later one overtakes before its run publishes, have no version of their own;
 and where the later commit's run fails, `dev` stays where it was until a push whose run passes.
 
-`npm install @raoh/199x-notation` takes `latest`, which is a release, and a range written for
+`npm install @raoh/notation-199x` takes `latest`, which is a release, and a range written for
 releases, `^0.2.0`, takes no development version: npm takes a prerelease only for a range that names
 one of the same `X.Y.Z`, and `^0.2.0-dev.1` takes every later one. So a project that
-means one commit writes its version exactly, `npm install --save-exact @raoh/199x-notation@<version>`,
+means one commit writes its version exactly, `npm install --save-exact @raoh/notation-199x@<version>`,
 as `npm install` otherwise saves a range.
 
 `ts/scripts/publish.sh` says what version a ref makes, under which dist-tag, and publishes it, and CI

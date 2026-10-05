@@ -1,5 +1,5 @@
 {
-    "name": "raoh/199x-notation",
+    "name": "raoh/notation-199x",
     "description": "The rules for reading text that Raoh and Souther share: Unicode 18.0.0 case conversion and normalization, White_Space, scalar values, temporal text and the pattern language, answered alike whatever Unicode version PHP was built with",
     "type": "library",
     "license": "Apache-2.0",

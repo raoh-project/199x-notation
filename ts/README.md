@@ -1,4 +1,4 @@
-# @raoh/199x-notation
+# @raoh/notation-199x
 
 The TypeScript implementation of the rules for reading text that
 [Raoh](https://github.com/raoh-project) and [Souther](https://github.com/souther-lang/souther)
@@ -28,7 +28,7 @@ a pair, and a pattern's `matches`, which accepts no text that holds one.
 import {
   checkTemporal, compare, illFormedAt, isWhiteSpace, lowercase, normalizeWithin, readInstant,
   readPattern, scalarCount, uppercaseWithin,
-} from "@raoh/199x-notation";
+} from "@raoh/notation-199x";
 
 illFormedAt("a\uD83D");                            // 1
 scalarCount("a\u{1F600}");                         // 2
