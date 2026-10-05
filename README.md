@@ -119,14 +119,15 @@ One directory per language, beside the data they are all generated from and chec
 | `gen/` | The program that generates the tables from `ucd/` |
 | `suite/` | Test vectors every implementation runs |
 | `image/` | The image formats, each with the fixtures every implementation that reads it runs |
-| `java/` | Maven artifact `net.unit8.199x:199x-notation`, package `net.unit8.notation199x` |
+| `java/` | Maven artifact `net.unit8.199x:notation-199x`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
 | `go/` | Module `github.com/raoh-project/199x-notation/go`, package `notation199x` |
 | `php/` | Composer package `raoh/199x-notation`, namespace `Raoh\Notation199x` |
 | `ts/` | npm package `@raoh/199x-notation` |
 
 An identifier cannot begin with a digit in any of these languages, so code spells the name
-`notation199x`. A Composer package name can, so the PHP package is `raoh/199x-notation`, under the
+`notation199x`. A Maven artifactId can begin with one, but a Clojure symbol cannot, so the Java artifact is
+`notation-199x`, which `deps.edn` and Leiningen can write. A Composer package name can, so the PHP package is `raoh/199x-notation`, under the
 vendor raoh-php is published under. An npm package name can too, and `@raoh/199x-notation` is under the scope raoh-ts
 is published under.
 

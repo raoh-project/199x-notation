@@ -33,7 +33,7 @@ jobs:
       # What is published carries the license, which is outside java/.
       - name: The jar carries the license
         working-directory: java
-        run: unzip -p target/199x-notation-*.jar META-INF/LICENSE | cmp - ../LICENSE
+        run: unzip -p target/notation-199x-*.jar META-INF/LICENSE | cmp - ../LICENSE
       # The images the tests wrote of the suite's patterns, for the implementations that read P1.
       - name: Keep the images of the suite's patterns
         uses: actions/upload-artifact@v4

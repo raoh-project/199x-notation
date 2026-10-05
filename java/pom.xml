@@ -5,11 +5,11 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>net.unit8.199x</groupId>
-    <artifactId>199x-notation</artifactId>
+    <artifactId>notation-199x</artifactId>
     <version>0.2.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <name>199x-notation</name>
+    <name>notation-199x</name>
     <description>The rules for reading text that Raoh and Souther share</description>
     <url>https://github.com/raoh-project/199x-notation</url>
 
