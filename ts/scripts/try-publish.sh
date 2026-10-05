@@ -45,6 +45,12 @@ expect() {
   echo "$what: as it is to be"
 }
 
+# package.json as it is on develop. Where a release's version is what a commit holds, checking out
+# another commit puts that back, so each ask of a development version sets it again first.
+as_develop() {
+  npm version --no-git-tag-version --allow-same-version "$release-dev" > /dev/null
+}
+
 # A commit on top of what is checked out, dated `date`, which leaves package.json as it is.
 commit_dated() {
   GIT_COMMITTER_DATE="$1" git -c user.name=ci -c user.email=ci@localhost \
@@ -55,10 +61,11 @@ commit_dated() {
 # The development version a commit makes.
 version_of() {
   git checkout --quiet --detach "$1"
+  as_develop
   scripts/publish.sh refs/heads/develop --check | sed -n 's/^version=//p'
 }
 
-npm version --no-git-tag-version --allow-same-version "$release-dev" > /dev/null
+as_develop
 expect "a development version newest on develop" \
   "$(DEVELOP=HEAD scripts/publish.sh refs/heads/develop --dry-run 2>&1)" \
   "with tag dev"
@@ -66,6 +73,7 @@ expect "a development version newest on develop" \
 # A later commit that changes nothing of the package starts no run, and leaves dev to this one.
 later="$(commit_dated "2030-01-01T00:00:00Z")"
 git checkout --quiet --detach "$start"
+as_develop
 expect "a development version a later commit elsewhere has passed" \
   "$(DEVELOP="$later" scripts/publish.sh refs/heads/develop --dry-run 2>&1)" \
   "with tag dev"
@@ -76,6 +84,7 @@ git add later.txt
 git -c user.name=ci -c user.email=ci@localhost commit --quiet -m "a later commit to the package" -- later.txt
 changed="$(git rev-parse HEAD)"
 git checkout --quiet --detach "$start"
+as_develop
 expect "a development version a later commit to the package has passed" \
   "$(DEVELOP="$changed" scripts/publish.sh refs/heads/develop --dry-run 2>&1)" \
   "nothing is published" "Publishing to"
