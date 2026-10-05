@@ -528,14 +528,7 @@ class Reader {
     while (!this.done() && (this.peek() !== CLOSE_BRACKET || first)) {
       first = false;
       this.construct = this.at;
-      if (this.peek() === OPEN_BRACKET) {
-        this.take();
-        this.refuse("aClassOfClasses");
-      }
-      if (this.text.startsWith("&&", this.at)) {
-        this.at += 2;
-        this.refuse("aClassOfClasses");
-      }
+      this.refuseClassOfClasses();
       for (const bound of this.classMember()) {
         members.push(bound);
       }
@@ -551,17 +544,36 @@ class Reader {
   }
 
   /**
-   * One member of a class: a symbol, a run of them, or a shorthand's whole set. A run is read only
-   * where both ends are one symbol: [\d-z] names no run.
+   * A [ or && here is refused, as a class inside a class and as an intersection, wherever it
+   * stands in a class, an end of a run included.
+   */
+  private refuseClassOfClasses(): void {
+    if (this.peek() === OPEN_BRACKET) {
+      this.take();
+      this.refuse("aClassOfClasses");
+    }
+    if (this.text.startsWith("&&", this.at)) {
+      this.at += 2;
+      this.refuse("aClassOfClasses");
+    }
+  }
+
+  /**
+   * One member of a class: a symbol, a run of them, or a shorthand's whole set. A - makes a run
+   * only between two single symbols, each a character or an escape that stands for one. Anywhere
+   * else it is a symbol of its own: [a-\d] holds a, - and the digits.
    */
   private classMember(): Symbols {
     const member = this.classAtom();
     if (size(member) === 1 && this.peek() === HYPHEN && this.at + 1 < this.text.length
       && this.text.charCodeAt(this.at + 1) !== CLOSE_BRACKET) {
       this.take();
+      const afterDash = this.at;
+      this.refuseClassOfClasses();
       const upper = this.classAtom();
       if (size(upper) !== 1) {
-        this.refuse("anEscapeThisDoesNotRead");
+        this.at = afterDash;
+        return normalized([...member, HYPHEN, HYPHEN]);
       }
       if (upper[0]! < member[0]!) {
         this.refuse("aCountThisCannotRead");

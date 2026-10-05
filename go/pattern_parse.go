@@ -398,14 +398,7 @@ func (r *patternReader) characterClass() symbols {
 	for !r.done() && (r.peek() != ']' || first) {
 		first = false
 		r.construct = r.at
-		if r.peek() == '[' {
-			r.take()
-			r.refuse(AClassOfClasses)
-		}
-		if strings.HasPrefix(r.text[r.at:], "&&") {
-			r.at += 2
-			r.refuse(AClassOfClasses)
-		}
+		r.refuseClassOfClasses()
 		members = append(members, r.classMember()...)
 	}
 	r.expect(']')
@@ -421,15 +414,32 @@ func (r *patternReader) characterClass() symbols {
 	return held
 }
 
-// classMember is one member of a class: a symbol, a run of them, or a shorthand's whole set. A run
-// is read only where both ends are one symbol: [\d-z] names no run.
+// refuseClassOfClasses refuses a [ or && here, as a class inside a class and as an intersection,
+// wherever it stands in a class, an end of a run included.
+func (r *patternReader) refuseClassOfClasses() {
+	if r.peek() == '[' {
+		r.take()
+		r.refuse(AClassOfClasses)
+	}
+	if strings.HasPrefix(r.text[r.at:], "&&") {
+		r.at += 2
+		r.refuse(AClassOfClasses)
+	}
+}
+
+// classMember is one member of a class: a symbol, a run of them, or a shorthand's whole set. A -
+// makes a run only between two single symbols, each a character or an escape that stands for one.
+// Anywhere else it is a symbol of its own: [a-\d] holds a, - and the digits.
 func (r *patternReader) classMember() symbols {
 	member := r.classAtom()
 	if member.size() == 1 && r.peek() == '-' && r.at+1 < len(r.text) && r.text[r.at+1] != ']' {
 		r.take()
+		afterDash := r.at
+		r.refuseClassOfClasses()
 		upper := r.classAtom()
 		if upper.size() != 1 {
-			r.refuse(AnEscapeThisDoesNotRead)
+			r.at = afterDash
+			return append(append(symbols{}, member...), one('-')...)
 		}
 		if upper[0].first < member[0].first {
 			r.refuse(ACountThisCannotRead)

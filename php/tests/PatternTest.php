@@ -46,7 +46,6 @@ final class PatternTest extends TestCase
             '[b-a]' => PatternRefusal::ACountThisCannotRead,
             '\\y' => PatternRefusal::AnEscapeThisDoesNotRead,
             '\\x{110000}' => PatternRefusal::AnEscapeThisDoesNotRead,
-            '[a-\\d]' => PatternRefusal::AnEscapeThisDoesNotRead,
             '\\꟝' => PatternRefusal::AnEscapeThisDoesNotRead,
             '(?=a)b' => PatternRefusal::AGroupTheGrammarDoesNotHave,
             '(?<name>a)' => PatternRefusal::AGroupTheGrammarDoesNotHave,

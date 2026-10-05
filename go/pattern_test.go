@@ -35,7 +35,6 @@ func TestEachRefusalIsForWhatWasWritten(t *testing.T) {
 		"[b-a]":        ACountThisCannotRead,
 		"\\y":          AnEscapeThisDoesNotRead,
 		"\\x{110000}":  AnEscapeThisDoesNotRead,
-		"[a-\\d]":      AnEscapeThisDoesNotRead,
 		"\\꟝":          AnEscapeThisDoesNotRead,
 		"(?=a)b":       AGroupTheGrammarDoesNotHave,
 		"(?<name>a)":   AGroupTheGrammarDoesNotHave,
