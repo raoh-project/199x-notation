@@ -8,7 +8,7 @@ length in Unicode scalar values, the lexical grammar of temporal text, and the p
 This package is developed in `php/` of
 [raoh-project/notation-199x](https://github.com/raoh-project/notation-199x), beside the Java, Go and
 Rust implementations, and is held to the same test vectors. Packagist reads it from
-[raoh-project/199x-notation-php](https://github.com/raoh-project/199x-notation-php), a mirror that CI
+[raoh-project/notation-199x-php](https://github.com/raoh-project/notation-199x-php), a mirror that CI
 writes on each release and nobody commits to. Issues and pull requests go to notation-199x.
 
 ```sh

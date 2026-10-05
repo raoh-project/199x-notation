@@ -284,7 +284,7 @@ contents a version had, and a module fetched by version is checked against them.
 The package is `raoh/notation-199x`, and a release of it is a tag: nothing in `php/` names its
 version. Packagist reads `composer.json` at the root of a repository, and this one's is in `php/`,
 so a release is published to a mirror whose root is `php/`,
-[raoh-project/199x-notation-php](https://github.com/raoh-project/199x-notation-php), and Packagist
+[raoh-project/notation-199x-php](https://github.com/raoh-project/notation-199x-php), and Packagist
 reads the mirror. The mirror is written by CI and by nothing else: nobody commits to it, and an
 issue or a pull request there is sent here. As for Go, a tag here begins with the directory, so the
 package's version `vX.Y.Z` is the tag `php/vX.Y.Z` here and the tag `vX.Y.Z` on the mirror. The
@@ -304,7 +304,7 @@ release that is wrong is followed by another.
 
 The workflow pushes to the mirror with a deploy key that can write to it, held here as the secret
 `PHP_MIRROR_DEPLOY_KEY`. Setting up the mirror is done once: create
-`raoh-project/199x-notation-php` empty, add the public half of the key to it as a deploy key with
+`raoh-project/notation-199x-php` empty, add the public half of the key to it as a deploy key with
 write access and the private half here as that secret, push the first tag, and submit the mirror
 to Packagist under the `raoh` vendor, with its GitHub hook on.
 
