@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [develop, main]
-    tags: ['v*']
+    tags: ['v*', 'go/v*']
   pull_request:
+  # The PHP release runs all of this on the commit it releases before it publishes anything.
+  workflow_call:
 
 jobs:
   java:
@@ -20,19 +22,260 @@ jobs:
       - name: Check the UCD files against their checksums
         working-directory: ucd/18.0.0
         run: sha256sum --check --strict SHA256SUMS
-      # The checked-in tables are what the generators write from those inputs.
+      # The checked-in tables are what the generator writes from those inputs.
       - name: Regenerate the tables
         run: |
-          java gen/GenerateCaseTables.java ucd/18.0.0
-          java gen/GenerateNormalizationTables.java ucd/18.0.0
+          java gen/Generate.java ucd/18.0.0
           git diff --exit-code
-      - name: Test
+      - name: Test and package
         working-directory: java
-        run: mvn --batch-mode test
+        run: mvn --batch-mode package
+      # What is published carries the license, which is outside java/.
+      - name: The jar carries the license
+        working-directory: java
+        run: unzip -p target/notation-199x-*.jar META-INF/LICENSE | cmp - ../LICENSE
+      # The images the tests wrote of the suite's patterns, for the implementations that read P1.
+      - name: Keep the images of the suite's patterns
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-images
+          path: java/target/images/pattern-match.txt
+          if-no-files-found: error
       # Every public type and member is documented, its tags included, and a warning fails.
       - name: Javadoc
         working-directory: java
         run: mvn --batch-mode javadoc:javadoc
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          # The module has no dependencies, so there is nothing to cache.
+          cache: false
+      # gofmt leaves every file as it is, the generated tables included.
+      - name: Format
+        working-directory: go
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        working-directory: go
+        run: go vet ./...
+      # A checkout holds ucd/ and suite/, and a test that does not find them fails rather than skips.
+      - name: Test
+        working-directory: go
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: go test -race ./...
+      # Without the race detector too, under which sync.Pool drops what it is handed and what a
+      # match allocates is not held.
+      - name: Test without the race detector
+        working-directory: go
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: go test ./...
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The toolchain rust/rust-toolchain.toml names, so that a release of Rust changes nothing here.
+      - name: Install the Rust toolchain
+        working-directory: rust
+        run: rustup toolchain install
+      # rustfmt leaves every file as it is; the generated tables are skipped where they are declared.
+      - name: Format
+        working-directory: rust
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings
+      # The crate is no_std, and a target with no standard library builds it.
+      - name: Build without the standard library
+        working-directory: rust
+        run: cargo build --target wasm32-unknown-unknown
+      # The oldest Rust the crate says it builds with builds it.
+      - name: Build with the declared rust-version
+        working-directory: rust
+        run: |
+          rustup toolchain install "$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" --profile minimal
+          cargo +"$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" build
+      # A checkout holds ucd/, suite/ and image/, and a test that does not find them fails rather than
+      # skips.
+      - name: Test
+        working-directory: rust
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: cargo test
+      # A crate holds only what is under rust/, so the license is a copy there, and what is
+      # published holds the copy.
+      - name: The crate carries the license
+        working-directory: rust
+        run: |
+          cmp LICENSE ../LICENSE
+          cargo package --list | grep -qx LICENSE
+
+  php:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest PHP composer.json takes, read from it, and the newest.
+        php: [oldest, '8.5']
+    steps:
+      - uses: actions/checkout@v5
+      # composer.json and this are one statement, so the oldest is read there: a version written
+      # here as well would let the tests pass on a PHP the package no longer takes.
+      - name: The PHP to run on
+        id: php
+        working-directory: php
+        run: |
+          if [ "${{ matrix.php }}" != oldest ]; then
+            echo "version=${{ matrix.php }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          required=$(jq -r '.require["php-64bit"]' composer.json)
+          if [[ ! "$required" =~ ^\^([0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::composer.json requires PHP $required; write the oldest it takes as ^X.Y"
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      # Without intl, so that a rule that asked it would fail here. PHPUnit needs mbstring and
+      # Composer needs it or iconv, so those stay, and HostTest holds the sources to not asking
+      # either.
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ steps.php.outputs.version }}
+          extensions: :intl
+          coverage: none
+      - name: Validate composer.json
+        working-directory: php
+        run: composer validate --strict
+      - name: Install the tools
+        working-directory: php
+        run: composer install --no-progress
+      - name: PHPStan
+        working-directory: php
+        run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
+      # A checkout holds ucd/ and suite/, and a test that does not find them fails rather than skips.
+      - name: Test
+        working-directory: php
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: vendor/bin/phpunit
+
+  # The tests as they are written, TypeScript run by Node, on the oldest Node that runs them
+  # (devEngines) and on the current LTS.
+  typescript:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [oldest, lts/*]
+    steps:
+      - uses: actions/checkout@v5
+      - name: The Node to run on
+        id: node
+        working-directory: ts
+        run: |
+          if [ "${{ matrix.node }}" = oldest ]; then
+            echo "version=$(scripts/oldest-node.sh tooling)" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ matrix.node }}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+      - name: Install the tools
+        working-directory: ts
+        run: npm ci
+      - name: Type-check
+        working-directory: ts
+        run: npm run typecheck
+      # What is published is what tsc writes of the sources.
+      - name: Build
+        working-directory: ts
+        run: npm run build
+      # A checkout holds suite/, and a test that does not find it fails rather than skips.
+      - name: Test
+        working-directory: ts
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: npm test
+      # A package holds only what is under ts/, so the license is a copy there, and what npm packs
+      # holds the copy and the README.
+      - name: The package carries the license and the README
+        working-directory: ts
+        run: |
+          cmp LICENSE ../LICENSE
+          npm pack --dry-run --json | jq -e '.[0].files | map(.path) | index("LICENSE") and index("README.md")'
+      # What the TypeScript publish workflow does, but the upload, on each path it can take: a
+      # development version newest on develop, one only a later commit elsewhere has passed and one
+      # a later commit to the package has passed, a release that is the greatest tagged and one below
+      # another. None turns on the ref CI runs for or on what package.json holds, so CI asks the same
+      # for a pull request, for develop, and when a release, of this package or another, runs it on a
+      # commit on main.
+      - name: Publish, as a dry run, on each path
+        working-directory: ts
+        run: scripts/try-publish.sh
+
+  # The package on the oldest Node a project that installs it may run (engines), which is older
+  # than the one the tests need as TypeScript. The tools run on the Node they need, and compile the
+  # sources and the tests as the build compiles the sources; only the JavaScript that comes of them
+  # is run on the oldest Node, and npm is not run there.
+  typescript-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: The Nodes to run on
+        id: node
+        working-directory: ts
+        run: |
+          echo "tooling=$(scripts/oldest-node.sh tooling)" >> "$GITHUB_OUTPUT"
+          echo "runtime=$(scripts/oldest-node.sh runtime)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ steps.node.outputs.tooling }}
+          cache: npm
+          cache-dependency-path: ts/package-lock.json
+      - name: Compile the sources and the tests
+        working-directory: ts
+        run: |
+          npm ci
+          npm run compile-tests
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ steps.node.outputs.runtime }}
+      - name: The compiled tests on the oldest Node engines names
+        working-directory: ts
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+        run: |
+          test "$(node --version)" = "v${{ steps.node.outputs.runtime }}"
+          node --test target/runtime/test/*.test.js
+
+  # Java writes an image of each pattern of the suite, and Rust reads it and answers what the suite
+  # says the pattern accepts. Apart from the rust job, so that what Rust answers alone is not held up
+  # by Java.
+  java-images-in-rust:
+    needs: java
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the Rust toolchain
+        working-directory: rust
+        run: rustup toolchain install
+      - uses: actions/download-artifact@v4
+        with:
+          name: java-images
+          path: java-images
+      - name: Read the images Java wrote
+        working-directory: rust
+        env:
+          NOTATION199X_REQUIRE_SUITE: '1'
+          NOTATION199X_JAVA_IMAGES: ${{ github.workspace }}/java-images/pattern-match.txt
+        run: cargo test --test java_images
 
   # A tag names a release: vX.Y.Z on a commit whose version is X.Y.Z. Checked when it is pushed,
   # before anything is deployed from it.

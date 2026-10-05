@@ -1,0 +1,35 @@
+{
+    "name": "raoh/notation-199x",
+    "description": "The rules for reading text that Raoh and Souther share: Unicode 18.0.0 case conversion and normalization, White_Space, scalar values, temporal text and the pattern language, answered alike whatever Unicode version PHP was built with",
+    "type": "library",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/raoh-project/notation-199x",
+    "support": {
+        "issues": "https://github.com/raoh-project/notation-199x/issues",
+        "source": "https://github.com/raoh-project/notation-199x/tree/main/php"
+    },
+    "require": {
+        "php-64bit": "^8.2"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2",
+        "phpunit/phpunit": "^11.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "Raoh\\Notation199x\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Raoh\\Notation199x\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit",
+        "analyse": "phpstan analyse"
+    }
+}

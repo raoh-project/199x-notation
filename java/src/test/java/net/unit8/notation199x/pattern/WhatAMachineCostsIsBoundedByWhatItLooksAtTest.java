@@ -3,6 +3,11 @@ package net.unit8.notation199x.pattern;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -44,19 +49,178 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
     }
 
     /**
-     * A class written wide and repeated is within every state limit and a great deal of work to make
-     * deterministic: each state's row is as wide as the class cuts the symbols. It is refused on
-     * that work, as a machine larger than one may be, and refused early.
+     * A class written wide and repeated is two classes however many runs it cuts the symbols into:
+     * the characters in it and the rest. Its rows are as wide as that, so making it deterministic
+     * costs its states, and the runs are read once.
      */
     @Test
-    void aWideClassRepeatedIsRefusedOnTheWorkItsRowsTake() {
+    void aWideClassRepeatedIsMadeDeterministicOverTheTwoClassesItTellsApart() {
         PatternMeaning meaning = meaning(wideClass(3000) + "{2000}");
+        assertTimeoutPreemptively(Duration.ofSeconds(30), () -> {
+            Meter meter = Held.roomy();
+            assertTrue(Held.canonical(meaning, meter) != null);
+            assertNull(meter.stoppedBy());
+        });
+    }
+
+    /**
+     * A chain of characters each of its own is as many classes as it is long, and its rows are as
+     * wide as that: the work of making it deterministic is the square of its length. It is refused
+     * on that work, as a machine larger than one may be, and refused early.
+     */
+    @Test
+    void aChainOfCharactersEachOfItsOwnIsRefusedOnTheWorkItsRowsTake() {
+        StringBuilder chain = new StringBuilder();
+        for (int i = 0; i < 8000; i++) {
+            chain.appendCodePoint(0x20000 + i);
+        }
+        PatternMeaning meaning = meaning(chain.toString());
         Meter meter = Held.roomy();
         assertTimeoutPreemptively(Duration.ofSeconds(30), () ->
                 assertNull(Held.canonical(meaning, meter)));
         assertEquals(Meter.Stopped.ONE_MACHINE, meter.stoppedBy());
         assertTrue(Automaton.of(meaning, Held.roomy()) != null,
                 "its shape is within the state limit, so what refused it is the work");
+    }
+
+    /**
+     * A set is held once in a machine however many steps are over it, so a deterministic machine
+     * every state of which steps over one wide class holds that class once: making it, running it
+     * and writing it out each read the class once and not once a state.
+     */
+    @Test
+    void aWideClassEveryStateStepsOverIsHeldOnce() {
+        PatternMeaning meaning = meaning(wideClass(3000) + "{2000}");
+        Automaton deterministic = Objects.requireNonNull(Held.canonical(meaning, Held.roomy()));
+        Set<CodePoints> sets = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (int state = 0; state < deterministic.size(); state++) {
+            for (Automaton.Step each : deterministic.stepsFrom(state)) {
+                sets.add(each.over());
+            }
+        }
+        assertEquals(3, sets.size(), "the class, the rest, and every symbol out of where a walk is done");
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            for (int i = 0; i < 20; i++) {
+                assertEquals(StringPattern.Way.TABLE, StringPattern.of(ClassRows.of(deterministic)).way());
+                assertInstanceOf(PatternImage.Written.class, PatternImages.p2(deterministic));
+                assertTrue(deterministic.shortest() != null);
+            }
+        });
+    }
+
+    /**
+     * An image is held to what reading it looks at however many states step over one set: a set
+     * of two hundred thousand runs that every state steps over is read as its classes, and not as
+     * its runs once a state.
+     */
+    @Test
+    void anImageWhoseStatesAllStepOverOneWideSetIsReadAsItsClasses() {
+        int runs = 200_000;
+        int states = 20_000;
+        StringBuilder image = new StringBuilder("P1,1,1,").append(runs);
+        for (int i = 0; i < runs; i++) {
+            image.append(',').append(0x10000 + 2 * i).append(',').append(0x10000 + 2 * i);
+        }
+        image.append(',').append(states);
+        for (int state = 0; state < states; state++) {
+            image.append(",1,1,0,").append((state + 1) % states).append(",0");
+        }
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            StringPattern run = StringPattern.of(List.of(image.toString()));
+            assertEquals(StringPattern.Way.TABLE, run.way());
+            assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10002)
+                    .toString()));
+            assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10001).toString()));
+        });
+    }
+
+    /**
+     * An image of P2 is read in one pass, however many states step over the same wide classes: the
+     * machine of issue #27, two classes of a hundred thousand runs each that every state steps over
+     * to states of its own, which an image of P1 that says it is deterministic makes a reader hold
+     * against each other at every state.
+     */
+    @Test
+    void anImageOfP2IsReadInOnePassHoweverManyStatesStepOverWideClasses() {
+        int runs = 100_000;
+        int states = 100_000;
+        int dead = states - 1;
+        StringBuilder image = new StringBuilder("P2");
+        for (int i = 0; i < runs; i++) {
+            int at = 0x10000 + 4 * i;
+            image.append(',').append(at - 1).append(",0,").append(at).append(",1,")
+                    .append(at + 1).append(",0,").append(at + 2).append(",2");
+        }
+        image.append(",1114111,0,").append(states);
+        for (int state = 0; state < dead; state++) {
+            image.append(",1,0,").append(dead).append(",1,").append((state + 1) % dead)
+                    .append(",2,").append((state + 2) % dead);
+        }
+        image.append(",0,2,").append(dead);
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            StringPattern run = StringPattern.of(List.of(image.toString()));
+            assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10006)
+                    .toString()));
+            assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10001).toString()));
+            assertTrue(run.matches(""));
+        });
+    }
+
+    /**
+     * And where the classes are too many for a table and the runs every state would hold over again
+     * are past what is allowed, a deterministic image is walked as the sets of states its steps lead
+     * to, which answers the same, rather than its runs being made whatever they come to.
+     */
+    @Test
+    void anImageWhoseRunsArePastWhatIsAllowedIsWalkedAsItsSteps() {
+        String image = manyClassesImage(0x10001);
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
+            StringPattern run = StringPattern.of(List.of(image));
+            assertEquals(StringPattern.Way.SETS_KEPT, run.way());
+            assertTrue(run.matches(new StringBuilder().appendCodePoint(0x10001).appendCodePoint(0x10000)
+                    .toString()));
+            assertFalse(run.matches(new StringBuilder().appendCodePoint(0x10000).appendCodePoint(0x10001)
+                    .toString()));
+        });
+    }
+
+    /**
+     * Whether an image is one that is read is never a matter of what a walk over it is given to walk
+     * faster on: one said to be deterministic that steps two ways is refused however large it is,
+     * and past every table and run it could be walked by.
+     */
+    @Test
+    void anImageSteppingTwoWaysIsRefusedHoweverLarge() {
+        assertThrows(IllegalArgumentException.class, () -> StringPattern.of(List.of(manyClassesImage(0x10000))));
+        StringPattern.of(List.of(manyClassesImage(0x10001)));
+    }
+
+    /**
+     * An image of a wide set every state steps over and as many characters of their own as are too
+     * many for a table, the first state stepping over each; {@code firstSingle} is where those
+     * characters begin, beside or inside the wide set.
+     */
+    private static String manyClassesImage(int firstSingle) {
+        int runs = 200_000;
+        int singles = 600;
+        int states = 1_000;
+        StringBuilder image = new StringBuilder("P1,1,").append(1 + singles).append(',').append(runs);
+        for (int i = 0; i < runs; i++) {
+            image.append(',').append(0x10000 + 2 * i).append(',').append(0x10000 + 2 * i);
+        }
+        for (int i = 0; i < singles; i++) {
+            image.append(",1,").append(firstSingle + 2 * i).append(',').append(firstSingle + 2 * i);
+        }
+        image.append(',').append(states);
+        image.append(",1,").append(1 + singles).append(",0,1");
+        for (int i = 0; i < singles; i++) {
+            image.append(',').append(1 + i).append(",0");
+        }
+        image.append(",0");
+        for (int state = 1; state < states; state++) {
+            image.append(",1,1,0,").append((state + 1) % states).append(",0");
+        }
+        return image.toString();
     }
 
     /**
@@ -91,7 +255,7 @@ class WhatAMachineCostsIsBoundedByWhatItLooksAtTest {
     /** A writer says it is past its limit as it goes, and writes nothing out once it is. */
     @Test
     void aWriterPastItsLimitSaysSoAndWritesNothing() {
-        StringPattern.Writer out = new StringPattern.Writer(false, 40);
+        StringPattern.P1Writer out = new StringPattern.P1Writer(40);
         int at = out.state(false);
         assertTrue(out.holds());
         for (int i = 0; i < 20 && out.holds(); i++) {

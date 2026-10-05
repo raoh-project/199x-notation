@@ -1,0 +1,90 @@
+name: PHP release
+
+# A tag php/vX.Y.Z releases php/ as version vX.Y.Z of raoh/notation-199x. Packagist reads
+# composer.json at the root of a repository, so the release is published to a mirror whose root is
+# php/, raoh-project/199x-notation-php, and Packagist reads the mirror. Nothing is committed to the
+# mirror but what this workflow writes.
+
+on:
+  push:
+    tags: ['php/v*']
+
+# One release at a time, and none left out; the order the runs start in is GitHub's, and Packagist
+# orders the versions by what they are. A group holds one run waiting by default, and a run that
+# comes after it takes its place, so a tag pushed while another waited would never be released;
+# queue: max holds every run, up to a hundred.
+concurrency:
+  group: php-release
+  cancel-in-progress: false
+  queue: max
+
+# bash with pipefail, so that a step whose pipe fails part of the way fails.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: The tag is a version on main
+        id: version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version="${tag#php/}"
+          if ! echo "$version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::$tag is not php/vX.Y.Z"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$tag names a commit that is not on main"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Everything CI checks of a commit, on the commit the tag names: the checksums of ucd/, that the
+  # generator writes the tables that are checked in, PHPStan, and the tests of every implementation
+  # on the oldest and the newest PHP. What is published is a commit all of that passed on.
+  ci:
+    needs: tag
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [tag, ci]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+      VERSION: ${{ needs.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      # Pinned to a commit, since it is handed the key.
+      - uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.PHP_MIRROR_DEPLOY_KEY }}
+      # The mirror's tree is the files git tracks under php/ and the license, and nothing else.
+      # A version Packagist has seen is never moved, so a tag the mirror already has stops here.
+      - name: Publish to the mirror
+        run: |
+          git clone git@github.com:raoh-project/199x-notation-php.git mirror
+          if [ -n "$(git -C mirror ls-remote --tags origin "refs/tags/$VERSION")" ]; then
+            echo "::error::the mirror already has $VERSION, and a released version is never moved"
+            exit 1
+          fi
+          git -C mirror checkout -B main
+          find mirror -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          git ls-files -z -- php | sed -z 's|^php/||' | rsync -a --from0 --files-from=- php/ mirror/
+          cp LICENSE mirror/LICENSE
+          cd mirror
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit --allow-empty -m "$VERSION from raoh-project/199x-notation@$GITHUB_SHA"
+          git tag -a "$VERSION" -m "$VERSION is php/ of raoh-project/199x-notation at $GITHUB_SHA ($TAG)"
+          git push --atomic origin main "refs/tags/$VERSION"

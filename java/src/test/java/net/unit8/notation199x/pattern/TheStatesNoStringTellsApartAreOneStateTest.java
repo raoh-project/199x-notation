@@ -110,6 +110,8 @@ class TheStatesNoStringTellsApartAreOneStateTest {
         Automaton other = canonicalMachineOf("[ab]{" + LETTERS + "}", meter);
 
         assertTrue(one.sameAs(other), "one set of strings is one machine, however it was reached");
+        assertEquals(one.shape(), other.shape(), "which is what a map looking one up asks");
+        assertEquals(one.shape(), one.shape(), "and it is asked again and again of one machine");
     }
 
     /**

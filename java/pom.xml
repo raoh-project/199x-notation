@@ -5,13 +5,13 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>net.unit8.199x</groupId>
-    <artifactId>199x-notation</artifactId>
-    <version>0.1.0</version>
+    <artifactId>notation-199x</artifactId>
+    <version>0.2.0</version>
     <packaging>jar</packaging>
 
-    <name>199x-notation</name>
+    <name>notation-199x</name>
     <description>The rules for reading text that Raoh and Souther share</description>
-    <url>https://github.com/raoh-project/199x-notation</url>
+    <url>https://github.com/raoh-project/notation-199x</url>
 
     <licenses>
         <license>
@@ -22,9 +22,9 @@
     </licenses>
 
     <scm>
-        <url>https://github.com/raoh-project/199x-notation</url>
-        <connection>scm:git:git://github.com/raoh-project/199x-notation.git</connection>
-        <developerConnection>scm:git:git@github.com:raoh-project/199x-notation.git</developerConnection>
+        <url>https://github.com/raoh-project/notation-199x</url>
+        <connection>scm:git:git://github.com/raoh-project/notation-199x.git</connection>
+        <developerConnection>scm:git:git@github.com:raoh-project/notation-199x.git</developerConnection>
         <tag>HEAD</tag>
     </scm>
 
@@ -71,6 +71,22 @@
     </dependencies>
 
     <build>
+        <!--
+            The jar carries the repository's license, which is outside this directory, as
+            META-INF/LICENSE, beside what src/main/resources holds.
+        -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>..</directory>
+                <includes>
+                    <include>LICENSE</include>
+                </includes>
+                <targetPath>META-INF</targetPath>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

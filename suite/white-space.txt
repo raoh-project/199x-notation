@@ -1,0 +1,35 @@
+# The White_Space set of Unicode 18.0.0, every member of it.
+#
+# Source:
+#   Raoh catalog/operations.json — trim, nonBlank
+#   Souther specification.adoc — string-whitespace
+#
+# code point
+#
+# A scalar value no line names is not white space, so a runner holds an implementation to this over
+# every scalar value.
+0009
+000A
+000B
+000C
+000D
+0020
+0085
+00A0
+1680
+2000
+2001
+2002
+2003
+2004
+2005
+2006
+2007
+2008
+2009
+200A
+2028
+2029
+202F
+205F
+3000

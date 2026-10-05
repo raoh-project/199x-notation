@@ -17,79 +17,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * from the text: a count, a depth, and the states the pattern comes to with its repetitions written
  * out.
  *
- * <p>The states are counted from what is written ({@link PatternStates}), and the vectors here are
- * the ones the specification's verifier is held to as well: each is put beside a filler that brings
- * the whole to exactly the limit, which is read, and to one past it, which is not. So what is pinned
- * is the count itself and not only that some large pattern is refused.
+ * <p>The states every implementation counts, and what it answers on either side of each limit, are
+ * in {@code suite/pattern-states.txt} and {@code suite/pattern-read.txt}. What is here is Java's own
+ * answer where the specifications decide less: which limit is answered where a pattern is past more
+ * than one, which refusal text is refused for, and where each points and what it quotes. And what a
+ * line of vectors cannot hold: text too deep to write out, and a machine as large as a pattern within
+ * the limits builds.
  */
 class APatternIsHeldToTheLimitsEveryImplementationHoldsToTest {
-
-    private static final int MOST = PatternRead.Limit.MACHINE_STATES.most();
-
-    /** A pattern, and the states it is written as, before the one a whole pattern adds. */
-    private record Counted(String pattern, long states) {}
-
-    private static final List<Counted> COUNTED = List.of(
-            new Counted("", 0),
-            new Counted("a", 1),
-            new Counted("abc", 3),
-            new Counted(".", 1),
-            new Counted("[a-z]", 1),
-            new Counted("[^a]", 1),
-            new Counted("\\d", 1),
-            new Counted("\\x{1F600}", 1),
-            new Counted("\\uD83D\\uDE00", 1),
-            new Counted("😀", 1),
-            new Counted("()", 0),
-            new Counted("(?:a)", 1),
-            new Counted("a|b", 5),
-            new Counted("a|b|c", 7),
-            new Counted("(?:a|b)|c", 9),
-            new Counted("a|", 4),
-            new Counted("a?", 2),
-            new Counted("a??", 2),
-            new Counted("a*", 2),
-            new Counted("a+", 3),
-            new Counted("a{3}", 4),
-            new Counted("a{2,5}", 6),
-            new Counted("a{2,}", 4),
-            new Counted("a{0,0}", 1),
-            new Counted("(?:ab){3}", 7),
-            new Counted("(?:a{2}){3}", 10),
-            new Counted("(?:a|b)*", 6),
-            new Counted("(?:){134217727}", 1),
-            new Counted("^a", 2),
-            new Counted("a^b", 3),
-            new Counted("a$", 2),
-            new Counted("^a$", 3));
-
-    /**
-     * Each vector is one arm of a choice whose other arm is a filler, so an anchor in it stands at
-     * both ends of the string whatever the filler is. The choice is one, each arm one more than
-     * itself, and the pattern one more: {@code 4 + pattern + filler}.
-     */
-    @Test
-    void theStatesAreCountedFromWhatIsWritten() {
-        List<String> wrong = new ArrayList<>();
-        for (Counted each : COUNTED) {
-            long filler = MOST - 4 - each.states();
-            String at = "(?:" + each.pattern() + ")|" + filler(filler);
-            String past = "(?:" + each.pattern() + ")|" + filler(filler + 1);
-            if (!(PatternParser.read(at) instanceof PatternRead.Read)) {
-                wrong.add(each.pattern() + " at the limit is " + PatternParser.read(at));
-            }
-            if (!(PatternParser.read(past) instanceof PatternRead.Beyond beyond)
-                    || beyond.limit() != PatternRead.Limit.MACHINE_STATES) {
-                wrong.add(each.pattern() + " past the limit is " + PatternParser.read(past));
-            }
-        }
-        assertEquals(List.of(), wrong);
-    }
-
-    /** A filler of exactly {@code states} states: {@code a{0,n}} is {@code n + 1}. */
-    private static String filler(long states) {
-        return "a{0," + (states - 1) + "}";
-    }
 
     @Test
     void theStatesAtTheLimitAreReadAndOnePastAreNot() {

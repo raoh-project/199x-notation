@@ -318,14 +318,7 @@ public final class PatternParser {
         while (!done() && (peek() != ']' || first)) {
             first = false;
             construct = at;
-            if (peek() == '[') {
-                take();
-                throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
-            }
-            if (peek() == '&' && at + 1 < regex.length() && regex.charAt(at + 1) == '&') {
-                at += 2;
-                throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
-            }
+            refuseClassOfClasses();
             members.addAll(classMember().ranges());
         }
         expect(']');
@@ -339,21 +332,41 @@ public final class PatternParser {
         return negated ? held.not() : held;
     }
 
+    /** A {@code [} or {@code &&} here is refused: as a class inside a class and as an
+     *  intersection, wherever it stands in a class, an end of a run included. */
+    private void refuseClassOfClasses() {
+        if (peek() == '[') {
+            take();
+            throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
+        }
+        if (peek() == '&' && at + 1 < regex.length() && regex.charAt(at + 1) == '&') {
+            take();
+            take();
+            throw refused(PatternRead.Refusal.A_CLASS_OF_CLASSES);
+        }
+    }
+
     /**
      * One member of a class, which is a symbol, a run of them, or a shorthand's whole set.
      *
-     * <p>A run is read only where both ends are one symbol. {@code [\d-z]} names no run: what is on
-     * the left of the dash is ten symbols, and there is no such thing as the range from ten symbols
-     * to one.
+     * <p>A {@code -} makes a run only between two single symbols, each a character or an escape
+     * that stands for one. Anywhere else it is a symbol of its own, so {@code [a-\d]} holds
+     * {@code a}, {@code -} and the digits, and {@code [\d-z]} the digits, {@code -} and {@code z}.
      */
     private CodePoints classMember() {
         CodePoints member = classAtom();
         boolean isOne = member.size() == 1;
         if (isOne && peek() == '-' && at + 1 < regex.length() && regex.charAt(at + 1) != ']') {
             take();
+            int afterDash = at;
+            refuseClassOfClasses();
             CodePoints upper = classAtom();
             if (upper.size() != 1) {
-                throw refused(PatternRead.Refusal.AN_ESCAPE_THIS_DOES_NOT_READ);
+                // No run: the dash is a symbol, and what follows it is read as a member of its own.
+                at = afterDash;
+                List<CodePoints.Range> both = new ArrayList<>(member.ranges());
+                both.addAll(CodePoints.of('-').ranges());
+                return new CodePoints(both);
             }
             if (upper.least() < member.least()) {
                 throw refused(PatternRead.Refusal.A_COUNT_THIS_CANNOT_READ);
@@ -419,7 +432,7 @@ public final class PatternParser {
     /** The refusal of the escape whose kind is the character here, quoting it with that
      *  character whole. */
     private Refused refusedAfter(PatternRead.Refusal why) {
-        at += Character.charCount(regex.codePointAt(at));
+        take();
         return refused(why);
     }
 
@@ -479,12 +492,7 @@ public final class PatternParser {
      * beside it is no character ({@link #symbol}).
      */
     private int literal() {
-        if (done()) {
-            throw refused(PatternRead.Refusal.SOMETHING_UNCLOSED);
-        }
-        int written = regex.codePointAt(at);
-        at += Character.charCount(written);
-        return symbol(written);
+        return symbol(take());
     }
 
     /**
@@ -550,11 +558,21 @@ public final class PatternParser {
         return done() ? END : regex.charAt(at);
     }
 
-    private char take() {
+    /**
+     * The code point here as the text holds it, the reading moved past it whole.
+     *
+     * <p>{@link #at} counts units, as a refusal's place does, but a pair is taken as one: moved past
+     * half of it, the reading would stop between the two halves, and a refusal would quote the first
+     * half, which is no text. Half a pair with no other half beside it is taken as the one unit it is,
+     * and is refused by {@link #symbol} where it is named.
+     */
+    private int take() {
         if (done()) {
             throw refused(PatternRead.Refusal.SOMETHING_UNCLOSED);
         }
-        return regex.charAt(at++);
+        int taken = regex.codePointAt(at);
+        at += Character.charCount(taken);
+        return taken;
     }
 
     private void expect(char c) {

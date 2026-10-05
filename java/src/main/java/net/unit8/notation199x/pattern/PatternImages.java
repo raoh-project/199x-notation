@@ -9,22 +9,39 @@ import java.util.Map;
  * Where a machine is written out as a {@link PatternImage}.
  *
  * <p>Private to this package, beside the interface rather than on it: a static method of an
- * interface is public whatever it is written as, and whether a machine is deterministic is a fact
- * about the machine that the caller of these knows because it built it. {@link PatternMachine} is
- * that caller; the checks that hold two images against each other are the others.
+ * interface is public whatever it is written as. A deterministic machine is written as P2 and any
+ * other as P1, and a machine is never written as a deterministic image of P1. {@link PatternMachine}
+ * is the caller; the checks that hold two images against each other are the others.
  */
 final class PatternImages {
 
     private PatternImages() {
     }
 
-    /** {@code machine} written out, or {@link PatternImage.MoreCharacters} where it would take
+    /** {@code machine}, a deterministic one walked one state at a time, written out as P2; or
+     *  {@link PatternImage.MoreCharacters} where it would take more than
+     *  {@link PatternImage#MOST_CHARACTERS}. */
+    static PatternImage p2(Automaton machine) {
+        return p2(ClassRows.of(machine));
+    }
+
+    /** {@code rows} written out as P2; or {@link PatternImage.MoreCharacters} where it would take
      *  more than {@link PatternImage#MOST_CHARACTERS}. */
-    static PatternImage of(Automaton machine, boolean deterministic) {
-        List<String> image = written(machine, deterministic);
-        return image == null
+    static PatternImage p2(ClassRows rows) {
+        return image(StringPattern.imageOfP2(rows, PatternImage.MOST_CHARACTERS));
+    }
+
+    /** {@code machine} written out as P1, as one that is not deterministic whatever it is; or
+     *  {@link PatternImage.MoreCharacters} where it would take more than
+     *  {@link PatternImage#MOST_CHARACTERS}. */
+    static PatternImage p1(Automaton machine) {
+        return image(writtenAsP1(machine));
+    }
+
+    private static PatternImage image(@Nullable List<String> written) {
+        return written == null
                 ? new PatternImage.MoreCharacters(PatternImage.MOST_CHARACTERS)
-                : new PatternImage.Written(image);
+                : new PatternImage.Written(written);
     }
 
     /**
@@ -37,41 +54,53 @@ final class PatternImages {
     static @Nullable List<String> deterministic(PatternMeaning meaning, Meter meter) {
         Automaton shaped = Automaton.of(meaning, meter);
         Automaton one = shaped == null ? null : shaped.canonical(meter);
-        return one == null ? null : written(one, true);
+        return one == null ? null : writtenAsP2(one);
     }
 
     /** The shape's machine's image, or null where it is past {@code meter}. See
      *  {@link #deterministic}. */
     static @Nullable List<String> shaped(PatternMeaning meaning, Meter meter) {
         Automaton shaped = Automaton.of(meaning, meter);
-        return shaped == null ? null : written(shaped, false);
+        return shaped == null ? null : writtenAsP1(shaped);
     }
 
     /**
-     * {@code machine}'s image, or null where it would take more than
+     * {@code machine}'s image of P2, or null where it would take more than
+     * {@link PatternImage#MOST_CHARACTERS}.
+     *
+     * <p>Asked of a machine made deterministic, whose classes and rows are written as they are
+     * ({@link ClassRows#of(Automaton)}): nothing is worked out again from its steps.
+     */
+    private static @Nullable List<String> writtenAsP2(Automaton machine) {
+        return StringPattern.imageOfP2(ClassRows.of(machine), PatternImage.MOST_CHARACTERS);
+    }
+
+    /**
+     * {@code machine}'s image of P1, or null where it would take more than
      * {@link PatternImage#MOST_CHARACTERS}.
      *
      * <p>Stopped where the writer says it is past its limit, which is before the next state is
      * written: what is refused here is never written out first. A label is handed to the writer once
      * however many steps share it.
      */
-    private static @Nullable List<String> written(Automaton machine, boolean deterministic) {
-        StringPattern.Writer out = new StringPattern.Writer(deterministic, PatternImage.MOST_CHARACTERS);
+    private static @Nullable List<String> writtenAsP1(Automaton machine) {
+        StringPattern.P1Writer out = new StringPattern.P1Writer(PatternImage.MOST_CHARACTERS);
         for (int state = 0; state < machine.size() && out.holds(); state++) {
             out.state(machine.stopsAt(state));
         }
         Map<CodePoints, Integer> sets = new IdentityHashMap<>();
         for (int state = 0; state < machine.size() && out.holds(); state++) {
-            for (Automaton.Step each : machine.stepsFrom(state)) {
-                Integer set = sets.get(each.over());
+            for (int place = machine.stepsAt(state); place < machine.stepsPast(state); place++) {
+                CodePoints over = machine.stepOver(place);
+                Integer set = sets.get(over);
                 if (set == null) {
-                    set = out.set(pairs(each.over()));
-                    sets.put(each.over(), set);
+                    set = out.set(pairs(over));
+                    sets.put(over, set);
                 }
-                out.step(state, set, each.to());
+                out.step(state, set, machine.stepTo(place));
             }
-            for (int to : machine.freeFrom(state)) {
-                out.free(state, to);
+            for (int each = 0; each < machine.freeCount(state); each++) {
+                out.free(state, machine.freeTo(state, each));
             }
         }
         return out.holds() ? out.image() : null;

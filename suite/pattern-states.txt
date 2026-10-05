@@ -1,0 +1,46 @@
+# The states a pattern is counted as, with its repetitions written out, before the one a whole
+# pattern adds.
+#
+# Source:
+#   Raoh spec/pattern.md — Limits on an admissible pattern
+#   Souther specification.adoc — a-pattern-is-admitted-within-three-limits
+#
+# pattern ; states
+#
+# The count is held where it decides something: against the limit of 250000. A runner puts each
+# pattern p of s states beside a filler, as the pattern (?:p)|a{0,n}, whose a{0,n} is n + 1 states.
+# The choice is one state, each arm one more than itself and the whole pattern one more, so the
+# pattern is 4 + s + n + 1 states. With n = 250000 - 5 - s it is at the limit and is read; with
+# n = 250000 - 4 - s it is one past and is BEYOND, past MACHINE_STATES.
+ ; 0
+0061 ; 1
+0061 0062 0063 ; 3
+002E ; 1
+005B 0061 002D 007A 005D ; 1
+005B 005E 0061 005D ; 1
+005C 0064 ; 1
+005C 0078 007B 0031 0046 0036 0030 0030 007D ; 1
+005C 0075 0044 0038 0033 0044 005C 0075 0044 0045 0030 0030 ; 1
+1F600 ; 1
+0028 0029 ; 0
+0028 003F 003A 0061 0029 ; 1
+0061 007C 0062 ; 5
+0061 007C 0062 007C 0063 ; 7
+0028 003F 003A 0061 007C 0062 0029 007C 0063 ; 9
+0061 007C ; 4
+0061 003F ; 2
+0061 003F 003F ; 2
+0061 002A ; 2
+0061 002B ; 3
+0061 007B 0033 007D ; 4
+0061 007B 0032 002C 0035 007D ; 6
+0061 007B 0032 002C 007D ; 4
+0061 007B 0030 002C 0030 007D ; 1
+0028 003F 003A 0061 0062 0029 007B 0033 007D ; 7
+0028 003F 003A 0061 007B 0032 007D 0029 007B 0033 007D ; 10
+0028 003F 003A 0061 007C 0062 0029 002A ; 6
+0028 003F 003A 0029 007B 0031 0033 0034 0032 0031 0037 0037 0032 0037 007D ; 1
+005E 0061 ; 2
+0061 005E 0062 ; 3
+0061 0024 ; 2
+005E 0061 0024 ; 3

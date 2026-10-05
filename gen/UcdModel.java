@@ -1,0 +1,812 @@
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+/**
+ * What every language's tables are generated from: the Unicode Character Database of one pinned
+ * version, read once, with what is derived from it and checked against what it publishes.
+ *
+ * <p>Building one is the whole of what the generator knows about Unicode. Every check it makes is
+ * made here, and a model that was built has passed all of them: an input that does not open with
+ * the version it is pinned to, a {@code SpecialCasing.txt} condition that is neither
+ * {@code Final_Sigma} nor a language this has been told is tailoring, a derived
+ * {@code Full_Composition_Exclusion} that is not the published one, a quick check value that is not
+ * Yes, No or Maybe, or a quick check whose {@code @missing} line does not give every code point Yes
+ * stops it rather than answering a plausible-looking wrong table. An emitter only writes what is
+ * here in its language, and decides nothing about Unicode.
+ *
+ * @param version   the Unicode version every input states
+ * @param sha256    the SHA-256 of each input, by its path under the UCD directory, in the order read
+ * @param casing    what the default case conversion reads
+ * @param decomposition what normalization reads
+ * @param normalizationDerived what normalization works out from {@code decomposition}, worked out
+ *                  here once so that an implementation whose run time would pay for working it
+ *                  out again can hold it instead
+ * @param byCodePoint what the case conversion and normalization ask of each code point as they read
+ *                  text, as tables a code point indexes
+ * @param whiteSpace {@code White_Space}
+ * @param patternEscapeAlphabet the characters a pattern keeps a backslash before for an escape: the
+ *                  letters and the decimal digits, General_Category {@code L} and {@code Nd}
+ */
+record UcdModel(String version, Map<String, String> sha256, Casing casing, Decomposition decomposition,
+                NormalizationDerived normalizationDerived, ByCodePoint byCodePoint, RangeSet whiteSpace,
+                RangeSet patternEscapeAlphabet) {
+
+    /** The version every input is checked to be. */
+    static final String VERSION = "18.0.0";
+
+    /**
+     * The untailored full case mapping and the condition {@code Final_Sigma} is stated over.
+     *
+     * @param lower         the full lowercase mapping: the {@code SpecialCasing.txt} one where it
+     *                      states one, otherwise the simple one; a code point not here maps to itself
+     * @param upper         the full uppercase mapping, the same way
+     * @param finalSigma    the lowercase mapping that replaces {@code lower}'s at the end of a cased
+     *                      run, at whatever arity it comes at
+     * @param cased         {@code Cased}
+     * @param caseIgnorable {@code Case_Ignorable}
+     */
+    record Casing(CodePointMapping lower, CodePointMapping upper, CodePointMapping finalSigma,
+                  RangeSet cased, RangeSet caseIgnorable) {}
+
+    /**
+     * The one-step decompositions and combining classes, and what composition cannot read off them.
+     *
+     * @param canonical      the canonical decomposition mapping
+     * @param compatibility  the compatibility decomposition mapping, its {@code <tag>} dropped
+     * @param combiningClass the non-zero canonical combining classes
+     * @param scriptSpecificExclusions the composition exclusions {@code CompositionExclusions.txt}
+     *                       states outright
+     * @param quickChecks    for each form, by its name, the code points whose quick check for the
+     *                       form is not Yes, and what it is; every other code point's is Yes
+     */
+    record Decomposition(CodePointMapping canonical, CodePointMapping compatibility,
+                         CodePointIntMapping combiningClass, CodePoints scriptSpecificExclusions,
+                         SortedMap<String, SortedMap<Integer, QuickCheck>> quickChecks) {
+
+        /**
+         * Whether {@code cp} is a starter whose quick check for {@code form} is Yes. A text made only
+         * of such code points is its own normalization in the form, and one of them, met in any
+         * text, ends what comes before it: no mark after it is put in order before it or composes
+         * with a starter before it, and it composes with nothing before it, since a code point that
+         * does is Maybe, which {@link UcdModel#byCodePoint} checks.
+         *
+         * @param form the form, by its name
+         * @param cp   a code point
+         * @return whether it is a stable starter in the form
+         */
+        boolean stableStarter(String form, int cp) {
+            return !combiningClass.entries().containsKey(cp) && !quickChecks.get(form).containsKey(cp);
+        }
+
+        /**
+         * The least code point that is not a {@linkplain #stableStarter stable starter} of
+         * {@code form}: every code point below it is one, which an implementation knows without
+         * asking a table. {@link UcdModel#read} checks it is past ASCII and before the surrogates,
+         * which the implementations rely on to take a byte or a UTF-16 unit below it as a code
+         * point that is one.
+         *
+         * @param form the form, by its name
+         * @return the form's trivial limit
+         */
+        int trivialLimit(String form) {
+            int cp = 0;
+            while (stableStarter(form, cp)) {
+                cp++;
+            }
+            return cp;
+        }
+    }
+
+    /**
+     * What normalization works out from the decompositions and the combining classes, rather than
+     * reads from the database: facts of the four forms an implementation may work out as it runs,
+     * or hold as generated.
+     *
+     * @param compositions the primary composites, each by the two code points it is canonically
+     *                     composed from: every two-member canonical decomposition whose first member
+     *                     is a starter and that is not a script-specific exclusion. Hangul's, which
+     *                     are arithmetic, are not here.
+     * @param longestDecomposition the most code points one code point decomposes into fully, by the
+     *                     canonical and the compatibility mappings followed as far as they go, or by
+     *                     Hangul's arithmetic: what an implementation makes room for once
+     * @param mostMarksComposed the most marks one starter composes with, one after another: the
+     *                     longest chain of {@code compositions} each of whose second members is a
+     *                     mark, starting from any starter. In a composing form, of the marks held
+     *                     after a starter no more than this many are gone from the answer, so a
+     *                     bounded normalization knows from what it holds that the answer is past the
+     *                     bound before it holds more than the bound and this many marks
+     */
+    record NormalizationDerived(CodePointMapping compositions, int longestDecomposition, int mostMarksComposed) {}
+
+    // Hangul's jamo that compose with a starter before them, by arithmetic rather than by a table
+    // (UAX #15, the Hangul section): the vowels and the trailing consonants. The trailing
+    // consonants begin one past T_BASE, which stands for none.
+    private static final int V_BASE = 0x1161;
+    private static final int V_COUNT = 21;
+    private static final int T_BASE = 0x11A7;
+    private static final int T_COUNT = 28;
+
+    /**
+     * What the case conversion and normalization ask of each code point as they read text, held as
+     * tables a code point indexes rather than searches, so that a code point the text has many of
+     * costs as little to ask about as one it has few of.
+     *
+     * @param lower          for each code point, 0 where {@link Casing#lower} maps it to itself, by
+     *                       not naming it or by naming it as what it maps to, and otherwise one more
+     *                       than where it is among the code points that mapping names, in order of
+     *                       code point. No code point {@link Casing#finalSigma} names is 0.
+     * @param upper          the same, of {@link Casing#upper}
+     * @param combiningClass each code point's canonical combining class
+     * @param stableStarters for each code point, the forms it is a
+     *                       {@linkplain Decomposition#stableStarter stable starter} in, a bit each, in
+     *                       the order of {@link #FORMS}: bit 0 NFC, bit 1 NFD, bit 2 NFKC, bit 3 NFKD
+     * @param caseContext    for each code point, a bit each for what the case conversion asks of it
+     *                       besides its mapping: 1 where it is {@link Casing#cased}, 2 where it is
+     *                       {@link Casing#caseIgnorable}, and 4 where {@link Casing#finalSigma} names it
+     * @param decomposition  for each code point, 0 where it has no decomposition; where
+     *                       {@link Decomposition#canonical} names it, one more than where it is among
+     *                       the code points that mapping names, in order of code point; and where
+     *                       {@link Decomposition#compatibility} does, the number canonical names and
+     *                       one more than where it is among those compatibility names. No code point
+     *                       is named by both
+     */
+    record ByCodePoint(PagedTable lower, PagedTable upper, PagedTable caseContext, PagedTable combiningClass,
+                       PagedTable stableStarters, PagedTable decomposition, Composing composing) {}
+
+    /**
+     * The primary composites, as a table a pair of code points indexes in three steps: the row of
+     * the first, the column of the second, and the cell there. Hangul's, which are arithmetic, are
+     * not here.
+     *
+     * @param firsts     for each code point, 0 where it is the first member of no composition, and
+     *                   otherwise one more than its row: where it is among the first members, in order
+     *                   of code point
+     * @param seconds    the same of the second members, by column. A code point is not 0 here where
+     *                   and only where a starter before it may compose with it by the table
+     * @param columns    how many second members there are, the length of a row
+     * @param cells      for each row and column, at {@code row * columns + column}, 0 where the pair
+     *                   does not compose, and otherwise one more than where the composite is among
+     *                   {@code composites}
+     * @param composites the primary composites, in order of code point
+     */
+    record Composing(PagedTable firsts, PagedTable seconds, int columns, int[] cells, int[] composites) {}
+
+    /** The four normalization forms, by name, in the order each is a bit of
+     *  {@link ByCodePoint#stableStarters}. */
+    static final List<String> FORMS = List.of("NFC", "NFD", "NFKC", "NFKD");
+
+    /** A code point and the code points it maps to, by code point. */
+    record CodePointMapping(SortedMap<Integer, int[]> entries) {}
+
+    /** A code point and an integer, by code point. */
+    record CodePointIntMapping(SortedMap<Integer, Integer> entries) {}
+
+    /** Code points one by one, ascending. */
+    record CodePoints(SortedSet<Integer> members) {}
+
+    /**
+     * Inclusive ranges, ascending and not overlapping, as the database lists them: two ranges that
+     * meet are two ranges here if the file writes two lines.
+     *
+     * @param ranges each a {@code [start, end]} pair
+     */
+    record RangeSet(List<int[]> ranges) {
+
+        /** Whether one of the ranges holds {@code cp}. */
+        boolean contains(int cp) {
+            int low = 0;
+            int high = ranges.size();
+            while (low < high) {
+                int mid = (low + high) >>> 1;
+                if (ranges.get(mid)[1] < cp) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            return low < ranges.size() && ranges.get(low)[0] <= cp;
+        }
+
+        RangeSet {
+            for (int i = 1; i < ranges.size(); i++) {
+                if (ranges.get(i)[0] <= ranges.get(i - 1)[1]) {
+                    throw new IllegalStateException("range " + hex(ranges.get(i)[0]) + ".."
+                            + hex(ranges.get(i)[1]) + " is not after the one before it");
+                }
+            }
+        }
+    }
+
+    /**
+     * Reads the model from {@code ucd}, the directory of the pinned version.
+     *
+     * @param ucd the directory, {@code ucd/18.0.0}
+     * @return the model, every check passed
+     */
+    static UcdModel read(Path ucd) throws IOException {
+        Inputs in = new Inputs(ucd);
+        List<String> unicodeData = in.lines("UnicodeData.txt", null);
+        List<String> specialCasing = in.lines("SpecialCasing.txt", "SpecialCasing");
+        List<String> derivedCoreProperties = in.lines("DerivedCoreProperties.txt", "DerivedCoreProperties");
+        List<String> compositionExclusions = in.lines("CompositionExclusions.txt", "CompositionExclusions");
+        List<String> derivedNormalizationProps =
+                in.lines("DerivedNormalizationProps.txt", "DerivedNormalizationProps");
+        List<String> propList = in.lines("PropList.txt", "PropList");
+        List<String> derivedGeneralCategory =
+                in.lines("extracted/DerivedGeneralCategory.txt", "DerivedGeneralCategory");
+        Decomposition decomposition = decomposition(unicodeData, compositionExclusions, derivedNormalizationProps);
+        NormalizationDerived normalizationDerived = normalizationDerived(decomposition);
+        Casing casing = casing(unicodeData, specialCasing, derivedCoreProperties);
+        return new UcdModel(VERSION, Collections.unmodifiableMap(in.sha256), casing,
+                decomposition, normalizationDerived, byCodePoint(casing, decomposition, normalizationDerived),
+                ranges(propList, Set.of("White_Space")),
+                ranges(derivedGeneralCategory, Set.of("Lu", "Ll", "Lt", "Lm", "Lo", "Nd")));
+    }
+
+    /** The ranges of the lines whose second field is one of {@code taken}, in order of code point.
+     *  That field is a binary property in {@code PropList.txt} and a value of General_Category in
+     *  {@code DerivedGeneralCategory.txt}, which lists its values one after another, so ranges of
+     *  different values are put back in order here. */
+    private static RangeSet ranges(List<String> lines, Set<String> taken) {
+        List<int[]> ranges = new ArrayList<>();
+        for (PropertyLine line : PropertyLine.read(lines, false)) {
+            if (taken.contains(line.property()) && line.value().isEmpty()) {
+                ranges.add(new int[] {line.start(), line.end()});
+            }
+        }
+        ranges.sort(Comparator.comparingInt(range -> range[0]));
+        return new RangeSet(ranges);
+    }
+
+    /** The inputs read so far, and their checksums. */
+    private static final class Inputs {
+
+        private final Path ucd;
+        private final Map<String, String> sha256 = new LinkedHashMap<>();
+
+        Inputs(Path ucd) {
+            this.ucd = ucd;
+        }
+
+        /** The lines of {@code file}, checked to open with {@code # <header>-<version>.txt} where
+         *  {@code header} is given. {@code UnicodeData.txt} has no header of its own. A checksum
+         *  alone does not catch the directory being another version than the one pinned: it proves
+         *  the bytes are what was hashed, not that they are the version they are labelled. */
+        List<String> lines(String file, String header) throws IOException {
+            byte[] bytes = Files.readAllBytes(ucd.resolve(file));
+            sha256.put(file, checksum(bytes));
+            List<String> lines = new String(bytes, StandardCharsets.UTF_8).lines().toList();
+            if (header != null) {
+                String expected = "# " + header + "-" + VERSION + ".txt";
+                if (!lines.get(0).equals(expected)) {
+                    throw new IllegalStateException(
+                            ucd.resolve(file) + " does not open with " + expected + " (found: " + lines.get(0)
+                                    + ") — this generator is pinned to Unicode " + VERSION + "; update"
+                                    + " VERSION and re-verify every witness before regenerating"
+                                    + " against a different one");
+                }
+            }
+            return lines;
+        }
+    }
+
+    // Case conversion
+
+    private static Casing casing(List<String> unicodeData, List<String> specialCasing,
+                                 List<String> derivedCoreProperties) {
+        Map<Integer, Integer> simpleLower = new TreeMap<>();
+        Map<Integer, Integer> simpleUpper = new TreeMap<>();
+        for (String line : unicodeData) {
+            if (line.isBlank()) {
+                continue;
+            }
+            // Fields 12 and 13 are the simple uppercase and lowercase mappings: one to one and
+            // independent of context and language, which is why SpecialCasing.txt calls out
+            // everything wider than that on its own.
+            String[] f = line.split(";", -1);
+            int cp = Integer.parseInt(f[0], 16);
+            if (!f[12].isBlank()) {
+                simpleUpper.put(cp, Integer.parseInt(f[12].trim(), 16));
+            }
+            if (!f[13].isBlank()) {
+                simpleLower.put(cp, Integer.parseInt(f[13].trim(), 16));
+            }
+        }
+
+        SortedMap<Integer, int[]> fullLower = new TreeMap<>();
+        SortedMap<Integer, int[]> fullUpper = new TreeMap<>();
+        SortedMap<Integer, int[]> finalSigma = new TreeMap<>();
+        for (String rawLine : specialCasing) {
+            String line = rawLine.replaceFirst("#.*", "");
+            if (line.isBlank()) {
+                continue;
+            }
+            // <code>; <lower>; <title>; <upper>; (<condition_list>;)?
+            String[] f = line.split(";", -1);
+            int cp = Integer.parseInt(f[0].trim(), 16);
+            String condition = f.length > 4 ? f[4].trim() : "";
+            if (condition.isEmpty()) {
+                fullLower.put(cp, codePoints(f[1]));
+                fullUpper.put(cp, codePoints(f[3]));
+            } else if (condition.equalsIgnoreCase("Final_Sigma")) {
+                finalSigma.put(cp, codePoints(f[1]));
+            } else if (KNOWN_TAILORING_LANGUAGES.contains(firstWord(condition).toLowerCase(Locale.ROOT))) {
+                // Locale tailoring, outside the untailored conversion: read and discarded.
+            } else {
+                throw new IllegalStateException(
+                        "unrecognized SpecialCasing.txt condition \"" + condition + "\" at U+"
+                                + hex(cp) + " — is this a new untailored context Unicode "
+                                + VERSION + " added, or a language this generator's"
+                                + " KNOWN_TAILORING_LANGUAGES does not list yet? Decide which before"
+                                + " teaching the generator to handle it either way.");
+            }
+        }
+
+        List<int[]> cased = new ArrayList<>();
+        List<int[]> caseIgnorable = new ArrayList<>();
+        for (PropertyLine line : PropertyLine.read(derivedCoreProperties, false)) {
+            if (line.property().equals("Cased")) {
+                cased.add(new int[] {line.start(), line.end()});
+            } else if (line.property().equals("Case_Ignorable")) {
+                caseIgnorable.add(new int[] {line.start(), line.end()});
+            }
+        }
+
+        Casing read = new Casing(merge(simpleLower, fullLower), merge(simpleUpper, fullUpper),
+                new CodePointMapping(finalSigma), new RangeSet(cased), new RangeSet(caseIgnorable));
+        // A bounded conversion counts each code point it reads as at least one of the answer.
+        for (CodePointMapping mapping : List.of(read.lower(), read.upper(), read.finalSigma())) {
+            mapping.entries().forEach((cp, mapped) -> {
+                if (mapped.length == 0) {
+                    throw new IllegalStateException("U+" + hex(cp) + " maps to nothing, where a bounded case"
+                            + " conversion takes every code point to be at least one of the answer");
+                }
+            });
+        }
+        return read;
+    }
+
+    /** Condition lists checked to be locale tailoring rather than merely unrecognized.
+     *  {@code SpecialCasing.txt} documents a condition list as "language IDs or casing contexts" and
+     *  says to expect more of either in a later version; a language may be added here, but a new
+     *  language-insensitive context, the {@code Final_Sigma} kind, is exactly what must not fall
+     *  into this set by default. */
+    private static final Set<String> KNOWN_TAILORING_LANGUAGES = Set.of("lt", "tr", "az");
+
+    private static String firstWord(String s) {
+        int space = s.indexOf(' ');
+        return space < 0 ? s : s.substring(0, space);
+    }
+
+    /** The full mapping where one is stated, otherwise the simple one. */
+    private static CodePointMapping merge(Map<Integer, Integer> simple, Map<Integer, int[]> full) {
+        SortedMap<Integer, int[]> merged = new TreeMap<>();
+        simple.forEach((cp, mapped) -> merged.put(cp, new int[] {mapped}));
+        merged.putAll(full);
+        return new CodePointMapping(merged);
+    }
+
+    // Normalization
+
+    private static Decomposition decomposition(List<String> unicodeData, List<String> compositionExclusions,
+                                               List<String> derivedNormalizationProps) {
+        SortedMap<Integer, Integer> ccc = new TreeMap<>();
+        SortedMap<Integer, int[]> canonical = new TreeMap<>();
+        SortedMap<Integer, int[]> compatibility = new TreeMap<>();
+        for (String line : unicodeData) {
+            if (line.isBlank()) {
+                continue;
+            }
+            // Field 3 is the canonical combining class, 5 the decomposition mapping: canonical where
+            // it does not start with <tag>, compatibility, read without its tag, where it does.
+            String[] f = line.split(";", -1);
+            int cp = Integer.parseInt(f[0], 16);
+            int cccValue = Integer.parseInt(f[3]);
+            if (cccValue != 0) {
+                ccc.put(cp, cccValue);
+            }
+            String decomposition = f[5].trim();
+            if (decomposition.isEmpty()) {
+                continue;
+            }
+            if (decomposition.charAt(0) != '<') {
+                canonical.put(cp, codePoints(decomposition));
+            } else {
+                compatibility.put(cp, codePoints(decomposition.substring(decomposition.indexOf('>') + 1)));
+            }
+        }
+
+        SortedSet<Integer> scriptSpecific = new TreeSet<>();
+        for (String rawLine : compositionExclusions) {
+            String line = rawLine.replaceFirst("#.*", "").trim();
+            if (!line.isEmpty()) {
+                scriptSpecific.add(Integer.parseInt(line, 16));
+            }
+        }
+
+        // Full_Composition_Exclusion is the script-specific exclusions, the singleton
+        // decompositions and the ones whose first member is not a starter. Normalization derives the
+        // last two from the canonical decompositions and combining classes as it runs, so the
+        // derivation is checked here against what Unicode publishes for the same version.
+        Set<Integer> derived = new TreeSet<>(scriptSpecific);
+        canonical.forEach((cp, mapped) -> {
+            if (mapped.length == 1 || ccc.getOrDefault(mapped[0], 0) != 0) {
+                derived.add(cp);
+            }
+        });
+        List<PropertyLine> lines = PropertyLine.read(derivedNormalizationProps, false);
+        Set<Integer> published = new TreeSet<>();
+        for (PropertyLine line : lines) {
+            if (!line.property().equals("Full_Composition_Exclusion")) {
+                continue;
+            }
+            if (!line.value().isEmpty()) {
+                throw new IllegalStateException("Full_Composition_Exclusion is binary, but a line gives it"
+                        + " the value \"" + line.value() + "\"");
+            }
+            for (int cp = line.start(); cp <= line.end(); cp++) {
+                published.add(cp);
+            }
+        }
+        if (!derived.equals(published)) {
+            Set<Integer> missing = new TreeSet<>(published);
+            missing.removeAll(derived);
+            Set<Integer> extra = new TreeSet<>(derived);
+            extra.removeAll(published);
+            throw new IllegalStateException(
+                    "derived Full_Composition_Exclusion disagrees with DerivedNormalizationProps.txt"
+                            + " — missing " + hexSet(missing) + ", extra " + hexSet(extra)
+                            + " — the singleton/non-starter derivation is wrong, not the published"
+                            + " property");
+        }
+
+        List<PropertyLine> missingLines = PropertyLine.read(derivedNormalizationProps, true);
+        SortedMap<String, SortedMap<Integer, QuickCheck>> quickChecks = new TreeMap<>();
+        for (String form : FORMS) {
+            quickChecks.put(form, Collections.unmodifiableSortedMap(
+                    notQuickCheckYes(form + "_QC", lines, missingLines)));
+        }
+
+        Decomposition read = new Decomposition(new CodePointMapping(canonical), new CodePointMapping(compatibility),
+                new CodePointIntMapping(ccc), new CodePoints(scriptSpecific), quickChecks);
+        for (String form : FORMS) {
+            int limit = read.trivialLimit(form);
+            if (limit < 0x80 || limit > 0xD800) {
+                throw new IllegalStateException(form + "'s trivial limit is U+" + hex(limit) + ", not past ASCII and"
+                        + " before the surrogates, where the implementations take a byte or a UTF-16 unit below it"
+                        + " as a stable starter");
+            }
+        }
+        return read;
+    }
+
+    /** What the case conversion and normalization ask of each code point, as tables it indexes. */
+    private static ByCodePoint byCodePoint(Casing casing, Decomposition decomposition,
+                                           NormalizationDerived derived) {
+        PagedTable lower = positions(casing.lower());
+        for (int cp : casing.finalSigma().entries().keySet()) {
+            if (lower.get(cp) == 0) {
+                throw new IllegalStateException("U+" + hex(cp) + " has a Final_Sigma mapping but its lowercase"
+                        + " mapping is itself, and the lowercase table would answer that it maps to itself");
+            }
+        }
+        // A stable starter ends what comes before it only where nothing composes with a starter
+        // before it: the second member of a composition, and Hangul's vowels and trailing consonants,
+        // which compose by arithmetic, are no stable starter in a composing form.
+        SortedSet<Integer> seconds = new TreeSet<>();
+        for (int[] mapped : derived.compositions().entries().values()) {
+            seconds.add(mapped[1]);
+        }
+        for (int cp = V_BASE; cp < V_BASE + V_COUNT; cp++) {
+            seconds.add(cp);
+        }
+        for (int cp = T_BASE + 1; cp < T_BASE + T_COUNT; cp++) {
+            seconds.add(cp);
+        }
+        for (String form : List.of("NFC", "NFKC")) {
+            for (int cp : seconds) {
+                if (decomposition.stableStarter(form, cp)) {
+                    throw new IllegalStateException("U+" + hex(cp) + " composes with a starter before it, but is a"
+                            + " stable starter in " + form);
+                }
+            }
+        }
+        SortedMap<Integer, Integer> ccc = decomposition.combiningClass().entries();
+        SortedSet<Integer> finalSigma = new TreeSet<>(casing.finalSigma().entries().keySet());
+        return new ByCodePoint(lower, positions(casing.upper()),
+                PagedTable.of(cp -> (casing.cased().contains(cp) ? 1 : 0)
+                        | (casing.caseIgnorable().contains(cp) ? 2 : 0)
+                        | (finalSigma.contains(cp) ? 4 : 0)),
+                PagedTable.of(cp -> ccc.getOrDefault(cp, 0)),
+                PagedTable.of(cp -> {
+                    int forms = 0;
+                    for (int i = 0; i < FORMS.size(); i++) {
+                        if (decomposition.stableStarter(FORMS.get(i), cp)) {
+                            forms |= 1 << i;
+                        }
+                    }
+                    return forms;
+                }),
+                decompositionPositions(decomposition), composing(derived.compositions()));
+    }
+
+    /** Each of {@code codePoints} by where it is among them, from 0. */
+    private static Map<Integer, Integer> numbered(SortedSet<Integer> codePoints) {
+        Map<Integer, Integer> numbered = new TreeMap<>();
+        for (int cp : codePoints) {
+            numbered.put(cp, numbered.size());
+        }
+        return numbered;
+    }
+
+    /** {@link ByCodePoint#composing}: the first and the second members numbered in order of code
+     *  point, and each pair's cell the composite's place among the composites. */
+    private static Composing composing(CodePointMapping compositions) {
+        SortedSet<Integer> firsts = new TreeSet<>();
+        SortedSet<Integer> seconds = new TreeSet<>();
+        for (int[] pair : compositions.entries().values()) {
+            firsts.add(pair[0]);
+            seconds.add(pair[1]);
+        }
+        Map<Integer, Integer> rows = numbered(firsts);
+        Map<Integer, Integer> columns = numbered(seconds);
+        int[] composites = compositions.entries().keySet().stream().mapToInt(Integer::intValue).toArray();
+        int[] cells = new int[rows.size() * columns.size()];
+        for (int i = 0; i < composites.length; i++) {
+            int[] pair = compositions.entries().get(composites[i]);
+            cells[rows.get(pair[0]) * columns.size() + columns.get(pair[1])] = i + 1;
+        }
+        return new Composing(PagedTable.of(cp -> rows.containsKey(cp) ? rows.get(cp) + 1 : 0),
+                PagedTable.of(cp -> columns.containsKey(cp) ? columns.get(cp) + 1 : 0),
+                columns.size(), cells, composites);
+    }
+
+    /** {@link ByCodePoint#decomposition}: the canonical decompositions numbered from 1, and the
+     *  compatibility ones after them. */
+    private static PagedTable decompositionPositions(Decomposition decomposition) {
+        Map<Integer, Integer> position = new TreeMap<>();
+        for (CodePointMapping mapping : List.of(decomposition.canonical(), decomposition.compatibility())) {
+            for (int cp : mapping.entries().keySet()) {
+                if (position.put(cp, position.size() + 1) != null) {
+                    throw new IllegalStateException("U+" + hex(cp) + " has a canonical and a compatibility"
+                            + " decomposition, where the table of decompositions holds one");
+                }
+            }
+        }
+        return PagedTable.of(cp -> position.getOrDefault(cp, 0));
+    }
+
+    /** For each code point, 0 where {@code mapping} maps it to itself, by not naming it or by
+     *  naming it as what it maps to, and otherwise one more than where it is among those it names. */
+    private static PagedTable positions(CodePointMapping mapping) {
+        Map<Integer, Integer> position = new TreeMap<>();
+        int at = 0;
+        for (Map.Entry<Integer, int[]> entry : mapping.entries().entrySet()) {
+            at++;
+            int[] mapped = entry.getValue();
+            if (mapped.length != 1 || mapped[0] != entry.getKey()) {
+                position.put(entry.getKey(), at);
+            }
+        }
+        return PagedTable.of(cp -> position.getOrDefault(cp, 0));
+    }
+
+    /** What normalization works out from {@code decomposition}. The composition rule is the one
+     *  Full_Composition_Exclusion was checked against above: a singleton, a decomposition whose
+     *  first member is not a starter and a script-specific exclusion are no composite. */
+    private static NormalizationDerived normalizationDerived(Decomposition decomposition) {
+        SortedMap<Integer, Integer> ccc = decomposition.combiningClass().entries();
+        SortedSet<Integer> excluded = decomposition.scriptSpecificExclusions().members();
+        SortedMap<Integer, int[]> compositions = new TreeMap<>();
+        Map<List<Integer>, Integer> byPair = new LinkedHashMap<>();
+        decomposition.canonical().entries().forEach((cp, mapped) -> {
+            if (mapped.length == 2 && ccc.getOrDefault(mapped[0], 0) == 0 && !excluded.contains(cp)) {
+                Integer other = byPair.put(List.of(mapped[0], mapped[1]), cp);
+                if (other != null) {
+                    throw new IllegalStateException(hex(other) + " and " + hex(cp) + " are both composed from "
+                            + hex(mapped[0]) + " " + hex(mapped[1]));
+                }
+                compositions.put(cp, mapped);
+            }
+        });
+        // A Hangul syllable decomposes into two or three jamo, none of which decomposes.
+        int longest = 3;
+        for (CodePointMapping mapping : List.of(decomposition.canonical(), decomposition.compatibility())) {
+            for (int cp : mapping.entries().keySet()) {
+                longest = Math.max(longest, fullDecomposition(decomposition, cp).size());
+            }
+        }
+        return new NormalizationDerived(new CodePointMapping(compositions), longest,
+                mostMarksComposed(compositions, ccc));
+    }
+
+    /** The longest chain of {@code compositions} each of whose second members is a mark: a starter
+     *  that composes with a mark is the first member of the next, by the composite. Hangul's compose
+     *  only with jamo, which are starters, so none is in a chain. A chain that comes back to where
+     *  it was would let one starter take in any number of marks, and stops the generator. */
+    private static int mostMarksComposed(SortedMap<Integer, int[]> compositions, SortedMap<Integer, Integer> ccc) {
+        Map<Integer, List<Integer>> byMark = new TreeMap<>();
+        compositions.forEach((cp, pair) -> {
+            if (ccc.getOrDefault(pair[1], 0) != 0) {
+                byMark.computeIfAbsent(pair[0], first -> new ArrayList<>()).add(cp);
+            }
+        });
+        Map<Integer, Integer> longest = new TreeMap<>();
+        int most = 0;
+        for (int first : byMark.keySet()) {
+            most = Math.max(most, marksComposedFrom(first, byMark, longest, new TreeSet<>()));
+        }
+        return most;
+    }
+
+    /** The most marks {@code starter} composes with one after another, by {@code byMark}, what each
+     *  composes into with a mark; {@code longest} holds what is worked out, and {@code on} the
+     *  starters of the chain this is in. */
+    private static int marksComposedFrom(int starter, Map<Integer, List<Integer>> byMark,
+                                         Map<Integer, Integer> longest, Set<Integer> on) {
+        Integer known = longest.get(starter);
+        if (known != null) {
+            return known;
+        }
+        if (!on.add(starter)) {
+            throw new IllegalStateException("U+" + hex(starter) + " composes with marks back into itself");
+        }
+        int most = 0;
+        for (int composite : byMark.getOrDefault(starter, List.of())) {
+            most = Math.max(most, 1 + marksComposedFrom(composite, byMark, longest, on));
+        }
+        on.remove(starter);
+        longest.put(starter, most);
+        return most;
+    }
+
+    /** {@code cp}'s decomposition by the canonical and the compatibility mappings, followed as far as
+     *  they go: {@code cp} itself where neither names it. */
+    private static List<Integer> fullDecomposition(Decomposition decomposition, int cp) {
+        int[] mapped = decomposition.canonical().entries().get(cp);
+        if (mapped == null) {
+            mapped = decomposition.compatibility().entries().get(cp);
+        }
+        if (mapped == null) {
+            return List.of(cp);
+        }
+        List<Integer> full = new ArrayList<>();
+        for (int part : mapped) {
+            full.addAll(fullDecomposition(decomposition, part));
+        }
+        return full;
+    }
+
+    /** A quick check's values, by their short and long names in {@code PropertyValueAliases.txt}. */
+    enum QuickCheck {
+        YES, NO, MAYBE;
+
+        static QuickCheck of(String value) {
+            return switch (value) {
+                case "Y", "Yes" -> YES;
+                case "N", "No" -> NO;
+                case "M", "Maybe" -> MAYBE;
+                default -> throw new IllegalStateException(
+                        "quick check value \"" + value + "\" is none of Yes, No and Maybe");
+            };
+        }
+    }
+
+    /** The code points whose quick check {@code property} is not Yes, and what it is. Those are the
+     *  ones a line gives No or Maybe only where every code point no line names is Yes, so the
+     *  {@code @missing} line has to say so over the whole code space. */
+    private static SortedMap<Integer, QuickCheck> notQuickCheckYes(String property, List<PropertyLine> lines,
+                                                                   List<PropertyLine> missing) {
+        List<PropertyLine> defaults = missing.stream().filter(line -> line.property().equals(property)).toList();
+        if (defaults.size() != 1 || defaults.get(0).start() != 0 || defaults.get(0).end() != Character.MAX_CODE_POINT
+                || QuickCheck.of(defaults.get(0).value()) != QuickCheck.YES) {
+            throw new IllegalStateException(property + "'s @missing lines are " + defaults + ", not one line giving"
+                    + " every code point Yes — the least code point that is not Yes is then not read off"
+                    + " the lines that name one");
+        }
+        SortedMap<Integer, QuickCheck> notYes = new TreeMap<>();
+        for (PropertyLine line : lines) {
+            if (!line.property().equals(property)) {
+                continue;
+            }
+            QuickCheck value = QuickCheck.of(line.value());
+            for (int cp = line.start(); cp <= line.end(); cp++) {
+                if (value != QuickCheck.YES && notYes.put(cp, value) != null) {
+                    throw new IllegalStateException(property + " is given U+" + hex(cp) + " twice");
+                }
+            }
+        }
+        if (notYes.isEmpty()) {
+            throw new IllegalStateException("no " + property + " line gives No or Maybe — not the file this generator"
+                    + " reads");
+        }
+        return notYes;
+    }
+
+    // The file format
+
+    /**
+     * One line of a UCD property file (UAX #44, the File Format Conventions section):
+     * {@code <range-or-code-point> ; <property> [; <value>]}. A binary property has no value field,
+     * and a line names a code point only where the property is true of it. Any other property has a
+     * value field, and a code point no line names has the value its {@code @missing} line states.
+     */
+    private record PropertyLine(int start, int end, String property, String value) {
+
+        private static final String MISSING = "# @missing:";
+
+        /** The data lines of {@code lines}; {@code missing} true reads the {@code @missing} lines
+         *  instead, which are comments to everything else. */
+        static List<PropertyLine> read(List<String> lines, boolean missing) {
+            List<PropertyLine> read = new ArrayList<>();
+            for (String rawLine : lines) {
+                if (missing != rawLine.startsWith(MISSING)) {
+                    continue;
+                }
+                String line = (missing ? rawLine.substring(MISSING.length()) : rawLine).replaceFirst("#.*", "").trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+                String[] f = line.split(";", -1);
+                if (f.length != 2 && f.length != 3) {
+                    throw new IllegalStateException("not a property line: \"" + rawLine + "\"");
+                }
+                String range = f[0].trim();
+                int dots = range.indexOf("..");
+                int start = Integer.parseInt(dots >= 0 ? range.substring(0, dots) : range, 16);
+                int end = dots >= 0 ? Integer.parseInt(range.substring(dots + 2), 16) : start;
+                read.add(new PropertyLine(start, end, f[1].trim(), f.length == 3 ? f[2].trim() : ""));
+            }
+            return read;
+        }
+    }
+
+    private static int[] codePoints(String hexList) {
+        String[] parts = hexList.trim().split("\\s+");
+        int[] result = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            result[i] = Integer.parseInt(parts[i], 16);
+        }
+        return result;
+    }
+
+    private static String checksum(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("every Java platform has SHA-256", e);
+        }
+    }
+
+    private static String hexSet(Set<Integer> cps) {
+        StringBuilder sb = new StringBuilder("[");
+        for (Integer cp : cps) {
+            if (sb.length() > 1) {
+                sb.append(' ');
+            }
+            sb.append(hex(cp));
+        }
+        return sb.append(']').toString();
+    }
+
+    static String hex(int v) {
+        return Integer.toHexString(v).toUpperCase(Locale.ROOT);
+    }
+}

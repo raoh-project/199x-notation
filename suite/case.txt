@@ -1,0 +1,69 @@
+# Unicode 18.0.0 default case conversion, untailored.
+#
+# Source:
+#   Raoh catalog/operations.json — toLowerCase, toUpperCase
+#   Souther specification.adoc — string-case
+#   notation-199x README.md — What belongs here (the bounded forms)
+#
+# text ; direction ; bound ; outcome ; mapped
+#
+# direction is LOWER or UPPER. bound is empty for a conversion without one, and otherwise the most
+# scalar values the mapped text may hold. outcome is MAPPED, with the mapped text, or PAST where the
+# mapped text is longer than the bound, with mapped empty.
+
+# The full mapping, which SpecialCasing.txt states where it is wider than one code point.
+0073 0074 0072 0061 00DF 0065 ; UPPER ; ; MAPPED ; 0053 0054 0052 0041 0053 0053 0045
+0130 ; LOWER ; ; MAPPED ; 0069 0307
+
+# No tailoring: the Turkish dotted and dotless i are not mapped to each other.
+0069 ; UPPER ; ; MAPPED ; 0049
+0049 ; LOWER ; ; MAPPED ; 0069
+
+# A Unicode 18.0.0 case pair, U+AB4B and U+AB6C.
+AB4B ; UPPER ; ; MAPPED ; AB6C
+
+# Final_Sigma: a capital sigma lowercases to the final form at the end of a cased run, skipping
+# Case_Ignorable code points on either side. U+0345 is both Cased and Case_Ignorable, and is skipped
+# before it is asked whether it is Cased, so a sigma after it is not preceded by a cased letter.
+039F 03A3 ; LOWER ; ; MAPPED ; 03BF 03C2
+039F 03A3 0391 ; LOWER ; ; MAPPED ; 03BF 03C3 03B1
+03A3 ; LOWER ; ; MAPPED ; 03C3
+039F 03A3 0027 ; LOWER ; ; MAPPED ; 03BF 03C2 0027
+039F 0027 03A3 ; LOWER ; ; MAPPED ; 03BF 0027 03C2
+039F 03A3 0027 0391 ; LOWER ; ; MAPPED ; 03BF 03C3 0027 03B1
+0345 03A3 ; LOWER ; ; MAPPED ; 0345 03C3
+
+# A bound counts the scalar values the mapping writes, not the ones it reads, and not a host's
+# code units. It is held on every side of where it decides: one below the mapped text's length, at
+# it, and one above.
+00DF ; UPPER ; 1 ; PAST ;
+00DF ; UPPER ; 2 ; MAPPED ; 0053 0053
+00DF ; UPPER ; 3 ; MAPPED ; 0053 0053
+0130 ; LOWER ; 1 ; PAST ;
+0130 ; LOWER ; 2 ; MAPPED ; 0069 0307
+0130 ; LOWER ; 3 ; MAPPED ; 0069 0307
+10400 10400 ; LOWER ; 1 ; PAST ;
+10400 10400 ; LOWER ; 2 ; MAPPED ; 10428 10428
+10400 10400 ; LOWER ; 3 ; MAPPED ; 10428 10428
+0061 ; UPPER ; 0 ; PAST ;
+0061 ; UPPER ; 1 ; MAPPED ; 0041
+0061 ; UPPER ; 2 ; MAPPED ; 0041
+ ; LOWER ; 0 ; MAPPED ;
+ ; LOWER ; 1 ; MAPPED ;
+
+# Whether a sigma is final turns on what follows it, which a bound does not cut short.
+039F 03A3 ; LOWER ; 1 ; PAST ;
+039F 03A3 ; LOWER ; 2 ; MAPPED ; 03BF 03C2
+039F 03A3 ; LOWER ; 3 ; MAPPED ; 03BF 03C2
+039F 03A3 0391 ; LOWER ; 2 ; PAST ;
+039F 03A3 0391 ; LOWER ; 3 ; MAPPED ; 03BF 03C3 03B1
+039F 03A3 0391 ; LOWER ; 4 ; MAPPED ; 03BF 03C3 03B1
+039F 0027 03A3 ; LOWER ; 2 ; PAST ;
+039F 0027 03A3 ; LOWER ; 3 ; MAPPED ; 03BF 0027 03C2
+039F 0027 03A3 ; LOWER ; 4 ; MAPPED ; 03BF 0027 03C2
+039F 03A3 0027 ; LOWER ; 2 ; PAST ;
+039F 03A3 0027 ; LOWER ; 3 ; MAPPED ; 03BF 03C2 0027
+039F 03A3 0027 ; LOWER ; 4 ; MAPPED ; 03BF 03C2 0027
+039F 03A3 0027 0391 ; LOWER ; 3 ; PAST ;
+039F 03A3 0027 0391 ; LOWER ; 4 ; MAPPED ; 03BF 03C3 0027 03B1
+039F 03A3 0027 0391 ; LOWER ; 5 ; MAPPED ; 03BF 03C3 0027 03B1

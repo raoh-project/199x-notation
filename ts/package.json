@@ -1,0 +1,49 @@
+{
+  "name": "@raoh/notation-199x",
+  "version": "0.2.0",
+  "description": "The rules for reading text that Raoh and Souther share: Unicode 18.0.0 case conversion and normalization, White_Space, order and length in scalar values, temporal text, and the pattern language",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raoh-project/notation-199x.git",
+    "directory": "ts"
+  },
+  "keywords": ["unicode", "normalization", "case", "pattern", "iso8601"],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.18.0",
+      "onFail": "error"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "compile-tests": "tsc -p tsconfig.runtime.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.0"
+  }
+}

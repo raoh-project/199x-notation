@@ -12,6 +12,10 @@ import net.unit8.notation199x.TemporalText.Refusal;
 /**
  * The places the grammar of a temporal is a decision rather than a consequence: a fraction of a
  * second, hour 24, and second 60.
+ *
+ * <p>Whether every implementation admits the same texts is in {@code suite/temporal.txt}. Which
+ * refusal a text gets, malformed or a leap second, the specifications give the same answer for, so
+ * the refusal asserted here is Java's.
  */
 class ATemporalTextIsRefusedForWhatItIsTest {
 
