@@ -11,7 +11,7 @@
 
     <name>notation-199x</name>
     <description>The rules for reading text that Raoh and Souther share</description>
-    <url>https://github.com/raoh-project/199x-notation</url>
+    <url>https://github.com/raoh-project/notation-199x</url>
 
     <licenses>
         <license>
@@ -22,9 +22,9 @@
     </licenses>
 
     <scm>
-        <url>https://github.com/raoh-project/199x-notation</url>
-        <connection>scm:git:git://github.com/raoh-project/199x-notation.git</connection>
-        <developerConnection>scm:git:git@github.com:raoh-project/199x-notation.git</developerConnection>
+        <url>https://github.com/raoh-project/notation-199x</url>
+        <connection>scm:git:git://github.com/raoh-project/notation-199x.git</connection>
+        <developerConnection>scm:git:git@github.com:raoh-project/notation-199x.git</developerConnection>
         <tag>HEAD</tag>
     </scm>
 

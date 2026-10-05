@@ -1,4 +1,4 @@
-# 199x-notation
+# notation-199x
 
 The rules for reading text that [Raoh](https://github.com/raoh-project) and
 [Souther](https://github.com/souther-lang/souther) share, implemented once per language.
@@ -121,7 +121,7 @@ One directory per language, beside the data they are all generated from and chec
 | `image/` | The image formats, each with the fixtures every implementation that reads it runs |
 | `java/` | Maven artifact `net.unit8.199x:notation-199x`, package `net.unit8.notation199x` |
 | `rust/` | Crate `notation199x` |
-| `go/` | Module `github.com/raoh-project/199x-notation/go`, package `notation199x` |
+| `go/` | Module `github.com/raoh-project/notation-199x/go`, package `notation199x` |
 | `php/` | Composer package `raoh/notation-199x`, namespace `Raoh\Notation199x` |
 | `ts/` | npm package `@raoh/notation-199x` |
 
@@ -265,7 +265,7 @@ release is deployed from the commit its tag names, so what Central holds is what
 
 ### Go
 
-The module is `github.com/raoh-project/199x-notation/go`, and a release of it is a tag: nothing in
+The module is `github.com/raoh-project/notation-199x/go`, and a release of it is a tag: nothing in
 `go/` names its version. A tag on a module in a subdirectory begins with the subdirectory, so the
 module's version `vX.Y.Z` is the tag `go/vX.Y.Z`. The first release is `go/v0.1.0`.
 
@@ -273,7 +273,7 @@ module's version `vX.Y.Z` is the tag `go/vX.Y.Z`. The first release is `go/v0.1.
 2. Tag the commit on `main` `go/vX.Y.Z` and push the tag. CI runs the Go tests on it.
 3. Ask the module proxy for the version, so that it holds what the tag holds from then on:
    ```sh
-   GOPROXY=https://proxy.golang.org go list -m github.com/raoh-project/199x-notation/go@vX.Y.Z
+   GOPROXY=https://proxy.golang.org go list -m github.com/raoh-project/notation-199x/go@vX.Y.Z
    ```
 
 A tag that has been pushed is never moved: the proxy and the checksum database keep the first
@@ -356,7 +356,7 @@ The workflow logs in with nothing: npm proves to the registry that it runs in th
 repository, which the package's settings on npmjs.com name as its trusted publisher, and the
 registry records with each version the commit and the run it was built in. A trusted publisher is
 named for a package that exists, so the package's first version is published by hand from a
-checkout, and the trusted publisher named after it: repository `raoh-project/199x-notation`, workflow
+checkout, and the trusted publisher named after it: repository `raoh-project/notation-199x`, workflow
 `ts-publish.yml`, with `npm publish` allowed. A trusted publisher named since September 3, 2026
 allows `npm stage publish` and allows `npm publish` only where it is chosen, and the workflow
 publishes with `npm publish`. It needs nothing else: it reads what `latest` names from the registry

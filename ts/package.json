@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/raoh-project/199x-notation.git",
+    "url": "git+https://github.com/raoh-project/notation-199x.git",
     "directory": "ts"
   },
   "keywords": ["unicode", "normalization", "case", "pattern", "iso8601"],

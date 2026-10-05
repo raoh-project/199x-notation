@@ -3,7 +3,7 @@
 # Source:
 #   Raoh catalog/operations.json — toLowerCase, toUpperCase
 #   Souther specification.adoc — string-case
-#   199x-notation README.md — What belongs here (the bounded forms)
+#   notation-199x README.md — What belongs here (the bounded forms)
 #
 # text ; direction ; bound ; outcome ; mapped
 #

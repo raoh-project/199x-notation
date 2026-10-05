@@ -2,7 +2,7 @@
 #
 # Source:
 #   Raoh catalog/operations.json — normalize
-#   199x-notation README.md — What belongs here (the bounded forms)
+#   notation-199x README.md — What belongs here (the bounded forms)
 #
 # text ; form ; bound ; outcome ; normalized
 #

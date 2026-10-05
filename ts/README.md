@@ -6,7 +6,7 @@ share: Unicode 18.0.0 default case conversion and normalization, the `White_Spac
 length in Unicode scalar values, the lexical grammar of temporal text, and the pattern language.
 
 This package is developed in `ts/` of
-[raoh-project/199x-notation](https://github.com/raoh-project/199x-notation), beside the Java, Go,
+[raoh-project/notation-199x](https://github.com/raoh-project/notation-199x), beside the Java, Go,
 Rust and PHP implementations, and is held to the same test vectors. Issues and pull requests go
 there.
 
