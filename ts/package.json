@@ -1,6 +1,6 @@
 {
   "name": "@raoh/notation-199x",
-  "version": "0.2.0",
+  "version": "0.3.0-dev",
   "description": "The rules for reading text that Raoh and Souther share: Unicode 18.0.0 case conversion and normalization, White_Space, order and length in scalar values, temporal text, and the pattern language",
   "license": "Apache-2.0",
   "repository": {
